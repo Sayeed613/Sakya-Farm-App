@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+out
+coverage
+.turbo
+pnpm-lock.yaml
+LICENSE
+
+# Generated code and scraped data must never be reformatted.
+apps/api/src/generated
+migration/raw
+migration/normalized
+migration/reports
+apps/api/prisma/migrations

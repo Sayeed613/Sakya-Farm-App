@@ -1,0 +1,337 @@
+[
+  {
+    "id": 336028205245,
+    "title": "All Fresh",
+    "handle": "all-fresh",
+    "description": "",
+    "published_at": "2026-05-11T12:40:25+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": null,
+    "products_count": 54
+  },
+  {
+    "id": 328618606781,
+    "title": "All Product",
+    "handle": "all",
+    "description": "<p><img></p>",
+    "published_at": "2025-12-09T14:58:34+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": {
+      "id": 1627527479485,
+      "created_at": "2025-12-09T14:58:33+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_2147226053_8a47de4c-34bf-4be3-a92f-307666b43dd5.jpg?v=1775797495",
+      "alt": null
+    },
+    "products_count": 17
+  },
+  {
+    "id": 328619622589,
+    "title": "All-Time Favorites",
+    "handle": "all-time-favorites",
+    "description": "",
+    "published_at": "2025-12-09T15:38:27+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": null,
+    "products_count": 16
+  },
+  {
+    "id": 331387470013,
+    "title": "Andhra podulu",
+    "handle": "andhra-podulu",
+    "description": "",
+    "published_at": "2026-02-02T11:11:01+05:30",
+    "updated_at": "2026-03-23T13:44:00+05:30",
+    "image": {
+      "id": 1635846488253,
+      "created_at": "2026-02-02T11:11:00+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_2147226162_4.png?v=1773999104",
+      "alt": null
+    },
+    "products_count": 4
+  },
+  {
+    "id": 330191241405,
+    "title": "Andhra Style Podulu",
+    "handle": "podulu",
+    "description": "",
+    "published_at": "2026-01-09T18:42:58+05:30",
+    "updated_at": "2026-03-23T13:36:44+05:30",
+    "image": null,
+    "products_count": 3
+  },
+  {
+    "id": 335926624445,
+    "title": "Beans & Peas",
+    "handle": "daily-vegetables-copy",
+    "description": "",
+    "published_at": "2026-05-08T16:01:43+05:30",
+    "updated_at": "2026-09-07T16:50:45+05:30",
+    "image": {
+      "id": 1638543753405,
+      "created_at": "2026-05-08T15:42:55+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4_80951f7c-e8bf-499c-bf17-404bd68b2822.png?v=1778235209",
+      "alt": null
+    },
+    "products_count": 5
+  },
+  {
+    "id": 328618639549,
+    "title": "Best Ghee",
+    "handle": "best-ghee",
+    "description": "",
+    "published_at": "2025-12-09T14:58:53+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": {
+      "id": 1627527512253,
+      "created_at": "2025-12-09T14:58:52+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_2147226162.jpg?v=1775797452",
+      "alt": null
+    },
+    "products_count": 1
+  },
+  {
+    "id": 330022650045,
+    "title": "Combos",
+    "handle": "healthy-combo",
+    "description": "",
+    "published_at": "2026-01-06T11:12:28+05:30",
+    "updated_at": "2026-05-08T11:05:01+05:30",
+    "image": null,
+    "products_count": 9
+  },
+  {
+    "id": 335926788285,
+    "title": "Country Special",
+    "handle": "roots-others-copy",
+    "description": "",
+    "published_at": "2026-05-08T16:03:49+05:30",
+    "updated_at": "2026-05-08T16:03:49+05:30",
+    "image": {
+      "id": 1638543884477,
+      "created_at": "2026-05-08T15:46:15+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4_c2ccedd3-1a8d-4826-bffe-3f425f4796e7.png?v=1778235420",
+      "alt": null
+    },
+    "products_count": 0
+  },
+  {
+    "id": 335926591677,
+    "title": "Daily Vegetables",
+    "handle": "leafy-greens-copy",
+    "description": "",
+    "published_at": "2026-05-08T16:01:21+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": {
+      "id": 1638543720637,
+      "created_at": "2026-05-08T15:42:10+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4_de167134-138b-46eb-a129-b7f1c41c470e.png?v=1778235172",
+      "alt": null
+    },
+    "products_count": 6
+  },
+  {
+    "id": 330747412669,
+    "title": "Diabetes Care",
+    "handle": "diabetes-care",
+    "description": "<p>Mindfully chosen products with low glycaemic impact and traditional health benefits.<br></p>\n<p><strong>Recommended Products &amp; Combos :</strong></p>",
+    "published_at": "2026-01-21T18:08:19+05:30",
+    "updated_at": "2026-05-08T17:00:45+05:30",
+    "image": null,
+    "products_count": 3
+  },
+  {
+    "id": 335926853821,
+    "title": "Fresh Fruits",
+    "handle": "country-special-copy",
+    "description": "",
+    "published_at": "2026-05-08T16:04:15+05:30",
+    "updated_at": "2026-08-23T16:49:04+05:30",
+    "image": {
+      "id": 1638543917245,
+      "created_at": "2026-05-08T15:47:04+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4_d041ec80-2d15-46e8-a684-d5a5ec15b510.png?v=1778235457",
+      "alt": null
+    },
+    "products_count": 15
+  },
+  {
+    "id": 335926657213,
+    "title": "Gourds & Local Vegetables",
+    "handle": "beans-peas-copy",
+    "description": "",
+    "published_at": "2026-05-08T16:02:08+05:30",
+    "updated_at": "2026-08-17T16:50:48+05:30",
+    "image": {
+      "id": 1638543786173,
+      "created_at": "2026-05-08T15:43:47+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4_5096e2c5-8319-4bc5-ae29-0d24dada0a58.png?v=1778235279",
+      "alt": null
+    },
+    "products_count": 6
+  },
+  {
+    "id": 330747347133,
+    "title": "Gut Health",
+    "handle": "gut-health-1",
+    "description": "<p><meta charset=\"utf-8\">Support digestion and gut balance with naturally fermented, fibre-rich, and traditional ingredients.<br></p>\n<p><strong>Recommended Products &amp; Combos :</strong></p>",
+    "published_at": "2026-01-21T18:07:09+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": null,
+    "products_count": 4
+  },
+  {
+    "id": 328618475709,
+    "title": "Honey",
+    "handle": "honey",
+    "description": "",
+    "published_at": "2025-12-09T14:54:39+05:30",
+    "updated_at": "2026-04-04T16:56:02+05:30",
+    "image": {
+      "id": 1627526791357,
+      "created_at": "2025-12-09T14:54:38+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_2147226042_1.jpg?v=1770805924",
+      "alt": null
+    },
+    "products_count": 1
+  },
+  {
+    "id": 330747510973,
+    "title": "Immunity Support",
+    "handle": "immunity-support",
+    "description": "<p>Naturally rich in antioxidants and traditionally trusted ingredients.</p>\n<p><meta charset=\"utf-8\"><strong>Recommended Products &amp; Combos :</strong><br></p>",
+    "published_at": "2026-01-21T18:10:26+05:30",
+    "updated_at": "2026-04-04T16:56:02+05:30",
+    "image": null,
+    "products_count": 4
+  },
+  {
+    "id": 335926558909,
+    "title": "Leafy Greens",
+    "handle": "leafy-greens",
+    "description": "",
+    "published_at": "2026-05-08T15:42:00+05:30",
+    "updated_at": "2026-09-07T16:50:45+05:30",
+    "image": {
+      "id": 1638543687869,
+      "created_at": "2026-05-08T15:41:58+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4.png?v=1778235119",
+      "alt": null
+    },
+    "products_count": 9
+  },
+  {
+    "id": 328618442941,
+    "title": "Oils",
+    "handle": "oils",
+    "description": "",
+    "published_at": "2025-12-09T14:54:21+05:30",
+    "updated_at": "2026-07-25T16:49:19+05:30",
+    "image": {
+      "id": 1627526758589,
+      "created_at": "2025-12-09T14:54:20+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_2147226163_1.jpg?v=1770805902",
+      "alt": null
+    },
+    "products_count": 4
+  },
+  {
+    "id": 336034037949,
+    "title": "other",
+    "handle": "other",
+    "description": "",
+    "published_at": "2026-05-11T16:54:17+05:30",
+    "updated_at": "2026-09-07T16:50:45+05:30",
+    "image": null,
+    "products_count": 3
+  },
+  {
+    "id": 328618508477,
+    "title": "Pickles",
+    "handle": "pickles",
+    "description": "",
+    "published_at": "2025-12-09T14:55:07+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": {
+      "id": 1627526922429,
+      "created_at": "2025-12-09T14:55:06+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/amla1_3.png?v=1775711245",
+      "alt": null
+    },
+    "products_count": 10
+  },
+  {
+    "id": 335926689981,
+    "title": "Premium Vegetables",
+    "handle": "gourds-local-vegetables-copy",
+    "description": "",
+    "published_at": "2026-05-08T16:02:45+05:30",
+    "updated_at": "2026-09-07T16:50:45+05:30",
+    "image": {
+      "id": 1638543818941,
+      "created_at": "2026-05-08T15:44:43+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4_5e7d398c-c4bf-4f7f-9c35-687a96c3185f.png?v=1778235322",
+      "alt": null
+    },
+    "products_count": 6
+  },
+  {
+    "id": 328620605629,
+    "title": "Pure & Healthy Oils",
+    "handle": "pure-healthy-oils",
+    "description": "",
+    "published_at": "2025-12-09T16:21:47+05:30",
+    "updated_at": "2026-07-25T16:49:19+05:30",
+    "image": null,
+    "products_count": 4
+  },
+  {
+    "id": 335926755517,
+    "title": "Roots & Others",
+    "handle": "premium-vegetables-copy",
+    "description": "",
+    "published_at": "2026-05-08T16:03:22+05:30",
+    "updated_at": "2026-08-17T16:50:48+05:30",
+    "image": {
+      "id": 1638543851709,
+      "created_at": "2026-05-08T15:45:26+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_50_4_6cb54c4b-ee06-43d0-ba07-b8e71ece40bd.png?v=1778235363",
+      "alt": null
+    },
+    "products_count": 4
+  },
+  {
+    "id": 332188221629,
+    "title": "Sakya Fresh",
+    "handle": "sakya-fresh",
+    "description": "",
+    "published_at": "2026-02-19T15:24:22+05:30",
+    "updated_at": "2026-03-18T12:22:58+05:30",
+    "image": null,
+    "products_count": 0
+  },
+  {
+    "id": 330188193981,
+    "title": "Spice Powders",
+    "handle": "spice-powders",
+    "description": "",
+    "published_at": "2026-01-09T16:23:39+05:30",
+    "updated_at": "2026-05-08T17:00:45+05:30",
+    "image": {
+      "id": 1635798155453,
+      "created_at": "2026-01-31T12:14:30+05:30",
+      "src": "https://cdn.shopify.com/s/files/1/0732/1541/0365/collections/Frame_2147226162_22498aac-8ea2-4907-8376-32e4d81fda1c.png?v=1775723676",
+      "alt": null
+    },
+    "products_count": 4
+  },
+  {
+    "id": 330747478205,
+    "title": "Weight Management",
+    "handle": "weight-management",
+    "description": "<p>Clean fats, metabolism-supporting spices, and wholesome foods that encourage mindful eating.<br></p>\n<p><strong>Recommended Products &amp; Combos :</strong></p>",
+    "published_at": "2026-01-21T18:09:24+05:30",
+    "updated_at": "2026-09-09T16:50:09+05:30",
+    "image": null,
+    "products_count": 4
+  }
+]

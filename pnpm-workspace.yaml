@@ -1,0 +1,35 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# --- Install policy -------------------------------------------------------
+# pnpm 11 reads settings from this file, not from .npmrc.
+
+# Pin exact versions when adding dependencies so a stray `pnpm add` cannot
+# silently widen a range past what was reviewed.
+saveExact: true
+
+# Resolve `@sakya/*` to local workspace packages instead of the registry.
+linkWorkspacePackages: true
+preferWorkspacePackages: true
+
+# Reuse install artefacts between runs.
+sideEffectsCache: true
+
+# --- Approved lifecycle scripts -------------------------------------------
+# pnpm blocks postinstall scripts by default. These are the only dependencies
+# allowed to run them, and each one needs it:
+#   prisma / @prisma/engines  -> download the schema-engine binary for migrate
+#   @node-rs/argon2, esbuild, unrs-resolver -> native/JS build artefacts
+allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
+  '@node-rs/argon2': true
+  prisma: true
+  esbuild: true
+  unrs-resolver: true
+
+# zod 4.6.2 is deliberately pinned and was published inside the default
+# minimum-release-age window; approving it here keeps the pin reproducible.
+minimumReleaseAgeExclude:
+  - zod@4.6.2

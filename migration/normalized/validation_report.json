@@ -1,0 +1,94 @@
+{
+  "total_products": 84,
+  "products_missing_images": [],
+  "products_missing_price": [],
+  "products_missing_description": [
+    "light-balanced-cooking-combo",
+    "complete-kitchen-oil-combo-premium-1",
+    "traditional-wellness-oil-combo",
+    "heart-friendly-cooking-combo",
+    "everyday-health-oil-combo-premium",
+    "immunity-boost-combo",
+    "andhra-veg-pickle-combo",
+    "andhra-non-veg-pickle-combo",
+    "everyday-wellness-combo"
+  ],
+  "products_with_no_available_variants": [
+    "malgova-mango",
+    "jamun",
+    "himam-pasand-mango",
+    "mallika-mango",
+    "thothapuri-mango-copy",
+    "thothapuri-mango",
+    "banginapalli-mango",
+    "chicken-pickle",
+    "ginger-pickle",
+    "lamb-pickle",
+    "prawn",
+    "mutton-keema",
+    "garlic"
+  ],
+  "duplicate_handles": [],
+  "price_anomalies": [
+    {
+      "handle": "jamun",
+      "variant": "2 kg",
+      "price": 800.0,
+      "compare_at_price": 600.0
+    },
+    {
+      "handle": "jamun",
+      "variant": "3 kg",
+      "price": 1200.0,
+      "compare_at_price": 600.0
+    },
+    {
+      "handle": "chicken-pickle",
+      "variant": "500 g",
+      "price": 1150.0,
+      "compare_at_price": 899.0
+    },
+    {
+      "handle": "amla-pickle",
+      "variant": "1 kg",
+      "price": 1200.0,
+      "compare_at_price": 1100.0
+    },
+    {
+      "handle": "ginger-pickle",
+      "variant": "350 g",
+      "price": 450.0,
+      "compare_at_price": 400.0
+    },
+    {
+      "handle": "groundnut-oil",
+      "variant": "5 lit- Tin Can",
+      "price": 2000.0,
+      "compare_at_price": 1850.0
+    },
+    {
+      "handle": "sesseme-oil",
+      "variant": "5 lit- Tin Can",
+      "price": 2750.0,
+      "compare_at_price": 2600.0
+    },
+    {
+      "handle": "ghee",
+      "variant": "350 ml",
+      "price": 950.0,
+      "compare_at_price": 899.0
+    },
+    {
+      "handle": "ghee",
+      "variant": "500 ml",
+      "price": 1450.0,
+      "compare_at_price": 1350.0
+    },
+    {
+      "handle": "ginger",
+      "variant": "750 ml",
+      "price": 1299.0,
+      "compare_at_price": 899.0
+    }
+  ]
+}

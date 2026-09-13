@@ -1,0 +1,47 @@
+# Local development infrastructure for Sakya Farms.
+#
+# PostgreSQL is the single source of truth for the platform. Only the NestJS
+# backend talks to it; mobile and web apps talk to the REST API.
+#
+# Usage:
+#   cp .env.example .env      # once, then edit the credentials
+#   docker compose up -d postgres
+#   docker compose logs -f postgres
+#
+# The API's own connection string lives in apps/api/.env (see
+# apps/api/.env.example) and must point at the credentials configured here.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: sakya-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sakya}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sakya_local_password}
+      POSTGRES_DB: ${POSTGRES_DB:-sakya_farms}
+      # Deterministic collation so ORDER BY and unique indexes behave the same
+      # on every developer machine and in CI.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-sakya} -d ${POSTGRES_DB:-sakya_farms}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    # Keep local Postgres off the public internet.
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - log_min_duration_statement=500
+
+volumes:
+  postgres-data:
+    name: sakya-postgres-data

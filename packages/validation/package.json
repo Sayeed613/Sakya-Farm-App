@@ -1,0 +1,36 @@
+{
+  "name": "@sakya/validation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared Zod schemas for API requests and the catalog migration contract",
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint .",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@sakya/types": "workspace:*",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.3",
+    "eslint": "10.10.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.0"
+  }
+}

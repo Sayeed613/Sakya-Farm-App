@@ -1,0 +1,1018 @@
+// Sakya Farms — PostgreSQL schema (source of truth for the platform).
+//
+// Conventions and invariants enforced here:
+//
+//  1. Money is ALWAYS an integer number of paise (`*InPaise Int`). Never Float,
+//     never Decimal-for-money, never rupees. Formatting happens at the edge.
+//  2. Internal primary keys are UUIDs. External/source identifiers (e.g. the
+//     Shopify product id and handle) are kept as metadata columns and are never
+//     used as primary keys.
+//  3. Product and ProductVariant are separate entities and price lives on the
+//     variant, because that is the thing a customer actually buys.
+//  4. Inventory is per (variant, store) and is tracked as an append-only ledger
+//     of movements; the `inventory` row is the current running balance.
+//  5. Availability (`isAvailable`, `availableForSale`) is deliberately separate
+//     from inventory quantity. Something can be in stock but not for sale, or
+//     available to order but not yet stocked.
+//  6. Every table has createdAt/updatedAt unless it is an append-only record
+//     (ledger entries, audit logs, status history), where updatedAt would imply
+//     mutation that must never happen.
+//  7. Order and payment totals are columns computed by the server. Clients never
+//     send prices or totals, and order items snapshot the product fields they
+//     were sold as so history cannot be rewritten by a later catalog edit.
+//
+// Connection details (url, shadow database) live in prisma.config.ts, not here.
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "cjs"
+  generatedFileExtension = "ts"
+  importFileExtension    = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Mirrors ROLE_CODES in packages/types/src/roles.ts.
+enum RoleCode {
+  CUSTOMER
+  STORE_MANAGER
+  STORE_STAFF
+  DELIVERY_PARTNER
+  SUPPORT_AGENT
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+/// Where a catalog record came from. Scraped catalog data is SHOPIFY.
+enum SourcePlatform {
+  SHOPIFY
+  MANUAL
+  OTHER
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CartStatus {
+  ACTIVE
+  CONVERTED
+  ABANDONED
+  EXPIRED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  PROCESSING
+  PACKED
+  READY_FOR_PICKUP
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  REFUNDED
+  FAILED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  CANCELLED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH_ON_DELIVERY
+  UPI
+  CARD
+  NET_BANKING
+  WALLET
+  OTHER
+}
+
+enum ShipmentStatus {
+  PENDING
+  READY
+  DISPATCHED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  RETURNED
+}
+
+enum DeliveryAssignmentStatus {
+  UNASSIGNED
+  ASSIGNED
+  ACCEPTED
+  REJECTED
+  PICKED_UP
+  DELIVERED
+  FAILED
+}
+
+/// Signed reason for a change in stock. Movements are append-only.
+enum InventoryMovementType {
+  PURCHASE
+  SALE
+  RETURN_IN
+  RETURN_OUT
+  ADJUSTMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+  DAMAGE
+  EXPIRY
+  STOCKTAKE
+  RESERVATION
+  RESERVATION_RELEASE
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  REJECTED
+  HIDDEN
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+  IN_APP
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  READ
+  CANCELLED
+}
+
+enum AddressType {
+  SHIPPING
+  BILLING
+  BOTH
+}
+
+// ---------------------------------------------------------------------------
+// Identity and access control
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  phone        String?    @unique
+  /// Argon2id hash. Null for users who only authenticate via an external provider.
+  passwordHash String?    @map("password_hash")
+  firstName    String     @map("first_name")
+  lastName     String?    @map("last_name")
+  status       UserStatus @default(PENDING)
+
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  phoneVerifiedAt DateTime? @map("phone_verified_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  roles               UserRole[]
+  refreshTokens       RefreshToken[]
+  addresses           Address[]
+  carts               Cart[]
+  orders              Order[]
+  reviews             Review[]
+  storeStaff          StoreStaff[]
+  notifications       Notification[]
+  couponRedemptions   CouponRedemption[]
+  auditLogs           AuditLog[]           @relation("AuditActor")
+  inventoryMovements  InventoryMovement[]  @relation("InventoryMovementActor")
+  orderStatusChanges  OrderStatusHistory[] @relation("OrderStatusActor")
+  deliveryAssignments DeliveryAssignment[] @relation("DeliveryPartner")
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+/// A named bundle of permissions. Codes are enumerated by RoleCode.
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        RoleCode @unique
+  name        String
+  description String?
+  /// Seeded roles are structural; they must not be deleted through the admin API.
+  isSystem    Boolean  @default(true) @map("is_system")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+/// Fine-grained capability, formatted `resource:action`.
+model Permission {
+  id          String  @id @default(uuid()) @db.Uuid
+  code        String  @unique
+  description String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  assignedAt DateTime @default(now()) @map("assigned_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+/// Refresh tokens are stored as a hash only: a database leak must not hand an
+/// attacker a usable session. `familyId` groups the chain of rotations so that
+/// replaying a superseded token can revoke the whole family.
+model RefreshToken {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @map("user_id") @db.Uuid
+  tokenHash String @unique @map("token_hash")
+  familyId  String @map("family_id") @db.Uuid
+
+  expiresAt           DateTime  @map("expires_at")
+  revokedAt           DateTime? @map("revoked_at")
+  revokedReason       String?   @map("revoked_reason")
+  replacedByTokenHash String?   @map("replaced_by_token_hash")
+
+  userAgent String? @map("user_agent")
+  ipAddress String? @map("ip_address")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model Address {
+  id     String      @id @default(uuid()) @db.Uuid
+  userId String      @map("user_id") @db.Uuid
+  type   AddressType @default(SHIPPING)
+  label  String?
+
+  recipientName String  @map("recipient_name")
+  phone         String
+  line1         String
+  line2         String?
+  landmark      String?
+  city          String
+  state         String
+  postalCode    String  @map("postal_code")
+  country       String  @default("India")
+  latitude      Decimal? @db.Decimal(9, 6)
+  longitude     Decimal? @db.Decimal(9, 6)
+
+  isDefault Boolean @default(false) @map("is_default")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("addresses")
+}
+
+// ---------------------------------------------------------------------------
+// Catalog
+// ---------------------------------------------------------------------------
+
+model Category {
+  id          String  @id @default(uuid()) @db.Uuid
+  parentId    String? @map("parent_id") @db.Uuid
+  name        String
+  slug        String  @unique
+  description String?
+  imageUrl    String? @map("image_url")
+  position    Int     @default(0)
+  isActive    Boolean @default(true) @map("is_active")
+
+  /// Shopify collection id, kept as source metadata.
+  sourceCollectionId String? @map("source_collection_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  parent   Category?         @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[]        @relation("CategoryTree")
+  products ProductCategory[]
+
+  @@index([parentId, position])
+  @@index([isActive])
+  @@map("categories")
+}
+
+/// A sellable product. Price does NOT live here — it lives on ProductVariant.
+model Product {
+  id String @id @default(uuid()) @db.Uuid
+
+  // --- Source metadata (import provenance; never our primary key) ---
+  sourcePlatform  SourcePlatform @default(MANUAL) @map("source_platform")
+  sourceProductId String?        @map("source_product_id")
+  sourceHandle    String?        @map("source_handle")
+
+  title           String
+  slug            String  @unique
+  description     String?
+  descriptionHtml String? @map("description_html")
+  vendor          String?
+  productType     String? @map("product_type")
+  tags            String[] @default([])
+
+  status     ProductStatus @default(DRAFT)
+  /// Availability is independent of stock levels. See `Inventory`.
+  isAvailable Boolean      @default(false) @map("is_available")
+
+  publishedAt DateTime? @map("published_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  variants   ProductVariant[]
+  images     ProductImage[]
+  categories ProductCategory[]
+  reviews    Review[]
+
+  // A given source product may appear exactly once, by id and by handle.
+  @@unique([sourcePlatform, sourceProductId])
+  @@unique([sourcePlatform, sourceHandle])
+  @@index([status, isAvailable])
+  @@index([productType])
+  @@index([tags], type: Gin)
+  @@map("products")
+}
+
+/// The actually purchasable unit. Price, SKU and weight belong here.
+model ProductVariant {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @map("product_id") @db.Uuid
+
+  sourceVariantId String? @map("source_variant_id")
+  sku             String? @unique
+  barcode         String?
+  title           String
+
+  /// Integer paise. Never a float, never rupees.
+  priceInPaise          Int  @map("price_in_paise")
+  compareAtPriceInPaise Int? @map("compare_at_price_in_paise")
+  costInPaise           Int? @map("cost_in_paise")
+  currency              String @default("INR")
+
+  weightGrams     Int?    @map("weight_grams")
+  requiresShipping Boolean @default(true) @map("requires_shipping")
+  isAvailable     Boolean @default(false) @map("is_available")
+  position        Int     @default(0)
+
+  /// Source option values, e.g. { "Weight": "500 g" }.
+  optionValues Json? @map("option_values")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product             Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  images              ProductImage[]
+  inventory           Inventory[]
+  inventoryMovements  InventoryMovement[]
+  cartItems           CartItem[]
+  orderItems          OrderItem[]
+
+  @@unique([productId, position])
+  @@index([productId])
+  @@index([isAvailable])
+  @@map("product_variants")
+}
+
+model ProductImage {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @map("product_id") @db.Uuid
+  /// Set when the image belongs to one variant; null means product-level.
+  variantId String? @map("variant_id") @db.Uuid
+
+  sourceImageId String? @map("source_image_id")
+  url           String
+  altText       String? @map("alt_text")
+  position      Int     @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([productId, position])
+  @@index([variantId])
+  @@map("product_images")
+}
+
+model ProductCategory {
+  productId  String @map("product_id") @db.Uuid
+  categoryId String @map("category_id") @db.Uuid
+
+  /// The category shown as the product's primary grouping.
+  isPrimary Boolean @default(false) @map("is_primary")
+  position  Int     @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, categoryId])
+  @@index([categoryId])
+  @@map("product_categories")
+}
+
+// ---------------------------------------------------------------------------
+// Stores and inventory
+// ---------------------------------------------------------------------------
+
+model Store {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique
+
+  name  String
+  phone String?
+  email String?
+
+  line1      String?
+  line2      String?
+  city       String?
+  state      String?
+  postalCode String? @map("postal_code")
+  country    String  @default("India")
+  latitude   Decimal? @db.Decimal(9, 6)
+  longitude  Decimal? @db.Decimal(9, 6)
+
+  timezone String @default("Asia/Kolkata")
+  /// Local opening hours, e.g. { "mon": ["09:00", "21:00"] }.
+  operatingHours Json? @map("operating_hours")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  staff     StoreStaff[]
+  inventory Inventory[]
+  movements InventoryMovement[]
+  carts     Cart[]
+  cartItems CartItem[]
+  orders    Order[]
+
+  @@index([isActive])
+  @@index([city])
+  @@map("stores")
+}
+
+/// Links an operator to a store. Store-scoped access, separate from platform roles.
+model StoreStaff {
+  id      String    @id @default(uuid()) @db.Uuid
+  storeId String    @map("store_id") @db.Uuid
+  userId  String    @map("user_id") @db.Uuid
+  role    RoleCode  @default(STORE_STAFF)
+  isActive Boolean  @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, userId])
+  @@index([userId, isActive])
+  @@map("store_staff")
+}
+
+/// Current stock for one variant at one store.
+/// Available-to-sell is derived as `quantityOnHand - quantityReserved`.
+model Inventory {
+  id        String @id @default(uuid()) @db.Uuid
+  variantId String @map("variant_id") @db.Uuid
+  storeId   String @map("store_id") @db.Uuid
+
+  quantityOnHand Int @default(0) @map("quantity_on_hand")
+  quantityReserved Int @default(0) @map("quantity_reserved")
+  reorderLevel   Int @default(0) @map("reorder_level")
+
+  /// Denormalised running balance is not stored; it is always derivable from the
+  /// ledger and kept on this row inside a transaction.
+  lastCountedAt DateTime? @map("last_counted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  variant   ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  store     Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  movements InventoryMovement[]
+
+  @@unique([variantId, storeId])
+  @@index([storeId])
+  @@index([variantId])
+  @@map("inventory")
+}
+
+/// Append-only stock ledger. Never updated or deleted: corrections are new rows.
+model InventoryMovement {
+  id          String @id @default(uuid()) @db.Uuid
+  inventoryId String @map("inventory_id") @db.Uuid
+  variantId   String @map("variant_id") @db.Uuid
+  storeId     String @map("store_id") @db.Uuid
+
+  type InventoryMovementType
+  /// Signed change in on-hand quantity, e.g. -3 for a sale of three.
+  quantityDelta Int @map("quantity_delta")
+  /// On-hand quantity immediately after this movement, for auditability.
+  quantityAfter Int @map("quantity_after")
+
+  reason        String?
+  /// Loose reference to the record that caused this (order, transfer, count).
+  referenceType String? @map("reference_type")
+  referenceId   String? @map("reference_id") @db.Uuid
+
+  performedByUserId String? @map("performed_by_user_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  inventory   Inventory      @relation(fields: [inventoryId], references: [id], onDelete: Restrict)
+  variant     ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  store       Store          @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  performedBy User?          @relation("InventoryMovementActor", fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([inventoryId, createdAt])
+  @@index([variantId, storeId, createdAt])
+  @@index([referenceType, referenceId])
+  @@index([storeId, createdAt])
+  @@map("inventory_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Cart
+// ---------------------------------------------------------------------------
+
+/// A cart may belong to a signed-in user or to an anonymous device.
+model Cart {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String? @map("user_id") @db.Uuid
+  /// Opaque client identifier used before the user signs in.
+  anonymousId String? @map("anonymous_id")
+  storeId     String? @map("store_id") @db.Uuid
+
+  status   CartStatus @default(ACTIVE)
+  currency String     @default("INR")
+
+  /// Carts expire so abandoned inventory reservations do not leak.
+  expiresAt DateTime? @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user  User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store?     @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  coupon Coupon?   @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  items CartItem[]
+
+  couponId String? @map("coupon_id") @db.Uuid
+
+  @@index([userId, status])
+  @@index([anonymousId, status])
+  @@index([status, expiresAt])
+  @@map("carts")
+}
+
+model CartItem {
+  id        String @id @default(uuid()) @db.Uuid
+  cartId    String @map("cart_id") @db.Uuid
+  variantId String @map("variant_id") @db.Uuid
+  storeId   String @map("store_id") @db.Uuid
+
+  quantity Int
+
+  /// Price snapshot taken server-side when the item was added. Display only:
+  /// the authoritative total is recomputed by the server on every read.
+  unitPriceInPaise Int @map("unit_price_in_paise")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  cart    Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  store   Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, variantId, storeId])
+  @@index([variantId])
+  @@map("cart_items")
+}
+
+// ---------------------------------------------------------------------------
+// Orders, payments, fulfilment
+// ---------------------------------------------------------------------------
+
+model Order {
+  id          String @id @default(uuid()) @db.Uuid
+  orderNumber String @unique @map("order_number")
+
+  userId  String  @map("user_id") @db.Uuid
+  storeId String? @map("store_id") @db.Uuid
+
+  status        OrderStatus   @default(PENDING_PAYMENT)
+  paymentStatus PaymentStatus @default(PENDING) @map("payment_status")
+  currency      String        @default("INR")
+
+  // Server-computed totals, in integer paise. Never accepted from a client.
+  subtotalInPaise Int @map("subtotal_in_paise")
+  discountInPaise Int @default(0) @map("discount_in_paise")
+  taxInPaise      Int @default(0) @map("tax_in_paise")
+  shippingInPaise Int @default(0) @map("shipping_in_paise")
+  totalInPaise    Int @map("total_in_paise")
+
+  couponId String? @map("coupon_id") @db.Uuid
+
+  /// Address snapshots. Orders must not change when a saved address is edited.
+  shippingAddress Json  @map("shipping_address")
+  billingAddress  Json? @map("billing_address")
+
+  notes String?
+
+  placedAt    DateTime? @map("placed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  deliveredAt DateTime? @map("delivered_at")
+  cancelReason String?  @map("cancel_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  store               Store?               @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  coupon              Coupon?              @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  items               OrderItem[]
+  statusHistory       OrderStatusHistory[]
+  payments            Payment[]
+  shipments           Shipment[]
+  deliveryAssignments DeliveryAssignment[]
+  couponRedemptions   CouponRedemption[]
+
+  @@index([userId, status])
+  @@index([storeId, status])
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+/// Immutable line item. Product/variant fields are snapshotted so a later
+/// catalog edit cannot rewrite what the customer actually bought.
+model OrderItem {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+
+  variantId String? @map("variant_id") @db.Uuid
+
+  productTitle String @map("product_title")
+  variantTitle String @map("variant_title")
+  sku          String?
+
+  quantity Int
+
+  unitPriceInPaise Int @map("unit_price_in_paise")
+  discountInPaise  Int @default(0) @map("discount_in_paise")
+  taxInPaise       Int @default(0) @map("tax_in_paise")
+  totalInPaise     Int @map("total_in_paise")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order   Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  review  Review?
+
+  @@index([orderId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+/// Append-only record of every status change, so "who moved this to CANCELLED"
+/// is always answerable. Order status is only ever changed through the API.
+model OrderStatusHistory {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+
+  fromStatus OrderStatus? @map("from_status")
+  toStatus   OrderStatus  @map("to_status")
+  reason     String?
+
+  changedByUserId String? @map("changed_by_user_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedBy User? @relation("OrderStatusActor", fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("order_status_history")
+}
+
+/// Payment attempt against an order. No gateway is integrated yet; the table and
+/// its idempotency guarantee exist so the integration is additive.
+model Payment {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+
+  provider String @default("MANUAL")
+  /// Payment id assigned by the provider, when there is one.
+  providerPaymentId String? @map("provider_payment_id")
+  method            PaymentMethod @default(CASH_ON_DELIVERY)
+
+  status   PaymentStatus @default(PENDING)
+  currency String        @default("INR")
+
+  amountInPaise   Int @map("amount_in_paise")
+  refundedInPaise Int @default(0) @map("refunded_in_paise")
+
+  /// Supplied by the caller so a retried request cannot double-charge.
+  idempotencyKey String? @unique @map("idempotency_key")
+
+  failureReason String? @map("failure_reason")
+  providerPayload Json? @map("provider_payload")
+
+  capturedAt DateTime? @map("captured_at")
+  refundedAt DateTime? @map("refunded_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerPaymentId])
+  @@index([orderId, status])
+  @@map("payments")
+}
+
+model Shipment {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+
+  carrier        String?
+  trackingNumber String? @unique @map("tracking_number")
+  trackingUrl    String? @map("tracking_url")
+
+  status ShipmentStatus @default(PENDING)
+
+  expectedAt  DateTime? @map("expected_at")
+  dispatchedAt DateTime? @map("dispatched_at")
+  deliveredAt  DateTime? @map("delivered_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  order               Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  deliveryAssignments DeliveryAssignment[]
+
+  @@index([orderId])
+  @@index([status])
+  @@map("shipments")
+}
+
+model DeliveryAssignment {
+  id               String  @id @default(uuid()) @db.Uuid
+  orderId          String  @map("order_id") @db.Uuid
+  shipmentId       String? @map("shipment_id") @db.Uuid
+  deliveryPartnerUserId String @map("delivery_partner_user_id") @db.Uuid
+
+  status DeliveryAssignmentStatus @default(ASSIGNED)
+
+  assignedAt  DateTime  @default(now()) @map("assigned_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  pickedUpAt  DateTime? @map("picked_up_at")
+  deliveredAt DateTime? @map("delivered_at")
+
+  notes         String?
+  failureReason String? @map("failure_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  order           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  shipment        Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  deliveryPartner User      @relation("DeliveryPartner", fields: [deliveryPartnerUserId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([deliveryPartnerUserId, status])
+  @@index([status, assignedAt])
+  @@map("delivery_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// Coupons and reviews
+// ---------------------------------------------------------------------------
+
+model Coupon {
+  id   String @id @default(uuid()) @db.Uuid
+  code String @unique
+
+  type CouponType
+  /// Interpretation depends on `type`:
+  ///   PERCENTAGE     -> basis points (100 = 1%, 1250 = 12.5%)
+  ///   FIXED_AMOUNT   -> paise
+  ///   FREE_SHIPPING  -> ignored, must be 0
+  /// Basis points keep percentages integral so no float ever touches a total.
+  value Int
+
+  description String?
+
+  minOrderInPaise   Int  @default(0) @map("min_order_in_paise")
+  maxDiscountInPaise Int? @map("max_discount_in_paise")
+
+  /// Total redemptions allowed across all users; null means unlimited.
+  usageLimit   Int? @map("usage_limit")
+  perUserLimit Int  @default(1) @map("per_user_limit")
+  redeemedCount Int @default(0) @map("redeemed_count")
+
+  startsAt DateTime? @map("starts_at")
+  endsAt   DateTime? @map("ends_at")
+  isActive Boolean   @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  orders      Order[]
+  carts        Cart[]
+  redemptions CouponRedemption[]
+
+  @@index([isActive, startsAt, endsAt])
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id       String @id @default(uuid()) @db.Uuid
+  couponId String @map("coupon_id") @db.Uuid
+  userId   String @map("user_id") @db.Uuid
+  orderId  String @map("order_id") @db.Uuid
+
+  discountInPaise Int @map("discount_in_paise")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Restrict)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// One redemption per order, which makes retries safe.
+  @@unique([orderId])
+  @@index([couponId, userId])
+  @@map("coupon_redemptions")
+}
+
+model Review {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @map("product_id") @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  /// Set when the review can be tied to a delivered purchase.
+  /// Unique so one order line can back at most one review.
+  orderItemId String? @unique @map("order_item_id") @db.Uuid
+
+  rating Int
+  title  String?
+  body   String?
+
+  status ReviewStatus @default(PENDING)
+
+  moderatedByUserId String?   @map("moderated_by_user_id") @db.Uuid
+  moderatedAt       DateTime? @map("moderated_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product   Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+
+  /// One review per user per product.
+  @@unique([userId, productId])
+  @@index([productId, status])
+  @@map("reviews")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications and audit
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String? @map("user_id") @db.Uuid
+
+  channel NotificationChannel
+  status  NotificationStatus @default(QUEUED)
+
+  template String?
+  title    String
+  body     String
+  /// Structured payload for the sender, e.g. an order id.
+  data     Json?
+  /// Provider message id, when the message was handed to a provider.
+  providerMessageId String? @map("provider_message_id")
+
+  sentAt    DateTime? @map("sent_at")
+  readAt    DateTime? @map("read_at")
+  failureReason String? @map("failure_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, createdAt])
+  @@index([status, createdAt])
+  @@map("notifications")
+}
+
+/// Append-only audit trail for privileged actions. Written by the API, never by
+/// clients, and deliberately not linked to orders by foreign key so it survives
+/// the deletion of the record it describes.
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  actorUserId String?   @map("actor_user_id") @db.Uuid
+  actorRole   RoleCode? @map("actor_role")
+
+  action     String
+  entityType String  @map("entity_type")
+  entityId   String? @map("entity_id")
+
+  before Json?
+  after  Json?
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+  /// Correlates the entry with the structured logs for the same request.
+  requestId String? @map("request_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}

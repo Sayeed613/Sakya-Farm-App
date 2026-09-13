@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    // Match the module/target defaults that @nestjs/schematics 12 generates.
+    // `moduleResolution: node10` is deprecated in TypeScript 6, so the whole
+    // workspace uses `nodenext`; packages without `"type": "module"` still emit
+    // CommonJS, which is what NestJS runs on.
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "isolatedModules": true,
+
+    // Only Node globals are ambient. Everything else (@types/express, ...) must
+    // be imported explicitly, which keeps shared packages portable.
+    "types": ["node"],
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": true,
+
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "incremental": true,
+
+    // NestJS relies on legacy decorators for DI and metadata reflection.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true
+  }
+}

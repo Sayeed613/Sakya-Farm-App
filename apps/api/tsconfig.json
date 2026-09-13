@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    // NestJS injects dependencies into properties it initialises itself, so
+    // strict property initialisation cannot be satisfied for DI classes.
+    "strictPropertyInitialization": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "prisma/**/*.ts", "prisma.config.ts"],
+  "exclude": ["node_modules", "dist", "coverage"]
+}
