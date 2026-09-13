@@ -5,6 +5,7 @@ export * from './catalog';
 export * from './delivery';
 export * from './inventory';
 export * from './money';
+export * from './payments';
 export * from './permissions';
 export * from './roles';
 export * from './stores';

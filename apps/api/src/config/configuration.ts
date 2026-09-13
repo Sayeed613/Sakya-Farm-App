@@ -27,6 +27,10 @@ export interface AppConfig {
     url: string;
     poolMax: number;
   };
+  payments: {
+    /** HMAC secret for the non-production MOCK webhook adapter. */
+    mockWebhookSecret: string | undefined;
+  };
   auth: {
     accessSecret: string;
     accessTtl: string;
@@ -67,6 +71,9 @@ export default function configuration(): AppConfig {
     database: {
       url: env.DATABASE_URL,
       poolMax: env.DATABASE_POOL_MAX,
+    },
+    payments: {
+      mockWebhookSecret: env.PAYMENTS_MOCK_WEBHOOK_SECRET,
     },
     auth: {
       accessSecret: env.JWT_ACCESS_SECRET,

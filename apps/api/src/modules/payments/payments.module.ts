@@ -1,22 +1,55 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 /**
- * Payments.
+ * Payments — provider-agnostic orchestration.
  *
- * Scaffolded only — no gateway is integrated yet, and this module intentionally
- * contains no provider SDK. The `payments` table exists so the integration is
- * additive. Planned endpoints under `/api/v1/payments`:
+ * `PaymentsService` depends only on the `PaymentProvider` interface. Concrete
+ * gateways register in this module, one line each. The MOCK adapter is
+ * registered in every non-production environment so tests exercise the real
+ * webhook path; production resolves online intents to a 400 until a gateway
+ * adapter is added (see `providerForMethod` in the service).
+ *
+ * Endpoints under `/api/v1/payments`:
  *
  *   POST   /intent                 create a payment intent for an order
  *   POST   /webhook/:provider      provider callback (signature verified, idempotent)
- *   GET    /orders/:orderId        payment attempts for an order    (payments:read)
- *   POST   /:id/refund             refund a payment                 (payments:refund)
+ *   GET    /orders/:orderId        payment attempts for an order
+ *   POST   /:id/cancel             cancel an open payment
+ *   POST   /:id/refund             refund captured money
  *
- * Rules the implementation must hold to:
+ * Rules the implementation holds to:
  * - the amount charged is read from the order, never from the request body;
  * - webhook handlers are idempotent, keyed by the provider's event id;
  * - a payment status change is the only thing that may advance an order's
- *   `payment_status`, and it does so through the orders module.
+ *   `payment_status`, and it does so here — OrdersService is never imported.
  */
-@Module({})
+import { PaymentsController } from './payments.controller';
+import { PaymentsWebhookController } from './payments-webhook.controller';
+import { PAYMENT_PROVIDERS, PaymentsService, type PaymentProviderRegistry } from './payments.service';
+import { ManualProvider } from './providers/manual.provider';
+import { MockProvider } from './providers/mock.provider';
+import type { PaymentProvider } from './providers/payment-provider.interface';
+
+@Module({
+  controllers: [PaymentsController, PaymentsWebhookController],
+  providers: [
+    PaymentsService,
+    ManualProvider,
+    {
+      provide: PAYMENT_PROVIDERS,
+      inject: [ConfigService, ManualProvider],
+      useFactory: (configService: ConfigService, manual: ManualProvider): PaymentProviderRegistry => {
+        const registry = new Map<string, PaymentProvider>();
+        registry.set(manual.name, manual);
+        if (configService.getOrThrow<string>('app.env') !== 'production') {
+          const secret = configService.get<string>('payments.mockWebhookSecret') ?? 'test-only-mock-secret';
+          registry.set('MOCK', new MockProvider(secret));
+        }
+        return registry;
+      },
+    },
+  ],
+  exports: [PaymentsService],
+})
 export class PaymentsModule {}

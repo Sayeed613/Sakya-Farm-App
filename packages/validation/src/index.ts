@@ -4,5 +4,6 @@ export * from './catalog';
 export * from './catalog-query';
 export * from './delivery';
 export * from './inventory';
+export * from './payments';
 export * from './primitives';
 export * from './stores';

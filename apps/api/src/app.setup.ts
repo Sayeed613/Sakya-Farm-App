@@ -1,8 +1,12 @@
 import { VersioningType, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { json } from 'express';
 import helmet from 'helmet';
 
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
+
+/** Attribute carrying the exact request bytes for webhook signature checks. */
+export const RAW_BODY_ATTRIBUTE = 'rawBody';
 
 /**
  * Everything the HTTP layer needs, applied in one place.
@@ -45,6 +49,24 @@ export function configureApp(app: INestApplication): void {
   // Correlation ids must cover unmatched paths (404s) too, so this is attached to
   // the Express instance rather than to a route.
   app.use(requestIdMiddleware);
+
+  /**
+   * Preserve the exact request bytes for webhook signature verification.
+   *
+   * Gateway signatures (and the MOCK HMAC adapter) are computed over the raw
+   * body, not over a parsed-then-reserialized object: key order and whitespace
+   * differ after a JSON round trip. The `verify` hook stashes the buffer on the
+   * request before parsing, so the webhook controller can verify against the
+   * bytes the provider actually signed while every other route keeps the
+   * parsed `req.body` it already uses.
+   */
+  app.use(
+    json({
+      verify: (request, _response, buffer) => {
+        (request as Record<string, unknown>)[RAW_BODY_ATTRIBUTE] = Buffer.from(buffer);
+      },
+    }),
+  );
 
   /**
    * CORS uses an explicit allow-list from configuration. A wildcard is not used,

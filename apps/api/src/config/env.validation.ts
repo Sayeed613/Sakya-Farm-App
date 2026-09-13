@@ -82,6 +82,14 @@ export const environmentSchema = z
     THROTTLE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
     THROTTLE_LIMIT: z.coerce.number().int().min(1).default(100),
 
+    // --- Payments (provider adapters) ---------------------------------------
+    /**
+     * HMAC secret for the non-production MOCK webhook adapter. Optional: the
+     * module falls back to a test-only default outside production. Never set a
+     * real gateway secret here — gateway adapters own their own credentials.
+     */
+    PAYMENTS_MOCK_WEBHOOK_SECRET: z.string().min(16).optional(),
+
     // --- Observability ------------------------------------------------------
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
