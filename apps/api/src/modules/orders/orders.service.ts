@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import {
   Injectable,
   NotFoundException,
@@ -5,8 +7,9 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { checkoutSchema, type OrderListQuery } from '@sakya/validation';
-import type { OrderIdParam } from '@sakya/validation';
 import type {
+  AppliedCouponResponse,
+  CartItemResponse,
   CheckoutRequest,
   OrdersResponse,
   OrderResponse,
@@ -30,28 +33,53 @@ const TAX_RATE_PERCENT = 0;
 const SHIPPING_IN_PAISE = 0;
 const FREE_SHIPPING_THRESHOLD_IN_PAISE = Infinity;
 
-function snapshotItem(item: any) {
-  const unitPrice = toPaise(item.unitPriceInPaise);
+/**
+ * Human-readable, collision-resistant order number.
+ *
+ * `Order.orderNumber` is unique and has no database default, so checkout has to
+ * supply one — without this, every order insert failed with
+ * `Argument 'orderNumber' is missing`. The date prefix keeps numbers
+ * recognisable and roughly sortable; the random suffix makes a collision
+ * vanishingly unlikely, and the unique index is the backstop if one occurs.
+ */
+function generateOrderNumber(): string {
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  return `ORD-${day}-${randomBytes(4).toString('hex').toUpperCase()}`;
+}
+
+/**
+ * Snapshot a cart line into an order line.
+ *
+ * `CartService` already resolves the product and variant titles, so they are read
+ * straight off `CartItemResponse`. This previously reached for
+ * `item.variant.product`, which is not part of that shape — every checkout threw
+ * `Cannot read properties of undefined (reading 'product')` against a real
+ * database, and the mock in the unit spec hid it.
+ */
+function snapshotItem(item: CartItemResponse) {
   return {
     id: item.id,
     quantity: item.quantity,
-    unitPriceInPaise: unitPrice,
-    productTitle: item.variant.product.title ?? 'Unknown product',
-    variantTitle: item.variant.title ?? 'Unknown variant',
-    sku: item.variant.sku,
+    unitPriceInPaise: toPaise(item.unitPriceInPaise),
+    productTitle: item.productTitle,
+    variantTitle: item.variantTitle,
+    sku: item.sku,
   };
 }
 
-function recomputeOrderTotals(items: any[], coupon: any) {
+function recomputeOrderTotals(
+  items: Array<ReturnType<typeof snapshotItem>>,
+  coupon: AppliedCouponResponse | null,
+) {
   const subtotal = sumPaise(...items.map((item) => multiplyPaise(item.unitPriceInPaise, item.quantity)));
 
   let discount: Paise = toPaise(0);
   if (coupon !== null && items.length > 0) {
     if (coupon.type === 'PERCENTAGE') {
       // Coupon value is stored in basis points (100 = 1%); percentageOf expects a percent.
-      discount = percentageOf(subtotal, coupon.value / 100);
+      discount = percentageOf(subtotal, coupon.valueInPaise / 100);
     } else if (coupon.type === 'FIXED_AMOUNT') {
-      discount = toPaise(Math.min(coupon.value, subtotal));
+      discount = toPaise(Math.min(coupon.valueInPaise, subtotal));
     }
   }
 
@@ -108,6 +136,7 @@ export class OrdersService {
     const order = await this.prisma.$transaction(async (tx) => {
       const created = await tx.order.create({
         data: {
+          orderNumber: generateOrderNumber(),
           userId,
           status: 'PENDING_PAYMENT',
           paymentStatus: 'PENDING',
@@ -121,7 +150,7 @@ export class OrdersService {
           billingAddress: parsed.billingAddress as any,
           notes: parsed.notes ?? null,
           items: {
-            create: items.map((item: any) => ({
+            create: items.map((item) => ({
               quantity: item.quantity,
               unitPriceInPaise: item.unitPriceInPaise,
               productTitle: item.productTitle,

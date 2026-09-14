@@ -15,7 +15,7 @@ function cart(userId = 'user-1', id = 'cart-1', items?: Array<{ id: string; vari
     expiresAt: null as Date | null,
     items: items ?? [],
     coupon,
-  } as unknown as ReturnType<OrdersService['getCurrentCart']>;
+  } as unknown as ReturnType<CartService['getCurrentCart']>;
 }
 
 function variant(variantId: string, price = 2400) {
@@ -42,7 +42,7 @@ function cartWithItems(...specs: Array<{ id: string; variantId: string; quantity
 describe('OrdersService', () => {
   let service: OrdersService;
   let prisma: ReturnType<typeof createPrismaMock>;
-  let cartService: { getCurrentCart: ReturnType<OrdersService['cartService']['getCurrentCart']> };
+  let cartService: { getCurrentCart: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
@@ -79,7 +79,7 @@ describe('OrdersService', () => {
       cartWithItems({ id: 'i1', variantId: 'v1', quantity: 2, unitPriceInPaise: 2400 })
     );
     prisma.payment.findFirst.mockResolvedValue(null);
-    prisma.$transaction.mockImplementation(async (fn) => fn(prisma as any));
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
 
     prisma.order.create.mockImplementation(async (args: any) => ({
       ...args,
@@ -180,33 +180,26 @@ describe('OrdersService', () => {
     expect(result.status).toBe('PENDING_PAYMENT');
     expect(result.totalInPaise).toBe(4800);
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].productTitle).toBe('Mango');
+    expect(result.items[0]!.productTitle).toBe('Mango');
     expect(result.payments).toHaveLength(1);
-    expect(result.payments[0].provider).toBe('MANUAL');
-    expect(result.payments[0].status).toBe('PENDING');
+    expect(result.payments[0]!.provider).toBe('MANUAL');
+    expect(result.payments[0]!.status).toBe('PENDING');
     // Idempotency key is internal and must never leak to the client.
-    expect(result.payments[0].idempotencyKey).toBeUndefined();
+    expect((result.payments[0] as unknown as { idempotencyKey?: string }).idempotencyKey).toBeUndefined();
   });
 
   it('recomputes totals with a percentage coupon at checkout', async () => {
-    cartService.getCurrentCart.mockResolvedValue(
-      cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }, {
+    cartService.getCurrentCart.mockResolvedValue({
+      ...cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }, {
         id: 'i2',
         variantId: 'v2',
         quantity: 1,
         unitPriceInPaise: 2400,
-      }) && ({
-        ...cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }, {
-          id: 'i2',
-          variantId: 'v2',
-          quantity: 1,
-          unitPriceInPaise: 2400,
-        }),
-        coupon: { id: 'coupon-1', code: 'SAVE10', type: 'PERCENTAGE', value: 1000 } as any,
-      })
-    );
+      }),
+      coupon: { id: 'coupon-1', code: 'SAVE10', type: 'PERCENTAGE', valueInPaise: 1000 } as any,
+    });
     prisma.payment.findFirst.mockResolvedValue(null);
-    prisma.$transaction.mockImplementation(async (fn) => fn(prisma as any));
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
 
     prisma.order.create.mockResolvedValue({
       id: 'order-1',
@@ -457,7 +450,7 @@ describe('OrdersService', () => {
       coupon: null,
     } as any);
 
-    prisma.$transaction.mockImplementation(async (fn) => fn(prisma as any));
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
     prisma.order.update.mockResolvedValue({
       id: 'order-1',
       orderNumber: 'ORD-001',
@@ -580,7 +573,7 @@ function createPrismaMock() {
       update: vi.fn(),
     },
     $transaction: vi.fn(),
-  } as unknown as PrismaMock;
+  };
 }
 
 export { createPrismaMock, type PrismaMock };

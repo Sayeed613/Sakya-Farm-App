@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
-import { paiseSchema, uuidSchema } from './primitives';
-import type { InventoryMovementType } from '@sakya/types';
+import { uuidSchema } from './primitives';
 
 /** Movement types that add stock (positive delta). */
 export const INCOMING_MOVEMENT_TYPES = [

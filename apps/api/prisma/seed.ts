@@ -31,7 +31,18 @@ const ROLE_PERMISSIONS: Record<
   Exclude<RoleCode, 'ADMIN' | 'SUPER_ADMIN'>,
   readonly PermissionCode[]
 > = {
-  CUSTOMER: ['cart:read', 'cart:write', 'orders:read:own', 'reviews:read'],
+  // A customer must be able to place an order and cancel their own, which is
+  // what `orders:write` and `orders:cancel` gate. Ownership is enforced again in
+  // the service on every customer-facing order route, so these are capability
+  // grants, not blanket access.
+  CUSTOMER: [
+    'cart:read',
+    'cart:write',
+    'orders:write',
+    'orders:read:own',
+    'orders:cancel',
+    'reviews:read',
+  ],
 
   STORE_MANAGER: [
     'products:read',

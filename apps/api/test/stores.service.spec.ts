@@ -145,7 +145,7 @@ describe('StoresService.listStores', () => {
     const result = await createService(stub).listStores({ page: 1, limit: 20 });
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].staffCount).toBe(3);
+    expect(result.items[0]!.staffCount).toBe(3);
     expect(result.meta.total).toBe(1);
   });
 });
@@ -160,7 +160,7 @@ describe('StoresService.assignStoreStaff', () => {
       id: 'ss1',
       storeId: 's1',
       userId: 'u1',
-      role: 'STAFF',
+      role: 'STORE_STAFF',
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -170,7 +170,7 @@ describe('StoresService.assignStoreStaff', () => {
 
     const result = await createService(stub).assignStoreStaff('s1', {
       userId: 'u1',
-      role: 'STAFF',
+      role: 'STORE_STAFF',
     });
 
     expect(result.userId).toBe('u1');
@@ -184,7 +184,7 @@ describe('StoresService.assignStoreStaff', () => {
     stub.storeStaff.findUnique.mockResolvedValue({ id: 'existing' });
 
     await expect(
-      createService(stub).assignStoreStaff('s1', { userId: 'u1', role: 'STAFF' }),
+      createService(stub).assignStoreStaff('s1', { userId: 'u1', role: 'STORE_STAFF' }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
@@ -193,7 +193,7 @@ describe('StoresService.assignStoreStaff', () => {
     stub.store.findUnique.mockResolvedValue(null);
 
     await expect(
-      createService(stub).assignStoreStaff('missing', { userId: 'u1', role: 'STAFF' }),
+      createService(stub).assignStoreStaff('missing', { userId: 'u1', role: 'STORE_STAFF' }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

@@ -1,11 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
+import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
-import { validateEnvironment } from '../src/config/env.validation';
+import configuration from '../src/config/configuration';
 /**
  * HTTP-level tests for the cart and checkout endpoints.
  *
@@ -24,11 +25,15 @@ import { validateEnvironment } from '../src/config/env.validation';
 
 const CUSTOMER_EMAIL = 'checkout-test@sakyafarms.example';
 const CUSTOMER_PASSWORD = 'TestPassword123!';
-const STORE_ID = 'store-checkout-test';
-const PRODUCT_ID = 'product-checkout-test';
-const VARIANT_ID = 'variant-checkout-test';
+// Every id column in the schema is `@db.Uuid`, so the fixtures use fixed,
+// well-formed UUIDs. Fixed ids keep reruns idempotent (each seed is an upsert)
+// and make a stray row obvious in the database.
+const STORE_ID = 'a1111111-1111-4111-8111-111111111111';
+const PRODUCT_ID = 'a2222222-2222-4222-8222-222222222222';
+const VARIANT_ID = 'a3333333-3333-4333-8333-333333333333';
+const CATEGORY_ID = 'a4444444-4444-4444-8444-444444444444';
 const COUPON_CODE = 'CHECKOUT10';
-const COUPON_ID = 'coupon-checkout-test';
+const COUPON_ID = 'a5555555-5555-4555-8555-555555555555';
 
 interface TestContext {
   app: INestApplication;
@@ -112,10 +117,22 @@ async function seedTestData(prisma: PrismaClient) {
     },
   });
 
-  await prisma.productCategory.upsert({
-    where: { productId_categoryId: { productId: product.id, categoryId: 'all-fresh' } },
+  // The catalogue import owns the real categories; this test creates its own so
+  // it does not depend on that import having been run.
+  const category = await prisma.category.upsert({
+    where: { slug: 'checkout-test-category' },
     update: {},
-    create: { productId: product.id, categoryId: 'all-fresh', isPrimary: true },
+    create: {
+      id: CATEGORY_ID,
+      slug: 'checkout-test-category',
+      name: 'Checkout Test Category',
+    },
+  });
+
+  await prisma.productCategory.upsert({
+    where: { productId_categoryId: { productId: product.id, categoryId: category.id } },
+    update: {},
+    create: { productId: product.id, categoryId: category.id, isPrimary: true },
   });
 
   const coupon = await prisma.coupon.upsert({
@@ -136,26 +153,46 @@ async function seedTestData(prisma: PrismaClient) {
   return { store, variant, coupon };
 }
 
-function signIn(prisma: PrismaClient, user: { id: string; email: string }) {
+function signIn(user: { id: string; email: string }) {
   // Build a valid access token by minting the same payload the JWT strategy
-  // validates. We reuse the same secrets the app uses, so the guard passes.
-  const env = validateEnvironment(process.env);
-  const { sign } = require('jsonwebtoken');
-  return sign(
-    {
-      sub: user.id,
-      typ: 'access',
-      iss: env.auth.issuer,
-      aud: env.auth.audience,
+  // validates. The signing options mirror AuthModule exactly, so a token that
+  // the app would reject cannot make these tests pass.
+  const config = configuration();
+  const jwt = new JwtService({
+    secret: config.auth.accessSecret,
+    signOptions: {
+      algorithm: 'HS256',
+      expiresIn: config.auth.accessTtl as unknown as JwtSignOptions['expiresIn'],
+      issuer: config.auth.issuer,
+      audience: config.auth.audience,
     },
-    env.auth.accessSecret,
-    { algorithm: 'HS256', expiresIn: env.auth.accessTtl, issuer: env.auth.issuer, audience: env.auth.audience }
-  );
+  });
+
+  return jwt.sign({ sub: user.id, typ: 'access' });
+}
+
+/**
+ * Remove everything a test created for the test customer.
+ *
+ * Payments restrict deletion of their order, so they must go first — deleting
+ * orders ahead of them failed the whole transaction and silently left rows
+ * behind for the next test. Order items and status history cascade from the
+ * order and need no separate delete.
+ */
+async function clearTestUserData(prisma: PrismaClient, userId: string) {
+  await prisma.$transaction(async (tx) => {
+    await tx.cartItem.deleteMany({ where: { cart: { userId } } });
+    await tx.cart.deleteMany({ where: { userId } });
+    await tx.payment.deleteMany({ where: { order: { userId } } });
+    await tx.order.deleteMany({ where: { userId } });
+  });
 }
 
 describe('Cart and checkout endpoints (seeded DB)', () => {
   let ctx: TestContext;
 
+  // Boots the real application, hashes a password with Argon2id (19 MiB, t=2)
+  // and seeds the fixtures. The generous timeout lives in vitest.config.ts.
   beforeAll(async () => {
     const prisma = new PrismaClient({
       adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -165,15 +202,20 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
     // Seed the baseline that every test needs, if it does not already exist.
     await seedTestData(prisma);
     const user = await createTestUser(prisma);
-    const token = signIn(prisma, user);
+    // Start from a clean slate even if an earlier run was interrupted.
+    await clearTestUserData(prisma, user.id);
+    const token = signIn(user);
 
-    const module = Test.createTestingModule({ imports: [AppModule] }).compile();
+    const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
     const app = module.createNestApplication();
     configureApp(app);
     await app.init();
-    await app.listen(0);
 
-    const port = app.getHttpAdapter().getInstance().address() as number;
+    // `listen` resolves with the underlying HTTP server, which is the only
+    // object that owns `address()` — `getHttpAdapter().getInstance()` returns
+    // the Express application, not the server.
+    const server = (await app.listen(0)) as { address(): { port: number } | null };
+    const port = server.address()?.port ?? 0;
 
     ctx = { app, prisma, user, token, baseUrl: `http://127.0.0.1:${port}/api/v1` };
   });
@@ -186,12 +228,7 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
   afterEach(async () => {
     // Clear the rows created by this test so the next test starts from the
     // same seeded baseline.
-    await ctx.prisma.$transaction(async (tx) => {
-      await tx.cartItem.deleteMany({ where: { cart: { userId: ctx.user.id } } });
-      await tx.cart.deleteMany({ where: { userId: ctx.user.id } });
-      await tx.order.deleteMany({ where: { userId: ctx.user.id } });
-      await tx.payment.deleteMany({ where: { order: { userId: ctx.user.id } } });
-    });
+    await clearTestUserData(ctx.prisma, ctx.user.id);
   });
 
   it('returns the current cart with zero totals for a new user', async () => {
@@ -240,9 +277,9 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
       currency: string;
     };
     expect(body.items).toHaveLength(1);
-    expect(body.items[0].quantity).toBe(2);
-    expect(body.items[0].unitPriceInPaise).toBe(2400);
-    expect(body.items[0].lineTotalInPaise).toBe(2 * 2400);
+    expect(body.items[0]!.quantity).toBe(2);
+    expect(body.items[0]!.unitPriceInPaise).toBe(2400);
+    expect(body.items[0]!.lineTotalInPaise).toBe(2 * 2400);
     expect(body.subtotalInPaise).toBe(2 * 2400);
     expect(body.totalInPaise).toBe(2 * 2400);
     expect(body.currency).toBe('INR');
@@ -335,7 +372,7 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
       }),
     });
 
-    expect(checkoutRes.status).toBe(200);
+    expect(checkoutRes.status).toBe(201);
     const order = (await checkoutRes.json()) as {
       orderNumber: string;
       status: string;
@@ -349,13 +386,13 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
     // Server recomputes: 2 * 2400 = 4800
     expect(order.totalInPaise).toBe(4800);
     expect(order.items).toHaveLength(1);
-    expect(order.items[0].productTitle).toBe('Checkout Test Mango');
-    expect(order.items[0].variantTitle).toBe('1 kg');
-    expect(order.items[0].quantity).toBe(2);
+    expect(order.items[0]!.productTitle).toBe('Checkout Test Mango');
+    expect(order.items[0]!.variantTitle).toBe('1 kg');
+    expect(order.items[0]!.quantity).toBe(2);
     expect(order.payments).toHaveLength(1);
-    expect(order.payments[0].provider).toBe('MANUAL');
-    expect(order.payments[0].status).toBe('PENDING');
-    expect(order.payments[0].amountInPaise).toBe(4800);
+    expect(order.payments[0]!.provider).toBe('MANUAL');
+    expect(order.payments[0]!.status).toBe('PENDING');
+    expect(order.payments[0]!.amountInPaise).toBe(4800);
   });
 
   it('is idempotent for a retried checkout', async () => {
@@ -388,7 +425,7 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
       }),
     });
 
-    expect(first.status).toBe(200);
+    expect(first.status).toBe(201);
     const firstOrder = (await first.json()) as { orderNumber: string };
 
     const second = await fetch(ctx.baseUrl + '/orders', {
@@ -406,7 +443,7 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
       }),
     });
 
-    expect(second.status).toBe(200);
+    expect(second.status).toBe(201);
     const secondOrder = (await second.json()) as { orderNumber: string };
     expect(secondOrder.orderNumber).toBe(firstOrder.orderNumber);
   });

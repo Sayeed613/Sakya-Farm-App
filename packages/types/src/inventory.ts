@@ -1,4 +1,4 @@
-import type { InventoryMovementType, Paise } from './index';
+import type { InventoryMovementType } from './index';
 
 /** Inventory entry as seen by the API. */
 export interface InventoryEntry {

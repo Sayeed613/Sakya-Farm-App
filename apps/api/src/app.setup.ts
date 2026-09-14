@@ -63,7 +63,7 @@ export function configureApp(app: INestApplication): void {
   app.use(
     json({
       verify: (request, _response, buffer) => {
-        (request as Record<string, unknown>)[RAW_BODY_ATTRIBUTE] = Buffer.from(buffer);
+        (request as unknown as Record<string, unknown>)[RAW_BODY_ATTRIBUTE] = Buffer.from(buffer);
       },
     }),
   );

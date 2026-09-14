@@ -148,12 +148,14 @@ describe('AdminProductsService.createVariant', () => {
       priceInPaise: 60000,
       requiresShipping: true,
       isAvailable: false,
+      position: 0,
+      optionValues: {},
     };
 
     const result = await createService(stub).createVariant('p1', request);
 
     expect(result.variants).toHaveLength(1);
-    expect(result.variants[0].id).toBe('v1');
+    expect(result.variants[0]!.id).toBe('v1');
   });
 });
 

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { currencySchema, paiseSchema, quantitySchema, slugSchema, uuidSchema } from './primitives';
+import { couponCodeSchema, quantitySchema, uuidSchema } from './primitives';
 
 // ---------------------------------------------------------------------------
 // Cart item body validation
@@ -21,7 +21,7 @@ export const updateCartItemSchema = z.object({
 export type UpdateCartItemRequest = z.infer<typeof updateCartItemSchema>;
 
 export const applyCouponSchema = z.object({
-  code: slugSchema,
+  code: couponCodeSchema,
 });
 
 export type ApplyCouponRequest = z.infer<typeof applyCouponSchema>;
@@ -89,3 +89,16 @@ export const cancelReasonSchema = z
   .trim()
   .min(1, 'Cancel reason is required')
   .max(500, 'Cancel reason is too long');
+
+/**
+ * Body of `POST /orders/:id/cancel`.
+ *
+ * `cancelReasonSchema` describes one field, not the request. Piping the whole
+ * body through it rejected every cancel request with a 400, because the body is
+ * an object and the schema expects a string.
+ */
+export const cancelOrderSchema = z.object({
+  reason: cancelReasonSchema,
+});
+
+export type CancelOrderRequest = z.infer<typeof cancelOrderSchema>;

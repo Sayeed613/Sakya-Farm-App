@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import { uuidSchema } from './primitives';
-import type { RoleCode } from '@sakya/types';
 
 // --- Store CRUD -------------------------------------------------------------
 

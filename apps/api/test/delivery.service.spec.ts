@@ -190,7 +190,7 @@ describe('DeliveryService', () => {
       const result = await service.getMyAssignments('partner-1', { page: 1, limit: 20 });
 
       expect(result.items).toHaveLength(1);
-      expect(result.items[0].id).toBe('assign-1');
+      expect(result.items[0]!.id).toBe('assign-1');
       expect(result.meta.total).toBe(1);
     });
 

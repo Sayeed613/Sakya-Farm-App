@@ -57,6 +57,29 @@ export const slugSchema = z
     'Slug must be lowercase alphanumeric words separated by hyphens',
   );
 
+/**
+ * A coupon code as a customer types it.
+ *
+ * Codes are stored in one canonical form (upper case, e.g. `SAVE10`) but people
+ * type them in whatever case they like, so the value is trimmed and upper-cased
+ * here — the same normalise-on-input approach as `emailSchema` and
+ * `indianPhoneSchema`. The API then compares exactly one representation.
+ *
+ * A slug would be wrong here: coupon codes are upper case by convention, and
+ * `slugSchema` rejects them outright, which would make an operator-created
+ * `SAVE10` impossible for any customer to apply.
+ */
+export const couponCodeSchema = z
+  .string()
+  .trim()
+  .min(1, 'Coupon code is required')
+  .max(64, 'Coupon code is too long')
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9_-]*$/,
+    'Coupon code may contain letters, digits, hyphens and underscores',
+  )
+  .transform((value) => value.toUpperCase());
+
 /** Positive integer quantity, capped so a single line cannot exhaust stock. */
 export const quantitySchema = z.number().int('Quantity must be a whole number').min(1).max(999);
 

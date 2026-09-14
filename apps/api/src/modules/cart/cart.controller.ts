@@ -7,6 +7,8 @@ import {
   Body,
   Param,
   UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -73,8 +75,14 @@ export class CartController {
     return this.cartService.clearCart(userId);
   }
 
-  /** Apply a coupon code to the current cart. */
+  /**
+   * Apply a coupon code to the current cart.
+   *
+   * Applying a coupon changes an existing cart and creates no new resource, so
+   * this answers `200 OK` rather than the `201` a POST defaults to.
+   */
   @Permissions('cart:write')
+  @HttpCode(HttpStatus.OK)
   @Post('coupon')
   async applyCoupon(
     @CurrentUser('id') userId: string,

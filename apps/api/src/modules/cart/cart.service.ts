@@ -69,7 +69,6 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
         include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } },
       },
       coupon: true,
-      store: { select: { id: true, currency: true } },
     },
   });
 
@@ -79,7 +78,6 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
       include: {
         items: { include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } } },
         coupon: true,
-        store: { select: { id: true, currency: true } },
       },
     });
     return created;

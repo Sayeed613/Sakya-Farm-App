@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import { uuidSchema } from './primitives';
-import type { DeliveryAssignmentStatus, ShipmentStatus } from '@sakya/types';
 
 // --- Delivery assignment list query ----------------------------------------
 

@@ -5,7 +5,6 @@ import { Prisma } from '../src/generated/prisma/client';
 import { CartService } from '../src/modules/cart/cart.service';
 import { PrismaService } from '../src/database/prisma.service';
 
-const P = Prisma;
 const VARIANT_ID = '00000000-0000-4000-8000-000000000001';
 const STORE_ID = '00000000-0000-4000-8000-000000000002';
 
@@ -17,7 +16,7 @@ function variant(id: string, title = '500 g', price = 2400, available = true) {
     sku: 'SKU-1',
     title,
     product: { title: 'Mango', status: 'ACTIVE' as const, isAvailable: true },
-  } as P.ProductVariantGetPayload<true>;
+  } as unknown as Prisma.ProductVariantGetPayload<true>;
 }
 
 function cart(id = 'cart-1', userId = 'user-1') {
@@ -28,10 +27,10 @@ function cart(id = 'cart-1', userId = 'user-1') {
     status: 'ACTIVE' as const,
     currency: 'INR',
     expiresAt: null as Date | null,
-    store: { id: 'store-1', currency: 'INR' } as P.Store,
-    coupon: null as P.CouponGetPayload<true> | null,
-    items: [] as Array<P.CartItemGetPayload<true> & { variant: P.ProductVariantGetPayload<true>; product: { title: string } }>,
-  } as P.CartGetPayload<true>;
+    store: { id: 'store-1', currency: 'INR' } as unknown as Prisma.StoreModel,
+    coupon: null as Prisma.CouponGetPayload<true> | null,
+    items: [] as Array<Prisma.CartItemGetPayload<true> & { variant: Prisma.ProductVariantGetPayload<true>; product: { title: string } }>,
+  } as unknown as Prisma.CartGetPayload<true>;
 }
 
 function makeItems(storeId: string, ...specs: Array<{ id: string; variantId: string; quantity: number; unitPriceInPaise: number }>) {
@@ -109,8 +108,8 @@ describe('CartService', () => {
 
     const result = await service.getCurrentCart('user-1');
 
-    expect(result.items[0].lineTotalInPaise).toBe(3 * 2400);
-    expect(result.items[0].unitPriceInPaise).toBe(2400);
+    expect(result.items[0]!.lineTotalInPaise).toBe(3 * 2400);
+    expect(result.items[0]!.unitPriceInPaise).toBe(2400);
   });
 
   it('rejects adding an unavailable variant', async () => {
@@ -138,9 +137,13 @@ describe('CartService', () => {
     prisma.productVariant.findFirst.mockResolvedValue(variant('v1', '500 g', 2400, true));
     prisma.cartItem.findFirst.mockResolvedValue({ id: 'existing-item', cartId: 'cart-1', variantId: 'v1', storeId: 'store-1', quantity: 2, unitPriceInPaise: 2400 });
 
-    prisma.cartItem.update.mockImplementation(async ({ where, data }) => {
-      return { id: where.id, quantity: 2 + (data.quantity as any).increment, unitPriceInPaise: 2400 } as any;
-    });
+    prisma.cartItem.update.mockImplementation(
+      async (args: { where: { id: string }; data: { quantity: { increment: number } } }) => ({
+        id: args.where.id,
+        quantity: 2 + args.data.quantity.increment,
+        unitPriceInPaise: 2400,
+      }) as any,
+    );
     prisma.cart.findFirst.mockResolvedValue({
       ...cart(),
       items: makeItems('store-1', { id: 'existing-item', variantId: 'v1', quantity: 5, unitPriceInPaise: 2400 }),
@@ -150,7 +153,7 @@ describe('CartService', () => {
     const result = await service.addItem('user-1', { variantId: VARIANT_ID, storeId: STORE_ID, quantity: 3 });
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].quantity).toBe(5);
+    expect(result.items[0]!.quantity).toBe(5);
   });
 
   it('removes an item and returns the recomputed cart', async () => {
@@ -336,7 +339,7 @@ function createPrismaMock() {
     couponRedemption: {
       count: vi.fn(),
     },
-  } as unknown as PrismaMock;
+  };
 }
 
 export { createPrismaMock, type PrismaMock };

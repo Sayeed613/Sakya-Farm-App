@@ -6,19 +6,21 @@ import {
   Query,
   Body,
   UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import {
   checkoutSchema,
-  cancelReasonSchema,
+  cancelOrderSchema,
   orderIdParamSchema,
   orderListQuerySchema,
   type OrderIdParam,
   type OrderListQuery,
 } from '@sakya/validation';
-import type { CheckoutRequest } from '@sakya/validation';
+import type { CancelOrderRequest, CheckoutRequest } from '@sakya/validation';
 import type { OrderResponse, OrdersResponse, ShipmentDetail } from '@sakya/types';
 import { OrdersService } from './orders.service';
 import { DeliveryService } from '../delivery/delivery.service';
@@ -66,11 +68,13 @@ export class OrdersController {
 
   /** Cancel one of the caller's orders, when the transition is allowed. */
   @Permissions('orders:cancel')
+  // Cancelling is a transition on an existing order, not the creation of one.
+  @HttpCode(HttpStatus.OK)
   @Post(':id/cancel')
   async cancelOrder(
     @CurrentUser('id') userId: string,
     @Param(new ZodValidationPipe(orderIdParamSchema)) params: OrderIdParam,
-    @Body(new ZodValidationPipe(cancelReasonSchema)) body: { reason: string },
+    @Body(new ZodValidationPipe(cancelOrderSchema)) body: CancelOrderRequest,
   ): Promise<OrderResponse> {
     return this.ordersService.cancelOrder(params.id, userId, body.reason);
   }

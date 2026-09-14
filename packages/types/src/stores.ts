@@ -108,7 +108,7 @@ export interface StoreOrderSummary {
   taxInPaise: Paise;
   shippingInPaise: Paise;
   totalInPaise: Paise;
-  shippingAddress: any;
+  shippingAddress: Record<string, unknown>;
   notes: string | null;
   placedAt: string | null;
   createdAt: string;
