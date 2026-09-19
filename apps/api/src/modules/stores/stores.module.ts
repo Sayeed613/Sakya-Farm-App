@@ -7,6 +7,7 @@ import { StoreOrdersController } from './store-orders.controller';
 import { StoreInventoryService } from './store-inventory.service';
 import { StoreInventoryController } from './store-inventory.controller';
 import { InventoryModule } from '../inventory/inventory.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 /**
  * Stores and store staff.
@@ -37,7 +38,7 @@ import { InventoryModule } from '../inventory/inventory.module';
  * permission guards.
  */
 @Module({
-  imports: [InventoryModule],
+  imports: [InventoryModule, NotificationsModule],
   controllers: [StoresController, StoreOrdersController, StoreInventoryController],
   providers: [StoresService, StoreOrdersService, StoreInventoryService],
   exports: [StoresService, StoreOrdersService, StoreInventoryService],

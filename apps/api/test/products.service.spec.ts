@@ -54,8 +54,8 @@ function listRow(overrides: Partial<ProductListRow> & Pick<ProductListRow, 'id'>
     productType: null,
     isAvailable: true,
     publishedAt: new Date('2026-05-22T05:24:13.000Z'),
-    variants: [{ priceInPaise: 30000, isAvailable: true }],
-    images: [{ url: 'https://cdn.example.com/a.jpg' }],
+    variants: [{ priceInPaise: 30000, isAvailable: true, title: '500 g', compareAtPriceInPaise: null }],
+    images: [{ url: 'https://cdn.example.com/a.jpg', altText: null }],
     categories: [{ isPrimary: true, category: { slug: 'all-fresh', name: 'All Fresh' } }],
     ...overrides,
   };
@@ -180,10 +180,10 @@ describe('ProductsService mapping', () => {
       listRow({
         id: 'p1',
         variants: [
-          { priceInPaise: 30000, isAvailable: false },
-          { priceInPaise: 90000, isAvailable: true },
+          { priceInPaise: 30000, isAvailable: false, title: '250 g', compareAtPriceInPaise: null },
+          { priceInPaise: 90000, isAvailable: true, title: '1 kg', compareAtPriceInPaise: null },
         ],
-        images: [{ url: 'https://cdn.example.com/first.jpg' }],
+        images: [{ url: 'https://cdn.example.com/first.jpg', altText: null }],
       }),
     ]);
 
@@ -201,7 +201,7 @@ describe('ProductsService mapping', () => {
       listRow({
         id: 'p1',
         isAvailable: false,
-        variants: [{ priceInPaise: 30000, isAvailable: false }],
+        variants: [{ priceInPaise: 30000, isAvailable: false, title: '250 g', compareAtPriceInPaise: null }],
       }),
     ]);
 

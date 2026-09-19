@@ -26,10 +26,13 @@ import {
 export interface ProductListRowVariant {
   priceInPaise: number;
   isAvailable: boolean;
+  title: string;
+  compareAtPriceInPaise: number | null;
 }
 
 export interface ProductListRowImage {
   url: string;
+  altText: string | null;
 }
 
 export interface ProductCategoryRow {
@@ -149,6 +152,14 @@ export function toCatalogImage(row: ProductDetailRowImage): CatalogImage {
 export function toProductListItem(row: ProductListRow): ProductListItem {
   const availableVariantCount = row.variants.filter((variant) => variant.isAvailable).length;
 
+  // Highest compare-at across variants: the card's MRP anchor. Null when no
+  // variant carries one.
+  const compareAtValues = row.variants
+    .map((variant) => variant.compareAtPriceInPaise)
+    .filter((value): value is number => value !== null);
+  const compareAtMaxInPaise =
+    compareAtValues.length > 0 ? (Math.max(...compareAtValues) as Paise) : null;
+
   return {
     id: row.id,
     slug: row.slug,
@@ -157,9 +168,12 @@ export function toProductListItem(row: ProductListRow): ProductListItem {
     productType: row.productType,
     isAvailable: row.isAvailable,
     primaryImageUrl: row.images[0]?.url ?? null,
+    imageUrls: row.images.map((image) => image.url),
     price: toPriceRange(row.variants),
+    compareAtMaxInPaise,
     variantCount: row.variants.length,
     availableVariantCount,
+    variantTitles: row.variants.map((variant) => variant.title),
     categories: toCategoryRefs(row.categories),
     publishedAt: row.publishedAt?.toISOString() ?? null,
   };

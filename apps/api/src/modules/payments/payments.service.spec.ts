@@ -66,6 +66,7 @@ function setup() {
   const service = new PaymentsService(
     prisma as never,
     configService as never,
+    { sendOrderStatusPush: vi.fn(async () => undefined) } as never,
     providers as unknown as Map<string, never>,
   );
 

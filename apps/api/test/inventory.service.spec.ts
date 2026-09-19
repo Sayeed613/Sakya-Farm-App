@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import { InventoryService } from '../src/modules/inventory/inventory.service';
@@ -259,5 +259,110 @@ describe('InventoryService', () => {
       // The second call should have the store filter
       expect(stub.$queryRaw).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+/**
+ * `deductStock` is the sale side of the inventory ledger. It previously reduced
+ * on-hand by only the *unreserved* remainder, so deducting a fully reserved
+ * order left the units on the books — sellable again — while the ledger recorded
+ * a negative sale. The two now agree.
+ */
+describe('InventoryService.deductStock', () => {
+  function createDeductStub() {
+    const stub = {
+      inventory: {
+        findUnique: vi.fn(),
+        update: vi.fn(),
+      },
+      inventoryMovement: {
+        create: vi.fn(),
+      },
+      $transaction: vi.fn(),
+    };
+    stub.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(stub));
+    return stub;
+  }
+
+  function createDeductService(stub: ReturnType<typeof createDeductStub>): InventoryService {
+    return new InventoryService(
+      stub as unknown as import('../src/database/prisma.service').PrismaService,
+    );
+  }
+
+  it('removes the sold quantity from physical stock as well as the hold', async () => {
+    const stub = createDeductStub();
+    // The read inside the transaction only selects these four fields; the
+    // read-back that builds the response returns a full row.
+    stub.inventory.findUnique
+      .mockResolvedValueOnce({
+        id: 'inv-1',
+        variantId: 'var-1',
+        storeId: 'store-1',
+        quantityOnHand: 100,
+        quantityReserved: 20,
+      })
+      .mockResolvedValueOnce(
+        mockInventoryRow({ quantityOnHand: 80, quantityReserved: 0 }),
+      );
+
+    await createDeductService(stub).deductStock('inv-1', {
+      quantity: 20,
+      orderId: 'order-1',
+    });
+
+    expect(stub.inventory.update).toHaveBeenCalledWith({
+      where: { id: 'inv-1' },
+      data: { quantityOnHand: 80, quantityReserved: 0 },
+    });
+
+    const movements = stub.inventoryMovement.create.mock.calls.map(
+      (call) => (call[0] as { data: Record<string, unknown> }).data,
+    );
+    expect(movements[0]).toEqual(
+      expect.objectContaining({ type: 'SALE', quantityDelta: -20, quantityAfter: 80 }),
+    );
+    expect(movements[1]).toEqual(
+      expect.objectContaining({ type: 'RESERVATION_RELEASE', quantityDelta: -20 }),
+    );
+  });
+
+  it('records no release when the sold stock was never reserved', async () => {
+    const stub = createDeductStub();
+    stub.inventory.findUnique
+      .mockResolvedValueOnce({
+        id: 'inv-1',
+        variantId: 'var-1',
+        storeId: 'store-1',
+        quantityOnHand: 10,
+        quantityReserved: 0,
+      })
+      .mockResolvedValueOnce(mockInventoryRow({ quantityOnHand: 7, quantityReserved: 0 }));
+
+    await createDeductService(stub).deductStock('inv-1', { quantity: 3 });
+
+    expect(stub.inventory.update).toHaveBeenCalledWith({
+      where: { id: 'inv-1' },
+      data: { quantityOnHand: 7, quantityReserved: 0 },
+    });
+    expect(stub.inventoryMovement.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to sell more than is physically on hand', async () => {
+    const stub = createDeductStub();
+    stub.inventory.findUnique.mockResolvedValue({
+      id: 'inv-1',
+      variantId: 'var-1',
+      storeId: 'store-1',
+      quantityOnHand: 5,
+      quantityReserved: 0,
+    });
+
+    await expect(
+      createDeductService(stub).deductStock('inv-1', { quantity: 6 }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(stub.inventory.update).not.toHaveBeenCalled();
+    expect(stub.inventoryMovement.create).not.toHaveBeenCalled();
   });
 });

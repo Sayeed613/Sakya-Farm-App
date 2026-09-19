@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
-import { addCartItemSchema, applyCouponSchema, updateCartItemSchema } from '@sakya/validation';
+import { addCartItemSchema, applyCouponSchema, mergeGuestCartSchema, updateCartItemSchema } from '@sakya/validation';
 import type {
   AddCartItemRequest,
   AppliedCouponResponse,
@@ -9,6 +9,7 @@ import type {
   Paise,
   UpdateCartItemRequest,
 } from '@sakya/types';
+import type { MergeGuestCartRequest } from '@sakya/validation';
 import { multiplyPaise, percentageOf, subtractPaise, sumPaise, toPaise } from '@sakya/utils';
 import { PrismaService } from '../../database/prisma.service';
 
@@ -37,14 +38,22 @@ function toCartItemResponse(item: {
   variantId: string;
   quantity: number;
   unitPriceInPaise: number;
-  variant: { title: string | null; sku: string | null; isAvailable: boolean | null; product: { title: string | null } };
+  variant: {
+    title: string | null;
+    sku: string | null;
+    isAvailable: boolean | null;
+    product: { title: string | null; slug?: string; images?: { url: string; position: number }[] };
+  };
 }): CartItemResponse {
   const unitPrice = toPaise(item.unitPriceInPaise);
+  const images = [...(item.variant.product.images ?? [])].sort((a, b) => a.position - b.position);
   return {
     id: item.id,
     variantId: item.variantId,
     productTitle: item.variant.product.title ?? 'Unknown product',
     variantTitle: item.variant.title ?? 'Unknown variant',
+    productImageUrl: images[0]?.url ?? null,
+    productSlug: item.variant.product.slug ?? '',
     sku: item.variant.sku,
     quantity: item.quantity,
     unitPriceInPaise: unitPrice,
@@ -66,7 +75,7 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
       items: {
         where: { quantity: { gt: 0 } },
         orderBy: { createdAt: 'asc' },
-        include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } },
+        include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } } } } } } },
       },
       coupon: true,
     },
@@ -76,7 +85,7 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
     const created = await prisma.cart.create({
       data: { userId, status: 'ACTIVE', currency: 'INR' },
       include: {
-        items: { include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } } },
+        items: { include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } } } } } } } },
         coupon: true,
       },
     });
@@ -276,6 +285,82 @@ export class CartService {
   }
 
   // -----------------------------------------------------------------------
+  // Guest cart merge
+  // -----------------------------------------------------------------------
+
+  /**
+   * Merge the guest cart a customer accumulated before signing in.
+   *
+   * Called right after OTP authentication. The client sends only variant ids
+   * and quantities — never prices, never a store: the server revalidates every
+   * line (variant exists, product active, variant sellable), resolves the
+   * fulfillment store itself, snaps the unit price at merge time, and folds
+   * duplicates into one line per variant. Lines that fail validation are
+   * dropped rather than failing the whole merge: a stale guest line for a
+   * delisted product must not block the six good ones.
+   */
+  async mergeGuestCart(userId: string, body: MergeGuestCartRequest): Promise<CartResponse> {
+    const parsed = mergeGuestCartSchema.parse(body);
+
+    if (parsed.lines.length === 0) {
+      return this.getCurrentCart(userId);
+    }
+
+    // Fold duplicate variant entries the guest store may carry, summing
+    // quantities, so the same variant can never become two lines.
+    const quantitiesByVariant = new Map<string, number>();
+    for (const line of parsed.lines) {
+      quantitiesByVariant.set(
+        line.variantId,
+        Math.min(99, (quantitiesByVariant.get(line.variantId) ?? 0) + line.quantity),
+      );
+    }
+
+    // The fulfillment store: the current cart's store when one is already
+    // scoped, otherwise the first active store. Clients cannot choose this.
+    const cart = await this.ensureUserCart(userId);
+    const existingStoreId = cart.storeId ?? null;
+    const storeId =
+      existingStoreId ??
+      (await this.prisma.store.findFirst({
+        where: { isActive: true },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      }))?.id;
+
+    if (storeId === undefined) {
+      throw new ConflictException('No store is available to fulfil this cart');
+    }
+
+    if (existingStoreId === null) {
+      await this.prisma.cart.update({
+        where: { id: cart.id },
+        data: { storeId },
+      });
+    }
+
+    let merged = 0;
+    for (const [variantId, quantity] of quantitiesByVariant) {
+      try {
+        await this.addItem(userId, { variantId, storeId, quantity });
+        merged += 1;
+      } catch {
+        // Unavailable, delisted or unknown variant: drop the line, keep the
+        // rest. Price and availability are the server's call, not the client's.
+        continue;
+      }
+    }
+
+    if (merged === 0 && quantitiesByVariant.size > 0) {
+      // Everything the guest had was rejected; the cart exists but is empty.
+      // That is still a successful merge with zero survivable lines.
+      return this.getCurrentCart(userId);
+    }
+
+    return this.getCurrentCart(userId);
+  }
+
+  // -----------------------------------------------------------------------
   // Internal assertions
   // -----------------------------------------------------------------------
 
@@ -327,7 +412,7 @@ export class CartService {
         isAvailable: true,
         sku: true,
         title: true,
-        product: { select: { title: true, status: true, isAvailable: true } },
+        product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } } } },
       },
     });
 

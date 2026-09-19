@@ -45,7 +45,8 @@ export interface StoreStaffSummary {
   updatedAt: string;
   user: {
     id: string;
-    email: string;
+    /** Null for phone-first identities that have no email on file. */
+    email: string | null;
     firstName: string;
     lastName: string | null;
     phone: string | null;
@@ -95,7 +96,8 @@ export interface StoreOrderSummary {
   orderNumber: string;
   customer: {
     id: string;
-    email: string;
+    /** Null for phone-first customers who never added an email. */
+    email: string | null;
     firstName: string;
     lastName: string | null;
     phone: string | null;

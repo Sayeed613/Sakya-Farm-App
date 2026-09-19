@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AdminCategoriesController } from './admin-categories.controller';
 import { AdminCategoriesService } from './admin-categories.service';
 import { AdminCustomersController } from './admin-customers.controller';
@@ -51,6 +52,7 @@ import { AdminUsersService } from './admin-users.service';
  *   DELETE /users/:id/roles/:code   revoke a role from a user       (users:manage)
  */
 @Module({
+  imports: [NotificationsModule],
   controllers: [
     AdminProductsController,
     AdminCategoriesController,

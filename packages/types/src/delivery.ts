@@ -30,7 +30,8 @@ export interface DeliveryAssignmentSummary {
   deliveryPartnerUserId: string;
   deliveryPartner: {
     id: string;
-    email: string;
+    /** Null for phone-first identities that have no email on file. */
+    email: string | null;
     firstName: string;
     lastName: string | null;
     phone: string | null;

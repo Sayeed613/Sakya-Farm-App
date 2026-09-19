@@ -31,6 +31,19 @@ export interface AppConfig {
     /** HMAC secret for the non-production MOCK webhook adapter. */
     mockWebhookSecret: string | undefined;
   };
+  sms: {
+    /** Vonage credentials; both null means SMS delivery is not configured. */
+    apiKey: string | null;
+    apiSecret: string | null;
+    from: string;
+    /**
+     * Demo OTP mode: every phone verifies with the same fixed 4-digit code.
+     * For demo/staging builds only; never active in production.
+     */
+    demoMode: boolean;
+    /** The fixed 4-digit code used when demoMode is on (default 1234). */
+    demoCode: string;
+  };
   auth: {
     accessSecret: string;
     accessTtl: string;
@@ -74,6 +87,15 @@ export default function configuration(): AppConfig {
     },
     payments: {
       mockWebhookSecret: env.PAYMENTS_MOCK_WEBHOOK_SECRET,
+    },
+    sms: {
+      apiKey: env.VONAGE_API_KEY ?? null,
+      apiSecret: env.VONAGE_API_SECRET ?? null,
+      from: env.VONAGE_SMS_FROM,
+      // Demo mode is opt-in via env and can never activate in production:
+      // this guard is duplicated inside OtpService so relying on it is safe.
+      demoMode: !isProduction && env.OTP_DEMO_MODE === 'true',
+      demoCode: env.OTP_DEMO_CODE ?? '1234',
     },
     auth: {
       accessSecret: env.JWT_ACCESS_SECRET,

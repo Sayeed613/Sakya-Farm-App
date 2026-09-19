@@ -45,11 +45,18 @@ const PUBLIC_STATUS = 'ACTIVE';
  * The trailing `p.id` keeps the order total, so pagination cannot repeat or skip a
  * row when two products share a sort value.
  */
+/**
+ * Public listing sort orders.
+ *
+ * Every order leads with `p.is_available DESC`: unavailable ("notify me")
+ * products always sink to the bottom of a listing, in every sort mode, and
+ * available products rank among themselves exactly as the sort describes.
+ */
 const ORDER_CLAUSES: Readonly<Record<ProductSortOption, Prisma.Sql>> = {
-  newest: Prisma.sql`p.published_at DESC NULLS LAST, p.id ASC`,
-  title_asc: Prisma.sql`p.title ASC, p.id ASC`,
-  price_asc: Prisma.sql`(SELECT MIN(v.price_in_paise) FROM product_variants v WHERE v.product_id = p.id) ASC NULLS LAST, p.id ASC`,
-  price_desc: Prisma.sql`(SELECT MIN(v.price_in_paise) FROM product_variants v WHERE v.product_id = p.id) DESC NULLS LAST, p.id ASC`,
+  newest: Prisma.sql`p.is_available DESC, p.published_at DESC NULLS LAST, p.id ASC`,
+  title_asc: Prisma.sql`p.is_available DESC, p.title ASC, p.id ASC`,
+  price_asc: Prisma.sql`p.is_available DESC, (SELECT MIN(v.price_in_paise) FROM product_variants v WHERE v.product_id = p.id) ASC NULLS LAST, p.id ASC`,
+  price_desc: Prisma.sql`p.is_available DESC, (SELECT MIN(v.price_in_paise) FROM product_variants v WHERE v.product_id = p.id) DESC NULLS LAST, p.id ASC`,
 };
 
 /** Columns returned for a list card: enough to render, nothing internal. */
@@ -61,8 +68,11 @@ const LIST_SELECT = {
   productType: true,
   isAvailable: true,
   publishedAt: true,
-  variants: { select: { priceInPaise: true, isAvailable: true } },
-  images: { select: { url: true }, orderBy: { position: 'asc' }, take: 1 },
+  variants: {
+    select: { priceInPaise: true, isAvailable: true, title: true, compareAtPriceInPaise: true },
+    orderBy: { position: 'asc' },
+  },
+  images: { select: { url: true, altText: true }, orderBy: { position: 'asc' }, take: 4 },
   categories: {
     select: { isPrimary: true, category: { select: { slug: true, name: true } } },
     orderBy: { position: 'asc' },

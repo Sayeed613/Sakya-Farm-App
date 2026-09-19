@@ -89,5 +89,13 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
+  {
+    // Bundler/babel config files are CommonJS by ecosystem convention — Metro
+    // and Babel load them with `require()`, so ESM `import` is not available.
+    files: ['**/*.config.js', '**/*.config.cjs'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
   prettier,
 );

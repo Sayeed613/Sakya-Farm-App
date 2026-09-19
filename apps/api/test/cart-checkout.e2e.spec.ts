@@ -38,7 +38,7 @@ const COUPON_ID = 'a5555555-5555-4555-8555-555555555555';
 interface TestContext {
   app: INestApplication;
   prisma: PrismaClient;
-  user: { id: string; email: string };
+  user: { id: string; email: string | null };
   token: string;
   baseUrl: string;
 }
@@ -102,7 +102,6 @@ async function seedTestData(prisma: PrismaClient) {
       publishedAt: new Date(),
     },
   });
-
   const variant = await prisma.productVariant.upsert({
     where: { id: VARIANT_ID },
     update: {},
@@ -114,6 +113,31 @@ async function seedTestData(prisma: PrismaClient) {
       priceInPaise: 2400,
       currency: 'INR',
       isAvailable: true,
+    },
+  });
+
+  // Inventory is per (variant, store) and must exist before checkout can
+  // reserve stock. This must run *after* the variant is created — referencing
+  // `variant.id` above its declaration threw a temporal-dead-zone
+  // `ReferenceError` and skipped the whole suite.
+  await prisma.inventory.upsert({
+    where: {
+      variantId_storeId: {
+        variantId: variant.id,
+        storeId: store.id,
+      },
+    },
+    update: {
+      quantityOnHand: 10,
+      quantityReserved: 0,
+      reorderLevel: 2,
+    },
+    create: {
+      variantId: variant.id,
+      storeId: store.id,
+      quantityOnHand: 10,
+      quantityReserved: 0,
+      reorderLevel: 2,
     },
   });
 
@@ -153,7 +177,7 @@ async function seedTestData(prisma: PrismaClient) {
   return { store, variant, coupon };
 }
 
-function signIn(user: { id: string; email: string }) {
+function signIn(user: { id: string; email: string | null }) {
   // Build a valid access token by minting the same payload the JWT strategy
   // validates. The signing options mirror AuthModule exactly, so a token that
   // the app would reject cannot make these tests pass.
@@ -186,9 +210,47 @@ async function clearTestUserData(prisma: PrismaClient, userId: string) {
     await tx.payment.deleteMany({ where: { order: { userId } } });
     await tx.order.deleteMany({ where: { userId } });
   });
+
+  // Checkout holds stock (it writes `quantityReserved`), and deleting an order
+  // does not give that stock back. Without restoring the fixture, reservations
+  // accumulate across the specs in this file and a later test fails on
+  // starvation caused by an earlier one. The ledger rows are cleared with the
+  // counters so every spec starts from a truly identical baseline.
+  await prisma.inventoryMovement.deleteMany({
+    where: { variantId: VARIANT_ID, storeId: STORE_ID },
+  });
+  // Upsert rather than update: one spec deliberately removes the stock row to
+  // prove checkout refuses an unconfigured variant, and the baseline has to
+  // come back afterwards whatever order the specs run in.
+  await prisma.inventory.upsert({
+    where: { variantId_storeId: { variantId: VARIANT_ID, storeId: STORE_ID } },
+    update: { quantityOnHand: 10, quantityReserved: 0 },
+    create: {
+      variantId: VARIANT_ID,
+      storeId: STORE_ID,
+      quantityOnHand: 10,
+      quantityReserved: 0,
+      reorderLevel: 2,
+    },
+  });
 }
 
-describe('Cart and checkout endpoints (seeded DB)', () => {
+/** Read the fixture's inventory row — the source of truth for stock assertions. */
+function readInventory(prisma: PrismaClient) {
+  return prisma.inventory.findUniqueOrThrow({
+    where: { variantId_storeId: { variantId: VARIANT_ID, storeId: STORE_ID } },
+  });
+}
+
+/**
+ * These specs own a real Nest app and write real rows, so they only run when a
+ * disposable database has been designated for them. Without the guard,
+ * `pnpm test` would seed fixtures into whatever `DATABASE_URL` happens to be
+ * configured (a shared database included).
+ */
+const runDatabaseE2e = process.env.RUN_DB_E2E === '1';
+
+describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () => {
   let ctx: TestContext;
 
   // Boots the real application, hashes a password with Argon2id (19 MiB, t=2)
@@ -221,14 +283,24 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
   });
 
   afterAll(async () => {
-    await ctx.app.close();
-    await ctx.prisma.$disconnect();
+    // `ctx` is absent when `beforeAll` failed; guard so the real cause is not
+    // buried under a second "cannot read properties of undefined" error.
+    if (ctx) {
+      // Remove this suite's fixtures so the shared catalog never shows test rows.
+      await ctx.prisma.cartItem.deleteMany({ where: { variant: { productId: PRODUCT_ID } } });
+      await ctx.prisma.productCategory.deleteMany({ where: { productId: PRODUCT_ID } });
+      await ctx.prisma.productVariant.deleteMany({ where: { productId: PRODUCT_ID } });
+      await ctx.prisma.product.deleteMany({ where: { id: PRODUCT_ID } });
+      await ctx.prisma.category.deleteMany({ where: { slug: 'checkout-test-category' } });
+    }
+    await ctx?.app.close();
+    await ctx?.prisma.$disconnect();
   });
 
   afterEach(async () => {
     // Clear the rows created by this test so the next test starts from the
     // same seeded baseline.
-    await clearTestUserData(ctx.prisma, ctx.user.id);
+    if (ctx !== undefined) await clearTestUserData(ctx.prisma, ctx.user.id);
   });
 
   it('returns the current cart with zero totals for a new user', async () => {
@@ -374,6 +446,7 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
 
     expect(checkoutRes.status).toBe(201);
     const order = (await checkoutRes.json()) as {
+      id: string;
       orderNumber: string;
       status: string;
       totalInPaise: number;
@@ -393,6 +466,30 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
     expect(order.payments[0]!.provider).toBe('MANUAL');
     expect(order.payments[0]!.status).toBe('PENDING');
     expect(order.payments[0]!.amountInPaise).toBe(4800);
+
+    // The order must persist the fulfilment store and the variant, or the stock
+    // it holds could never be released against the right row.
+    const persisted = await ctx.prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { items: true },
+    });
+    expect(persisted.storeId).toBe(STORE_ID);
+    expect(persisted.couponId).toBeNull();
+    expect(persisted.items).toHaveLength(1);
+    expect(persisted.items[0]!.variantId).toBe(VARIANT_ID);
+
+    // Stock is *held* at checkout, not consumed: reserved goes up by the ordered
+    // quantity while on-hand is untouched.
+    const inventory = await readInventory(ctx.prisma);
+    expect(inventory.quantityOnHand).toBe(10);
+    expect(inventory.quantityReserved).toBe(2);
+
+    const reservation = await ctx.prisma.inventoryMovement.findFirst({
+      where: { variantId: VARIANT_ID, storeId: STORE_ID, type: 'RESERVATION' },
+    });
+    expect(reservation).not.toBeNull();
+    expect(reservation!.quantityDelta).toBe(2);
+    expect(reservation!.referenceId).toBe(order.id);
   });
 
   it('is idempotent for a retried checkout', async () => {
@@ -426,7 +523,7 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
     });
 
     expect(first.status).toBe(201);
-    const firstOrder = (await first.json()) as { orderNumber: string };
+    const firstOrder = (await first.json()) as { id: string; orderNumber: string };
 
     const second = await fetch(ctx.baseUrl + '/orders', {
       method: 'POST',
@@ -444,8 +541,27 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
     });
 
     expect(second.status).toBe(201);
-    const secondOrder = (await second.json()) as { orderNumber: string };
+    const secondOrder = (await second.json()) as { id: string; orderNumber: string };
     expect(secondOrder.orderNumber).toBe(firstOrder.orderNumber);
+    expect(secondOrder.id).toBe(firstOrder.id);
+
+    // The retry must not re-reserve: one order, one reservation movement, and
+    // reserved stock equal to a single quantity.
+    const reservations = await ctx.prisma.inventoryMovement.findMany({
+      where: {
+        variantId: VARIANT_ID,
+        storeId: STORE_ID,
+        type: 'RESERVATION',
+        referenceId: firstOrder.id,
+      },
+    });
+    expect(reservations).toHaveLength(1);
+
+    const orders = await ctx.prisma.order.count({ where: { userId: ctx.user.id } });
+    expect(orders).toBe(1);
+
+    const inventory = await readInventory(ctx.prisma);
+    expect(inventory.quantityReserved).toBe(1);
   });
 
   it('lists the caller own orders', async () => {
@@ -534,10 +650,27 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
       }),
     });
 
+    expect(placed.status).toBe(201);
     expect(cancelRes.status).toBe(200);
     const cancelled = (await cancelRes.json()) as { status: string; cancelReason: string };
     expect(cancelled.status).toBe('CANCELLED');
     expect(cancelled.cancelReason).toBe('Changed mind');
+
+    // Cancelling gives the held stock back, exactly once.
+    const inventory = await readInventory(ctx.prisma);
+    expect(inventory.quantityOnHand).toBe(10);
+    expect(inventory.quantityReserved).toBe(0);
+
+    const release = await ctx.prisma.inventoryMovement.findFirst({
+      where: {
+        variantId: VARIANT_ID,
+        storeId: STORE_ID,
+        type: 'RESERVATION_RELEASE',
+        referenceId: placedOrder.id,
+      },
+    });
+    expect(release).not.toBeNull();
+    expect(release!.quantityDelta).toBe(-1);
   });
 
   it('rejects cancelling an order without a reason', async () => {
@@ -585,5 +718,162 @@ describe('Cart and checkout endpoints (seeded DB)', () => {
     });
 
     expect(res.status).toBe(400);
+  });
+
+  it('refuses checkout when the store does not have enough available stock', async () => {
+    // One unit available, two ordered. On-hand is left above zero so the failure
+    // is specifically the availability check, not a missing row.
+    await ctx.prisma.inventory.updateMany({
+      where: { variantId: VARIANT_ID, storeId: STORE_ID },
+      data: { quantityOnHand: 1, quantityReserved: 0 },
+    });
+
+    const addRes = await fetch(ctx.baseUrl + '/cart/items', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.token}`,
+        'Content-Type': 'application/json',
+        'x-request-id': 'test-10',
+      },
+      body: JSON.stringify({
+        variantId: VARIANT_ID,
+        storeId: STORE_ID,
+        quantity: 2,
+      }),
+    });
+    expect(addRes.status).toBe(201);
+
+    const res = await fetch(ctx.baseUrl + '/orders', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.token}`,
+        'Content-Type': 'application/json',
+        'x-request-id': 'test-10b',
+      },
+      body: JSON.stringify({
+        idempotencyKey: 'checkout-key-short',
+        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        billingAddress: null,
+        notes: null,
+      }),
+    });
+
+    expect(res.status).toBe(409);
+
+    // The whole transaction rolled back: no order, no payment, no reservation.
+    expect(await ctx.prisma.order.count({ where: { userId: ctx.user.id } })).toBe(0);
+    expect(await ctx.prisma.payment.count({ where: { order: { userId: ctx.user.id } } })).toBe(0);
+
+    const inventory = await readInventory(ctx.prisma);
+    expect(inventory.quantityOnHand).toBe(1);
+    expect(inventory.quantityReserved).toBe(0);
+
+    const reservations = await ctx.prisma.inventoryMovement.count({
+      where: { variantId: VARIANT_ID, storeId: STORE_ID, type: 'RESERVATION' },
+    });
+    expect(reservations).toBe(0);
+  });
+
+  it('refuses checkout when no stock is configured for the variant at the store', async () => {
+    // Stock must be configured before a variant can be sold from a store.
+    await ctx.prisma.inventoryMovement.deleteMany({
+      where: { variantId: VARIANT_ID, storeId: STORE_ID },
+    });
+    await ctx.prisma.inventory.deleteMany({
+      where: { variantId: VARIANT_ID, storeId: STORE_ID },
+    });
+
+    const addRes = await fetch(ctx.baseUrl + '/cart/items', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.token}`,
+        'Content-Type': 'application/json',
+        'x-request-id': 'test-11',
+      },
+      body: JSON.stringify({
+        variantId: VARIANT_ID,
+        storeId: STORE_ID,
+        quantity: 1,
+      }),
+    });
+    expect(addRes.status).toBe(201);
+
+    const res = await fetch(ctx.baseUrl + '/orders', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.token}`,
+        'Content-Type': 'application/json',
+        'x-request-id': 'test-11b',
+      },
+      body: JSON.stringify({
+        idempotencyKey: 'checkout-key-nostock',
+        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        billingAddress: null,
+        notes: null,
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    expect(await ctx.prisma.order.count({ where: { userId: ctx.user.id } })).toBe(0);
+  });
+
+  it('cannot oversell the same variant when two checkouts race', async () => {
+    // Exactly one unit is available, and both requests ask for that one unit.
+    await ctx.prisma.inventory.updateMany({
+      where: { variantId: VARIANT_ID, storeId: STORE_ID },
+      data: { quantityOnHand: 1, quantityReserved: 0 },
+    });
+
+    await fetch(ctx.baseUrl + '/cart/items', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ctx.token}`,
+        'Content-Type': 'application/json',
+        'x-request-id': 'test-12',
+      },
+      body: JSON.stringify({
+        variantId: VARIANT_ID,
+        storeId: STORE_ID,
+        quantity: 1,
+      }),
+    });
+
+    const checkout = (key: string) =>
+      fetch(ctx.baseUrl + '/orders', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          'Content-Type': 'application/json',
+          'x-request-id': key,
+        },
+        body: JSON.stringify({
+          idempotencyKey: key,
+          shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+          billingAddress: null,
+          notes: null,
+        }),
+      });
+
+    // Distinct idempotency keys, so these are two genuinely separate attempts to
+    // buy the same single unit — not a retry of one attempt.
+    const [first, second] = await Promise.all([
+      checkout('race-key-1'),
+      checkout('race-key-2'),
+    ]);
+    const statuses = [first.status, second.status].sort((a, b) => a - b);
+
+    // Exactly one wins. The loser is rejected on availability rather than the
+    // stock being promised twice — this is the conditional UPDATE doing its job.
+    expect(statuses).toEqual([201, 409]);
+
+    const inventory = await readInventory(ctx.prisma);
+    expect(inventory.quantityOnHand).toBe(1);
+    expect(inventory.quantityReserved).toBe(1);
+
+    expect(await ctx.prisma.order.count({ where: { userId: ctx.user.id } })).toBe(1);
+    const reservations = await ctx.prisma.inventoryMovement.count({
+      where: { variantId: VARIANT_ID, storeId: STORE_ID, type: 'RESERVATION' },
+    });
+    expect(reservations).toBe(1);
   });
 });

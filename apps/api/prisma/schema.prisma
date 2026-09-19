@@ -176,6 +176,12 @@ enum NotificationStatus {
   CANCELLED
 }
 
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
 enum AddressType {
   SHIPPING
   BILLING
@@ -187,10 +193,13 @@ enum AddressType {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String     @id @default(uuid()) @db.Uuid
-  email        String     @unique
-  phone        String?    @unique
-  /// Argon2id hash. Null for users who only authenticate via an external provider.
+  id     String  @id @default(uuid()) @db.Uuid
+  /// Nullable: customers authenticate by phone + OTP, so email is an optional
+  /// profile field. Staff/admin accounts are provisioned with an email.
+  email  String? @unique
+  /// The primary authentication identity for customers. E.164, unique.
+  phone  String? @unique
+  /// Argon2id hash. Null for users who only authenticate via phone OTP.
   passwordHash String?    @map("password_hash")
   firstName    String     @map("first_name")
   lastName     String?    @map("last_name")
@@ -211,11 +220,13 @@ model User {
   reviews             Review[]
   storeStaff          StoreStaff[]
   notifications       Notification[]
+  pushTokens          DevicePushToken[]
   couponRedemptions   CouponRedemption[]
   auditLogs           AuditLog[]           @relation("AuditActor")
   inventoryMovements  InventoryMovement[]  @relation("InventoryMovementActor")
   orderStatusChanges  OrderStatusHistory[] @relation("OrderStatusActor")
   deliveryAssignments DeliveryAssignment[] @relation("DeliveryPartner")
+  payments            Payment[]
 
   @@index([status])
   @@index([createdAt])
@@ -278,6 +289,35 @@ model RolePermission {
   @@id([roleId, permissionId])
   @@index([permissionId])
   @@map("role_permissions")
+}
+
+/// A one-time passcode for phone authentication. The plaintext code is never
+/// stored: only its SHA-256 hash. `phone` is the normalised E.164 number so a
+/// lookup cannot be defeated by formatting differences. Sending a new code
+/// supersedes the previous active one, and attempts are capped per code so a
+/// brute force has five tries per issued code, not unlimited time.
+///
+/// There is deliberately no user foreign key: a code is issued before it is
+/// known whether an account exists, and the phone string is the join key.
+model OtpCode {
+  id    String @id @default(uuid()) @db.Uuid
+  phone String
+
+  tokenHash String @unique @map("token_hash")
+
+  /// Superseded the moment a newer code is issued to the same phone.
+  consumedAt DateTime? @map("consumed_at")
+  expiresAt  DateTime  @map("expires_at")
+  attempts   Int       @default(0)
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([phone, createdAt])
+  @@index([expiresAt])
+  @@map("otp_codes")
 }
 
 /// Refresh tokens are stored as a hash only: a database leak must not hand an
@@ -527,6 +567,33 @@ model Store {
   @@map("stores")
 }
 
+/// One device's push-notification registration. A user may have several
+/// (phone + tablet); tokens are unique and upserted on re-registration. Rows
+/// live until the user deletes them or the provider reports the token dead.
+model DevicePushToken {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @map("user_id") @db.Uuid
+
+  /// The Expo push token, e.g. `ExponentPushToken[xxxxxxxx]`. Unique because
+  /// the same device registering twice must update, not duplicate.
+  token       String @unique
+  platform    DevicePlatform
+  /** Optional human-readable device label for the user's settings screen. */
+  deviceName  String? @map("device_name")
+
+  /// Set when Expo's receipts report the token is no longer registered.
+  deactivatedAt DateTime? @map("deactivated_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, deactivatedAt])
+  @@map("device_push_tokens")
+}
+
 /// Links an operator to a store. Store-scoped access, separate from platform roles.
 model StoreStaff {
   id      String    @id @default(uuid()) @db.Uuid
@@ -774,9 +841,15 @@ model OrderStatusHistory {
 
 /// Payment attempt against an order. No gateway is integrated yet; the table and
 /// its idempotency guarantee exist so the integration is additive.
+///
+/// `userId` duplicates `order.userId` on purpose: an idempotency key is a client
+/// supplied string, so it must be unique *per customer*, and a unique index
+/// cannot span a relation. Scoping the key per customer is also what stops one
+/// customer's key from turning another customer's checkout into a 409.
 model Payment {
   id      String @id @default(uuid()) @db.Uuid
   orderId String @map("order_id") @db.Uuid
+  userId  String @map("user_id") @db.Uuid
 
   provider String @default("MANUAL")
   /// Payment id assigned by the provider, when there is one.
@@ -789,8 +862,9 @@ model Payment {
   amountInPaise   Int @map("amount_in_paise")
   refundedInPaise Int @default(0) @map("refunded_in_paise")
 
-  /// Supplied by the caller so a retried request cannot double-charge.
-  idempotencyKey String? @unique @map("idempotency_key")
+  /// Supplied by the caller so a retried request cannot double-charge. Unique
+  /// within one customer, not across the platform — see `@@unique` below.
+  idempotencyKey String? @map("idempotency_key")
 
   failureReason String? @map("failure_reason")
   providerPayload Json? @map("provider_payload")
@@ -801,9 +875,12 @@ model Payment {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
   order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
+  @@unique([userId, idempotencyKey])
   @@unique([provider, providerPaymentId])
+  @@index([userId])
   @@index([orderId, status])
   @@map("payments")
 }

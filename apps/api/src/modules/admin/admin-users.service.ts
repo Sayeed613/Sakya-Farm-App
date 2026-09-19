@@ -29,7 +29,7 @@ import type { RoleCode } from '@sakya/types';
 
 interface AdminUserRow {
   id: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   firstName: string;
   lastName: string | null;

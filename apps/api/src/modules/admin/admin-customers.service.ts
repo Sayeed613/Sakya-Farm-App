@@ -22,7 +22,7 @@ import { PrismaService } from '../../database/prisma.service';
 
 interface AdminCustomerRow {
   id: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   firstName: string;
   lastName: string | null;
@@ -128,7 +128,7 @@ export class AdminCustomersService {
   async getById(id: string): Promise<AdminCustomerDetail> {
     type UserWithStats = {
       id: string;
-      email: string;
+      email: string | null;
       phone: string | null;
       firstName: string;
       lastName: string | null;

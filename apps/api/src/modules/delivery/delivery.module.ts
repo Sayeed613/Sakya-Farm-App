@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { NotificationsModule } from '../notifications/notifications.module';
 import { DeliveryController } from './delivery.controller';
 import { AdminDeliveryController } from './admin-delivery.controller';
 import { DeliveryService } from './delivery.service';
@@ -43,6 +44,7 @@ import { DeliveryService } from './delivery.service';
  * recorded for auditability.
  */
 @Module({
+  imports: [NotificationsModule],
   controllers: [DeliveryController, AdminDeliveryController],
   providers: [DeliveryService],
   exports: [DeliveryService],

@@ -10,6 +10,7 @@ import type { Request } from 'express';
  */
 export interface AuthenticatedUser {
   id: string;
+  /** Empty string for phone-first customers; internal contracts keep non-null. */
   email: string;
   roles: RoleCode[];
   permissions: PermissionCode[];

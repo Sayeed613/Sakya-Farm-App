@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Sakya Farms",
+    "slug": "sakya-farms-customer",
+    "version": "0.1.0",
+    "scheme": "sakyafarms",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-secure-store",
+      "expo-asset",
+      "expo-image",
+      "expo-notifications"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sakyafarms.customer"
+    },
+    "android": {
+      "package": "com.sakyafarms.customer",
+      "softwareKeyboardLayoutMode": "resize"
+    }
+  }
+}

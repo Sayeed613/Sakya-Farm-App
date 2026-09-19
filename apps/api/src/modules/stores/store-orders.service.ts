@@ -5,6 +5,7 @@ import { buildPaginationMeta, toSkipTake, type PageRequest } from '@sakya/utils'
 import { canTransitionOrder, type OrderStatus } from '@sakya/types';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 /** Store-facing order operations.
  *
@@ -13,7 +14,10 @@ import { PrismaService } from '../../database/prisma.service';
  */
 @Injectable()
 export class StoreOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   // -----------------------------------------------------------------------
   // List orders for a store
@@ -120,8 +124,15 @@ export class StoreOrdersService {
         statusHistory: {
           orderBy: { createdAt: 'asc' },
         },
-        shipment: true,
-        deliveryAssignment: {
+        // `Order` owns *lists* of these; the store view shows the current one.
+        // The singular `shipment` / `deliveryAssignment` keys used here before do
+        // not exist on `Order`, which Prisma only rejects at runtime — so every
+        // store order read (and every status change, which returns one) was a
+        // 500 against a real database.
+        shipments: { orderBy: { createdAt: 'desc' }, take: 1 },
+        deliveryAssignments: {
+          orderBy: { assignedAt: 'desc' },
+          take: 1,
           include: {
             deliveryPartner: {
               select: {
@@ -185,22 +196,22 @@ export class StoreOrdersService {
         changedByUserId: h.changedByUserId,
         createdAt: h.createdAt.toISOString(),
       })),
-      shipment: o.shipment
+      shipment: o.shipments?.[0]
         ? {
-            id: o.shipment.id,
-            carrier: o.shipment.carrier,
-            trackingNumber: o.shipment.trackingNumber,
-            trackingUrl: o.shipment.trackingUrl,
-            status: o.shipment.status,
+            id: o.shipments[0].id,
+            carrier: o.shipments[0].carrier,
+            trackingNumber: o.shipments[0].trackingNumber,
+            trackingUrl: o.shipments[0].trackingUrl,
+            status: o.shipments[0].status,
           }
         : null,
-      deliveryAssignment: o.deliveryAssignment
+      deliveryAssignment: o.deliveryAssignments?.[0]
         ? {
-            id: o.deliveryAssignment.id,
-            deliveryPartnerUserId: o.deliveryAssignment.deliveryPartnerUserId,
-            deliveryPartner: o.deliveryAssignment.deliveryPartner,
-            status: o.deliveryAssignment.status,
-            assignedAt: o.deliveryAssignment.assignedAt.toISOString(),
+            id: o.deliveryAssignments[0].id,
+            deliveryPartnerUserId: o.deliveryAssignments[0].deliveryPartnerUserId,
+            deliveryPartner: o.deliveryAssignments[0].deliveryPartner,
+            status: o.deliveryAssignments[0].status,
+            assignedAt: o.deliveryAssignments[0].assignedAt.toISOString(),
           }
         : null,
     } as StoreOrderDetail;
@@ -220,7 +231,7 @@ export class StoreOrdersService {
 
     const order = await this.prisma.order.findFirst({
       where: { id: orderId, storeId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, userId: true, orderNumber: true },
     });
 
     if (order === null) {
@@ -256,6 +267,15 @@ export class StoreOrdersService {
           changedByUserId: userId,
         },
       });
+    });
+
+    // Best-effort customer push; never fails the store transition.
+    await this.notificationsService.sendOrderStatusPush({
+      userId: order.userId,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      status: body.status,
+      reason: body.reason ?? null,
     });
 
     return this.getStoreOrder(storeId, orderId, userId);

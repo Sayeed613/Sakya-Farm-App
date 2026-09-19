@@ -1,21 +1,23 @@
 import { Module } from '@nestjs/common';
 
+import { NotificationsController } from './notifications.controller';
+import { NotificationsService } from './notifications.service';
+
 /**
- * Notifications.
+ * Push notifications.
  *
- * Scaffolded only — no email, SMS or push provider is wired up yet, and the API
- * never sends a message inline during a request. Planned endpoints under
- * `/api/v1/notifications`:
+ * - `POST   /notifications/devices`          register this device's push token
+ * - `GET    /notifications/devices`          the caller's registered devices
+ * - `DELETE /notifications/devices/:id`      unregister (logout / settings)
  *
- *   GET    /                       the caller's notifications
- *   PATCH  /:id/read               mark one as read
- *   POST   /read-all               mark all as read
- *   GET    /admin                  delivery log                (notifications:read)
- *   POST   /admin/send             queue a notification        (notifications:send)
- *
- * Notifications are persisted with status QUEUED first and sent by a worker, so a
- * provider outage cannot fail an order. `data` carries the structured payload the
- * sender needs (for example an order id) rather than a pre-rendered string.
+ * Order-status pushes are sent inline through Expo's push API but are guarded
+ * so any provider failure can never fail the calling transition: the durable
+ * record is written first as a QUEUED Notification row and marked SENT/FAILED
+ * afterwards. Delivery is best-effort by design; the database row is truth.
  */
-@Module({})
+@Module({
+  controllers: [NotificationsController],
+  providers: [NotificationsService],
+  exports: [NotificationsService],
+})
 export class NotificationsModule {}

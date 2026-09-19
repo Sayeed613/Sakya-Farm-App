@@ -57,13 +57,19 @@ export interface ProductListItem {
   /** Product-level availability, as published. Independent of stock. */
   isAvailable: boolean;
   primaryImageUrl: string | null;
+  /** First four image URLs in display order, for card carousels. */
+  imageUrls: string[];
   /**
    * Null when the product has no variant, and therefore no price: price lives on
    * the variant. Reported as null rather than a misleading zero.
    */
   price: CatalogPriceRange | null;
+  /** Highest compare-at price across variants; null when none carries one. */
+  compareAtMaxInPaise: Paise | null;
   variantCount: number;
   availableVariantCount: number;
+  /** Variant titles in display order, e.g. ['500 g', '1 kg'] for pack sizes. */
+  variantTitles: string[];
   categories: CatalogCategoryRef[];
   publishedAt: string | null;
 }

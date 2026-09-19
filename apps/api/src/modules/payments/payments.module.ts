@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { NotificationsModule } from '../notifications/notifications.module';
+
 /**
  * Payments — provider-agnostic orchestration.
  *
@@ -25,6 +27,7 @@ import { ConfigService } from '@nestjs/config';
  *   `payment_status`, and it does so here — OrdersService is never imported.
  */
 import { PaymentsController } from './payments.controller';
+import { PaymentsDemoController } from './payments-demo.controller';
 import { PaymentsWebhookController } from './payments-webhook.controller';
 import { PAYMENT_PROVIDERS, PaymentsService, type PaymentProviderRegistry } from './payments.service';
 import { ManualProvider } from './providers/manual.provider';
@@ -32,7 +35,8 @@ import { MockProvider } from './providers/mock.provider';
 import type { PaymentProvider } from './providers/payment-provider.interface';
 
 @Module({
-  controllers: [PaymentsController, PaymentsWebhookController],
+  imports: [NotificationsModule],
+  controllers: [PaymentsController, PaymentsWebhookController, PaymentsDemoController],
   providers: [
     PaymentsService,
     ManualProvider,

@@ -140,7 +140,7 @@ interface MovementRow {
   };
   performedBy: {
     id: string;
-    email: string;
+    email: string | null;
     firstName: string;
     lastName: string | null;
   } | null;
@@ -394,7 +394,7 @@ export class InventoryService {
       throw new BadRequestException('Quantity must be positive');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       const inventory = await tx.inventory.findUnique({
         where: { id },
         select: {
@@ -443,13 +443,13 @@ export class InventoryService {
         },
       });
 
-      return toInventoryDetail({
-        ...inventory,
-        quantityReserved: newReserved,
-        variant: { id: inventory.variantId, title: '', sku: null, productId: '', product: { id: '', title: '', slug: '' } },
-        store: { id: inventory.storeId, name: '', code: '' },
-      } as InventoryRow);
     });
+
+    // Re-read inside a fresh query rather than mapping the row the transaction
+    // selected: that projection only carries the four quantities, so building a
+    // detail response from it dereferenced absent `createdAt`/`updatedAt` fields
+    // and threw on every successful call.
+    return this.getById(id);
   }
 
   async releaseStock(
@@ -463,7 +463,7 @@ export class InventoryService {
       throw new BadRequestException('Quantity must be positive');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       const inventory = await tx.inventory.findUnique({
         where: { id },
         select: {
@@ -509,13 +509,13 @@ export class InventoryService {
         },
       });
 
-      return toInventoryDetail({
-        ...inventory,
-        quantityReserved: newReserved,
-        variant: { id: inventory.variantId, title: '', sku: null, productId: '', product: { id: '', title: '', slug: '' } },
-        store: { id: inventory.storeId, name: '', code: '' },
-      } as InventoryRow);
     });
+
+    // Re-read inside a fresh query rather than mapping the row the transaction
+    // selected: that projection only carries the four quantities, so building a
+    // detail response from it dereferenced absent `createdAt`/`updatedAt` fields
+    // and threw on every successful call.
+    return this.getById(id);
   }
 
   async deductStock(
@@ -529,7 +529,7 @@ export class InventoryService {
       throw new BadRequestException('Quantity must be positive');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       const inventory = await tx.inventory.findUnique({
         where: { id },
         select: {
@@ -545,18 +545,24 @@ export class InventoryService {
         throw new NotFoundException(`No inventory entry found for id "${id}"`);
       }
 
-      // First release any reserved quantity
-      const reservedToDeduct = Math.min(quantity, inventory.quantityReserved);
-      const onHandToDeduct = quantity - reservedToDeduct;
+      // A sale always removes the quantity from physical stock: the units have
+      // left the store. The reserved portion is the hold this sale consumes, so
+      // it comes down by the same amount, capped at what is actually held.
+      //
+      // Previously the on-hand figure was reduced by only the *unreserved*
+      // remainder, which meant deducting a fully reserved order left the stock
+      // on the books and looking sellable again, while the ledger recorded a
+      // `-quantity` sale. The two now agree.
+      const reservedToRelease = Math.min(quantity, inventory.quantityReserved);
 
-      if (onHandToDeduct > inventory.quantityOnHand - inventory.quantityReserved) {
+      if (quantity > inventory.quantityOnHand) {
         throw new ConflictException(
-          `Insufficient available stock. Available: ${inventory.quantityOnHand - inventory.quantityReserved}, requested: ${quantity}`,
+          `Insufficient stock. On hand: ${inventory.quantityOnHand}, requested: ${quantity}`,
         );
       }
 
-      const newOnHand = inventory.quantityOnHand - onHandToDeduct;
-      const newReserved = inventory.quantityReserved - reservedToDeduct;
+      const newOnHand = inventory.quantityOnHand - quantity;
+      const newReserved = inventory.quantityReserved - reservedToRelease;
 
       await tx.inventory.update({
         where: { id },
@@ -583,14 +589,14 @@ export class InventoryService {
       });
 
       // If we released reserved quantity, record that too
-      if (reservedToDeduct > 0) {
+      if (reservedToRelease > 0) {
         await tx.inventoryMovement.create({
           data: {
             inventoryId: id,
             variantId: inventory.variantId,
             storeId: inventory.storeId,
             type: 'RESERVATION_RELEASE',
-            quantityDelta: -reservedToDeduct,
+            quantityDelta: -reservedToRelease,
             quantityAfter: newOnHand,
             reason: reason ?? null,
             referenceType: 'ORDER',
@@ -600,14 +606,11 @@ export class InventoryService {
         });
       }
 
-      return toInventoryDetail({
-        ...inventory,
-        quantityOnHand: newOnHand,
-        quantityReserved: newReserved,
-        variant: { id: inventory.variantId, title: '', sku: null, productId: '', product: { id: '', title: '', slug: '' } },
-        store: { id: inventory.storeId, name: '', code: '' },
-      } as InventoryRow);
     });
+
+    // See reserveStock: the transaction's row projection is not a valid detail
+    // response, so the committed state is read back.
+    return this.getById(id);
   }
 
   // -----------------------------------------------------------------------

@@ -16,9 +16,11 @@ import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import {
   addCartItemSchema,
   applyCouponSchema,
+  mergeGuestCartSchema,
   updateCartItemSchema,
   type AddCartItemRequest,
   type ApplyCouponRequest,
+  type MergeGuestCartRequest,
   type UpdateCartItemRequest,
 } from '@sakya/validation';
 import type { CartResponse } from '@sakya/types';
@@ -73,6 +75,23 @@ export class CartController {
   @Delete()
   async clearCart(@CurrentUser('id') userId: string): Promise<CartResponse> {
     return this.cartService.clearCart(userId);
+  }
+
+  /**
+   * Merge the guest cart accumulated before authentication.
+   *
+   * Answering `200` rather than `201`: the merge changes the existing cart and
+   * returns its final state. The body carries variant ids and quantities only —
+   * the server owns prices, availability and the fulfillment store.
+   */
+  @Permissions('cart:write')
+  @HttpCode(HttpStatus.OK)
+  @Post('merge-guest-cart')
+  async mergeGuestCart(
+    @CurrentUser('id') userId: string,
+    @Body(new ZodValidationPipe(mergeGuestCartSchema)) body: MergeGuestCartRequest,
+  ): Promise<CartResponse> {
+    return this.cartService.mergeGuestCart(userId, body);
   }
 
   /**

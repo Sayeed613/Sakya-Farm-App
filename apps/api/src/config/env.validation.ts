@@ -90,6 +90,29 @@ export const environmentSchema = z
      */
     PAYMENTS_MOCK_WEBHOOK_SECRET: z.string().min(16).optional(),
 
+    // --- SMS (OTP delivery) -------------------------------------------------
+    /**
+     * Demo OTP mode for staging/demo builds: every phone gets the same fixed
+     * code instead of a random one, so a demo can be driven without an SMS
+     * inbox. Refuses to activate in production (validated below in the
+     * service as well — env validation is not a security boundary).
+     */
+    OTP_DEMO_MODE: z.string().optional(),
+    /** The fixed 4-digit code used when OTP_DEMO_MODE is on. */
+    OTP_DEMO_CODE: z
+      .string()
+      .regex(/^\d{4}$/, 'OTP_DEMO_CODE must be exactly 4 digits')
+      .optional(),
+    /**
+     * Vonage credentials for production OTP delivery. Optional as a pair: when
+     * absent, dev environments log the code and production fails closed
+     * (a customer must be told a send failed, not left waiting).
+     */
+    VONAGE_API_KEY: z.string().trim().min(1).optional(),
+    VONAGE_API_SECRET: z.string().trim().min(1).optional(),
+    /** Alphanumeric sender id shown in the SMS; regional restrictions apply. */
+    VONAGE_SMS_FROM: z.string().trim().min(3).max(11).default('SAKYAFRM'),
+
     // --- Observability ------------------------------------------------------
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
@@ -126,6 +149,19 @@ export const environmentSchema = z
         code: 'custom',
         path: ['JWT_REFRESH_SECRET'],
         message: 'JWT_REFRESH_SECRET must differ from JWT_ACCESS_SECRET',
+      });
+    }
+
+    // Vonage credentials are optional individually but useless half-set: a
+    // key without a secret (or the reverse) always fails at send time, so
+    // reject the half-configuration at boot instead.
+    const hasKey = env.VONAGE_API_KEY !== undefined;
+    const hasSecret = env.VONAGE_API_SECRET !== undefined;
+    if (hasKey !== hasSecret) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [hasKey ? 'VONAGE_API_SECRET' : 'VONAGE_API_KEY'],
+        message: 'VONAGE_API_KEY and VONAGE_API_SECRET must be provided together',
       });
     }
   });

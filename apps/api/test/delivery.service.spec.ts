@@ -43,7 +43,10 @@ function createPrismaStub() {
 type Stub = ReturnType<typeof createPrismaStub>;
 
 function createService(stub: Stub): DeliveryService {
-  return new DeliveryService(stub as unknown as import('../src/database/prisma.service').PrismaService);
+  return new DeliveryService(
+    stub as unknown as import('../src/database/prisma.service').PrismaService,
+    { sendOrderStatusPush: vi.fn(async () => undefined) } as never,
+  );
 }
 
 describe('DeliveryService', () => {
@@ -63,7 +66,28 @@ describe('DeliveryService', () => {
         createdAt: new Date('2026-09-15'),
         updatedAt: new Date('2026-09-15'),
         order: { id: 'order-1', orderNumber: 'ORD-001' },
-        deliveryAssignment: null,
+        // `Shipment` owns a *list* of assignments, fetched newest-first; the
+        // fixture used to model a singular relation that does not exist.
+        deliveryAssignments: [
+          {
+            id: 'assign-1',
+            status: 'ASSIGNED' as const,
+            deliveryPartnerUserId: 'partner-1',
+            assignedAt: new Date('2026-09-15T10:00:00Z'),
+            acceptedAt: null,
+            pickedUpAt: null,
+            deliveredAt: null,
+            notes: null,
+            createdAt: new Date('2026-09-15T10:00:00Z'),
+            deliveryPartner: {
+              id: 'partner-1',
+              email: 'partner@sakyafarms.example',
+              firstName: 'Pat',
+              lastName: 'Partner',
+              phone: null,
+            },
+          },
+        ],
       });
 
       const service = createService(stub);
@@ -74,6 +98,10 @@ describe('DeliveryService', () => {
       expect(result.carrier).toBe('FedEx');
       expect(result.trackingNumber).toBe('FX123456');
       expect(result.status).toBe('PENDING');
+      // The current assignment in the list is surfaced as the singular detail.
+      expect(result.deliveryAssignment?.id).toBe('assign-1');
+      expect(result.deliveryAssignment?.status).toBe('ASSIGNED');
+      expect(result.deliveryAssignment?.deliveryPartner.id).toBe('partner-1');
     });
 
     it('throws NotFoundException when not found', async () => {
@@ -231,7 +259,7 @@ describe('DeliveryService', () => {
         createdAt: new Date('2026-09-15'),
         updatedAt: new Date('2026-09-15'),
         order: { id: 'order-1', orderNumber: 'ORD-001' },
-        deliveryAssignment: null,
+        deliveryAssignments: [],
       });
 
       const service = createService(stub);

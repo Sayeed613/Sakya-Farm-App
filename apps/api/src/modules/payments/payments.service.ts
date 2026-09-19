@@ -19,6 +19,7 @@ import { canTransitionOrder } from '@sakya/types';
 import type { CreatePaymentIntentRequest, RefundPaymentRequest } from '@sakya/validation';
 
 import { PrismaService } from '../../database/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { toPaymentDetail } from './payments.mapper';
 import { canTransitionPayment } from './payment-transitions';
 import type { IntentView, PaymentProvider, ProviderWebhookEvent } from './providers/payment-provider.interface';
@@ -59,6 +60,7 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly notificationsService: NotificationsService,
     @Inject(PAYMENT_PROVIDERS) private readonly providers: PaymentProviderRegistry,
   ) {}
 
@@ -66,9 +68,11 @@ export class PaymentsService {
    * Create an online payment intent for one of the caller's orders.
    *
    * Idempotent on the caller-supplied key: a retry with the same key returns
-   * the original payment instead of charging twice. The key is globally unique
-   * (schema constraint), so a key that belongs to another order is a 409, not
-   * a new payment. Amount/currency come from the stored order row only.
+   * the original payment instead of charging twice. The key is unique *per
+   * customer* (`payments_user_id_idempotency_key_key`), so reusing a key for a
+   * different one of the same customer's orders is a 409, while another customer
+   * using the same string is unaffected. Amount/currency come from the stored
+   * order row only.
    */
   async createIntent(userId: string, body: CreatePaymentIntentRequest): Promise<PaymentIntentResponse> {
     const order = await this.prisma.order.findFirst({
@@ -90,7 +94,12 @@ export class PaymentsService {
     const provider = this.getAdapter(providerName);
 
     const existingByKey = await this.prisma.payment.findUnique({
-      where: { idempotencyKey: body.idempotencyKey },
+      where: {
+        userId_idempotencyKey: {
+          userId: order.userId,
+          idempotencyKey: body.idempotencyKey,
+        },
+      },
     });
     if (existingByKey !== null) {
       if (existingByKey.orderId !== order.id) {
@@ -113,6 +122,7 @@ export class PaymentsService {
       const created = await this.prisma.payment.create({
         data: {
           orderId: order.id,
+          userId: order.userId,
           provider: providerName,
           method,
           status: 'PENDING',
@@ -126,7 +136,12 @@ export class PaymentsService {
       // Lost a race with an identical concurrent request: read back the winner.
       if (this.isUniqueViolation(error)) {
         const winner = await this.prisma.payment.findUnique({
-          where: { idempotencyKey: body.idempotencyKey },
+          where: {
+            userId_idempotencyKey: {
+              userId: order.userId,
+              idempotencyKey: body.idempotencyKey,
+            },
+          },
         });
         if (winner !== null && winner.orderId === order.id) {
           return this.toIntentResponse(winner as PaymentRowView, provider);
@@ -134,6 +149,55 @@ export class PaymentsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Simulate a provider outcome for a MOCK payment — demo builds only.
+   *
+   * The demo has no real gateway, but the customer flow must still run
+   * through the REAL state machine: this method synthesises the same webhook
+   * event a gateway would send and feeds it to `processWebhookEvent`, so
+   * transitions, order mirroring and notifications behave identically to
+   * production. Guards: non-production only, caller-owned payments, MOCK
+   * provider only, open payments only.
+   */
+  async simulateOutcome(
+    userId: string,
+    paymentId: string,
+    outcome: 'success' | 'failure',
+  ): Promise<PaymentDetail> {
+    if (this.configService.getOrThrow<string>('app.env') === 'production') {
+      // Same response as an unknown route: the endpoint does not exist there.
+      throw new NotFoundException();
+    }
+
+    const payment = await this.getOwnedPaymentOrThrow(userId, paymentId);
+    if (payment.provider !== 'MOCK') {
+      throw new BadRequestException('Only MOCK payments can be simulated');
+    }
+    if (payment.status !== 'PENDING') {
+      throw new ConflictException(`This payment is already ${String(payment.status).toLowerCase()}`);
+    }
+
+    // The MOCK intent flow does not mint provider ids up front (there is no
+    // gateway round-trip); the simulated event needs a stable one.
+    const providerPaymentId = payment.providerPaymentId ?? `mock_${payment.id}`;
+    if (payment.providerPaymentId === null) {
+      await this.prisma.payment.update({
+        where: { id: payment.id },
+        data: { providerPaymentId },
+      });
+    }
+
+    const event: ProviderWebhookEvent = {
+      type: outcome === 'success' ? 'captured' : 'failed',
+      providerPaymentId,
+      amountInPaise: payment.amountInPaise,
+      currency: payment.currency,
+      failureReason: outcome === 'failure' ? 'Simulated decline (demo payment)' : null,
+      rawPayload: { simulated: true, outcome },
+    };
+    return this.processWebhookEvent('MOCK', event);
   }
 
   /** Every payment attempt for one of the caller's orders, oldest first. */
@@ -279,6 +343,26 @@ export class PaymentsService {
       return next;
     });
     this.logger.log(`Payment ${existing.id} ${existing.status} -> ${target} via ${provider} webhook`);
+
+    // The payment event may have advanced the order (captured -> CONFIRMED,
+    // failed -> FAILED). Notify the customer best-effort; a push failure must
+    // not fail the webhook, or the provider will keep retrying it.
+    if (event.type === 'captured' || event.type === 'failed') {
+      const order = await this.prisma.order.findUnique({
+        where: { id: existing.orderId },
+        select: { id: true, userId: true, orderNumber: true, status: true },
+      });
+      if (order !== null) {
+        await this.notificationsService.sendOrderStatusPush({
+          userId: order.userId,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          reason: event.type === 'failed' ? (event.failureReason ?? 'Payment failed') : null,
+        });
+      }
+    }
+
     return toPaymentDetail(updated as PaymentRowView);
   }
 

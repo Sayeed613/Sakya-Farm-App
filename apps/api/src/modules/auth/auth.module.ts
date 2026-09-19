@@ -3,17 +3,28 @@ import { ConfigService } from '@nestjs/config';
 import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 
+import { PrismaModule } from '../../database/prisma.module';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { OtpSenderService } from './services/otp-sender.service';
+import { OtpService } from './services/otp.service';
 import { PasswordHasherService } from './services/password-hasher.service';
+import { VonageSmsService } from './services/vonage-sms.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 /**
  * Authentication foundation.
  *
- * This pass deliberately stops at the mechanism: token verification, the
- * strategy that turns a token into an identity, and password hashing. The
- * sign-up / sign-in / refresh / sign-out endpoints are the next increment and
- * will live in this module, using the pieces assembled here plus the
- * `refresh_tokens` table.
+ * Two authentication paths share this module:
+ *
+ * - **Customers**: phone + OTP (`POST /auth/otp/send`, `POST /auth/otp/verify`).
+ *   Verification is the registration event; no password ever exists for a
+ *   phone-first customer.
+ * - **Operators** (admin, store, delivery, support): email + password, kept for
+ *   the internal apps. Provisioned through seeding, not open registration.
+ *
+ * Both paths issue the same refresh-token model: hashed tokens, family-based
+ * rotation, replay detection, and logout revocation.
  *
  * Note `session: false`: tokens are carried in the Authorization header, not in
  * a cookie, because the primary clients are mobile apps.
@@ -30,6 +41,7 @@ function asExpiresIn(value: string): JwtSignOptions['expiresIn'] {
 
 @Module({
   imports: [
+    PrismaModule,
     PassportModule.register({ defaultStrategy: 'jwt', session: false }),
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -44,7 +56,8 @@ function asExpiresIn(value: string): JwtSignOptions['expiresIn'] {
       }),
     }),
   ],
-  providers: [JwtStrategy, PasswordHasherService],
-  exports: [JwtModule, PasswordHasherService],
+  controllers: [AuthController],
+  providers: [JwtStrategy, PasswordHasherService, VonageSmsService, OtpSenderService, OtpService, AuthService],
+  exports: [JwtModule, PasswordHasherService, OtpService, AuthService],
 })
 export class AuthModule {}

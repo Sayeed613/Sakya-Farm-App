@@ -27,6 +27,11 @@ import { canTransitionOrder } from '@sakya/types';
 import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { CartService } from '../cart/cart.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import {
+  releaseOrderReservations,
+  reserveOrderLine,
+} from '../inventory/order-reservations';
 
 /** Placeholder constants — documented so they are recognisable as such. */
 const TAX_RATE_PERCENT = 0;
@@ -59,6 +64,7 @@ function generateOrderNumber(): string {
 function snapshotItem(item: CartItemResponse) {
   return {
     id: item.id,
+    variantId: item.variantId,
     quantity: item.quantity,
     unitPriceInPaise: toPaise(item.unitPriceInPaise),
     productTitle: item.productTitle,
@@ -101,6 +107,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cartService: CartService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -115,9 +122,11 @@ export class OrdersService {
       throw new BadRequestException('Cannot place an order from an empty cart');
     }
 
-    // Idempotency: a retried request cannot create a second order.
+    // Idempotency: a retried request cannot create a second order. The key is
+    // scoped to the caller, so another customer using the same string is
+    // irrelevant here rather than a spurious conflict.
     const existing = await this.prisma.payment.findFirst({
-      where: { idempotencyKey: parsed.idempotencyKey, order: { userId } },
+      where: { userId, idempotencyKey: parsed.idempotencyKey },
       include: { order: true },
     });
 
@@ -131,13 +140,40 @@ export class OrdersService {
       cart.coupon ?? null,
     );
 
-    // The order and its items are created in one transaction so the snapshot is
-    // atomic with the totals written into the order row.
+    // The order, its items and the stock reservation are written in one
+    // transaction: either the order exists with its stock held, or nothing
+    // happened at all. That is what stops a failed checkout leaking a
+    // reservation, and a successful one from overselling.
     const order = await this.prisma.$transaction(async (tx) => {
+      // The fulfillment store is taken from the cart row — the cart is scoped to
+      // a store when its first item is added — and re-validated here. It is never
+      // accepted from the client, and it must be an active store.
+      const cartRecord = await tx.cart.findUnique({
+        where: { id: cart.id },
+        select: {
+          storeId: true,
+          couponId: true,
+          store: { select: { id: true, isActive: true } },
+        },
+      });
+
+      if (
+        cartRecord === null ||
+        cartRecord.storeId === null ||
+        cartRecord.store === null ||
+        !cartRecord.store.isActive
+      ) {
+        throw new BadRequestException(
+          'A valid fulfilment store must be selected before checkout',
+        );
+      }
+
       const created = await tx.order.create({
         data: {
           orderNumber: generateOrderNumber(),
           userId,
+          storeId: cartRecord.storeId,
+          couponId: cartRecord.couponId,
           status: 'PENDING_PAYMENT',
           paymentStatus: 'PENDING',
           currency: cart.currency,
@@ -151,6 +187,7 @@ export class OrdersService {
           notes: parsed.notes ?? null,
           items: {
             create: items.map((item) => ({
+              variantId: item.variantId,
               quantity: item.quantity,
               unitPriceInPaise: item.unitPriceInPaise,
               productTitle: item.productTitle,
@@ -168,9 +205,15 @@ export class OrdersService {
         },
       });
 
-      // Reserve inventory is intentionally deferred to a later increment: this
-      // release keeps checkout usable without an inventory module being required
-      // first, and the reservation will be added under the same totals contract.
+      // Hold stock for every line before the order is committed. Throwing here
+      // rolls the whole transaction back, including the order row above.
+      for (const item of items) {
+        await reserveOrderLine(tx, created.id, cartRecord.storeId, {
+          variantId: item.variantId,
+          variantTitle: item.variantTitle,
+          quantity: item.quantity,
+        });
+      }
 
       // Payment record created now, in MANUAL PENDING state. The client may
       // choose Cash on Delivery or a future gateway; the payment record is the
@@ -178,6 +221,7 @@ export class OrdersService {
       await tx.payment.create({
         data: {
           orderId: created.id,
+          userId,
           provider: 'MANUAL',
           method: 'CASH_ON_DELIVERY',
           status: 'PENDING',
@@ -319,7 +363,20 @@ export class OrdersService {
         },
       });
 
+      // Give the reserved stock back. The ledger makes this idempotent, so a
+      // repeated cancellation cannot release the same reservation twice.
+      await releaseOrderReservations(tx, orderId, 'Order cancelled');
+
       return result;
+    });
+
+    // Best-effort push — never fails the cancellation (see NotificationsService).
+    await this.notificationsService.sendOrderStatusPush({
+      userId: order.userId,
+      orderId,
+      orderNumber: order.orderNumber,
+      status: 'CANCELLED',
+      reason: parsed.reason,
     });
 
     return this.toOrderResponse(updated);

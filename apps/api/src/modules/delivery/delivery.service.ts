@@ -31,6 +31,8 @@ import type {
 } from '@sakya/types';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { deductOrderReservations } from '../inventory/order-reservations';
 
 /**
  * Delivery service for shipments and delivery partner assignments.
@@ -73,7 +75,7 @@ interface ShipmentRow {
     deliveryPartnerUserId: string;
     deliveryPartner: {
       id: string;
-      email: string;
+      email: string | null;
       firstName: string;
       lastName: string | null;
       phone: string | null;
@@ -87,7 +89,55 @@ interface ShipmentRow {
   } | null;
 }
 
-function toShipmentSummary(row: ShipmentRow): ShipmentSummary {
+type AssignmentRow = NonNullable<ShipmentRow['deliveryAssignment']>;
+
+/**
+ * The assignment a shipment is currently working through.
+ *
+ * `Shipment` owns a *list* of assignments — a failed delivery is reassigned — but
+ * the API exposes a single current one, so it is fetched newest-first and
+ * reduced to the first row. These queries used a singular `deliveryAssignment`
+ * relation that does not exist on `Shipment`; Prisma's argument typing accepts
+ * unknown keys, so it compiled and then failed at runtime, answering 500 on
+ * every shipment read and on shipment creation against a real database.
+ */
+const CURRENT_ASSIGNMENT_INCLUDE = {
+  orderBy: { assignedAt: 'desc' },
+  take: 1,
+  select: {
+    id: true,
+    status: true,
+    deliveryPartnerUserId: true,
+    assignedAt: true,
+    acceptedAt: true,
+    pickedUpAt: true,
+    deliveredAt: true,
+    notes: true,
+    createdAt: true,
+    deliveryPartner: {
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+      },
+    },
+  },
+} as const;
+
+/** Reshape a newest-first assignment list into the singular the mappers expect. */
+function currentAssignment<T extends { deliveryAssignments: AssignmentRow[] }>(
+  row: T,
+): Omit<T, 'deliveryAssignments'> & { deliveryAssignment: AssignmentRow | null } {
+  const { deliveryAssignments, ...rest } = row;
+  return { ...rest, deliveryAssignment: deliveryAssignments[0] ?? null };
+}
+
+/** Everything a shipment summary needs; the assignment list is not part of it. */
+type ShipmentSummaryRow = Omit<ShipmentRow, 'deliveryAssignment'>;
+
+function toShipmentSummary(row: ShipmentSummaryRow): ShipmentSummary {
   return {
     id: row.id,
     orderId: row.orderId,
@@ -157,7 +207,7 @@ type DeliveryAssignmentRow = {
   } | null;
   deliveryPartner: {
     id: string;
-    email: string;
+    email: string | null;
     firstName: string;
     lastName: string | null;
     phone: string | null;
@@ -242,7 +292,10 @@ const SHIPMENT_STATUS_FOR_ASSIGNMENT: Record<DeliveryAssignmentStatus, ShipmentS
 
 @Injectable()
 export class DeliveryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   // -----------------------------------------------------------------------
   // List shipments
@@ -284,30 +337,11 @@ export class DeliveryService {
         skip,
         take,
         orderBy: { createdAt: 'desc' },
+        // A summary does not carry the assignment, so it is not fetched: the
+        // previous include referenced a relation that does not exist and made
+        // this endpoint a guaranteed 500.
         include: {
           order: { select: { id: true, orderNumber: true } },
-          deliveryAssignment: {
-            select: {
-              id: true,
-              status: true,
-              deliveryPartnerUserId: true,
-              assignedAt: true,
-              acceptedAt: true,
-              pickedUpAt: true,
-              deliveredAt: true,
-              notes: true,
-              createdAt: true,
-              deliveryPartner: {
-                select: {
-                  id: true,
-                  email: true,
-                  firstName: true,
-                  lastName: true,
-                  phone: true,
-                },
-              },
-            },
-          },
         },
       }),
       this.prisma.shipment.count({ where }),
@@ -328,28 +362,7 @@ export class DeliveryService {
       where: { id },
       include: {
         order: { select: { id: true, orderNumber: true } },
-        deliveryAssignment: {
-          select: {
-            id: true,
-            status: true,
-            deliveryPartnerUserId: true,
-            assignedAt: true,
-            acceptedAt: true,
-            pickedUpAt: true,
-            deliveredAt: true,
-            notes: true,
-            createdAt: true,
-            deliveryPartner: {
-              select: {
-                id: true,
-                email: true,
-                firstName: true,
-                lastName: true,
-                phone: true,
-              },
-            },
-          },
-        },
+        deliveryAssignments: CURRENT_ASSIGNMENT_INCLUDE,
       },
     });
 
@@ -357,7 +370,7 @@ export class DeliveryService {
       throw new NotFoundException(`No shipment found for id "${id}"`);
     }
 
-    return toShipmentDetail(row);
+    return toShipmentDetail(currentAssignment(row));
   }
 
   // -----------------------------------------------------------------------
@@ -630,32 +643,11 @@ export class DeliveryService {
       },
       include: {
         order: { select: { id: true, orderNumber: true } },
-        deliveryAssignment: {
-          select: {
-            id: true,
-            status: true,
-            deliveryPartnerUserId: true,
-            assignedAt: true,
-            acceptedAt: true,
-            pickedUpAt: true,
-            deliveredAt: true,
-            notes: true,
-            createdAt: true,
-            deliveryPartner: {
-              select: {
-                id: true,
-                email: true,
-                firstName: true,
-                lastName: true,
-                phone: true,
-              },
-            },
-          },
-        },
+        deliveryAssignments: CURRENT_ASSIGNMENT_INCLUDE,
       },
     });
 
-    return toShipmentDetail(shipment);
+    return toShipmentDetail(currentAssignment(shipment));
   }
 
   // -----------------------------------------------------------------------
@@ -934,6 +926,7 @@ export class DeliveryService {
               status: true,
               totalInPaise: true,
               shippingAddress: true,
+              userId: true,
             },
           },
           shipment: {
@@ -969,9 +962,12 @@ export class DeliveryService {
         });
       }
 
-      // Update order status if delivered
+      // Delivery completion is what closes the order and finally takes the stock
+      // out of inventory. Both happen in this transaction so the order can never
+      // be DELIVERED with its reservation still held.
       if (status === 'DELIVERED') {
         const orderCurrentStatus = result.order.status;
+
         if (canTransitionOrder(orderCurrentStatus, 'DELIVERED')) {
           await tx.order.update({
             where: { id: result.orderId },
@@ -980,14 +976,49 @@ export class DeliveryService {
               deliveredAt: now,
             },
           });
+
+          // Every other path that changes order status records history; delivery
+          // completion was the exception, which left "how did this reach
+          // DELIVERED" unanswerable from the audit trail.
+          await tx.orderStatusHistory.create({
+            data: {
+              orderId: result.orderId,
+              fromStatus: orderCurrentStatus,
+              toStatus: 'DELIVERED',
+              reason: 'Delivery completed',
+              changedByUserId: actorUserId ?? null,
+            },
+          });
+        }
+
+        // Only take the stock once the order really is delivered; an order that
+        // could not transition here is left holding its reservation.
+        if (
+          orderCurrentStatus === 'DELIVERED' ||
+          canTransitionOrder(orderCurrentStatus, 'DELIVERED')
+        ) {          await deductOrderReservations(tx, result.orderId, 'Order delivered', actorUserId);
         }
       }
 
       return result;
     });
 
+    // Delivery completion closes the order — tell the customer (best-effort).
+    if (status === 'DELIVERED' && updated.order.status === 'DELIVERED') {
+      await this.notificationsService.sendOrderStatusPush({
+        userId: updated.order.userId,
+        orderId: updated.order.id,
+        orderNumber: updated.order.orderNumber,
+        status: 'DELIVERED',
+        reason: null,
+      });
+    }
+
     return toDeliveryAssignmentDetail(updated);
   }
+
+
+
 
   // -----------------------------------------------------------------------
   // Cancel delivery
@@ -1113,28 +1144,7 @@ export class DeliveryService {
       where: { orderId },
       include: {
         order: { select: { id: true, orderNumber: true } },
-        deliveryAssignment: {
-          select: {
-            id: true,
-            status: true,
-            deliveryPartnerUserId: true,
-            assignedAt: true,
-            acceptedAt: true,
-            pickedUpAt: true,
-            deliveredAt: true,
-            notes: true,
-            createdAt: true,
-            deliveryPartner: {
-              select: {
-                id: true,
-                email: true,
-                firstName: true,
-                lastName: true,
-                phone: true,
-              },
-            },
-          },
-        },
+        deliveryAssignments: CURRENT_ASSIGNMENT_INCLUDE,
       },
     });
 
@@ -1142,7 +1152,7 @@ export class DeliveryService {
       return null;
     }
 
-    return toShipmentDetail(shipment);
+    return toShipmentDetail(currentAssignment(shipment));
   }
 
   // -----------------------------------------------------------------------

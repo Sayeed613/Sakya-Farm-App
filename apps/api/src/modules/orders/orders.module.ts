@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { CartModule } from '../cart/cart.module';
 import { DeliveryModule } from '../delivery/delivery.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 
@@ -28,7 +29,7 @@ import { OrdersService } from './orders.service';
  * the same placement and transition logic.
  */
 @Module({
-  imports: [CartModule, DeliveryModule],
+  imports: [CartModule, DeliveryModule, NotificationsModule],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService],

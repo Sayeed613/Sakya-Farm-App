@@ -1,0 +1,333 @@
+{
+  "viewport": {
+    "W": 412,
+    "H": 915,
+    "DPR": 2,
+    "fontScale": 1
+  },
+  "steps": [
+    {
+      "shot": "01-listing"
+    },
+    {
+      "shot": "02-entrance"
+    },
+    {
+      "shot": "03-collapsed"
+    },
+    {
+      "shot": "04-mid-expand"
+    },
+    {
+      "shot": "05-expanded"
+    },
+    {
+      "shot": "06-expanded-scrolled"
+    },
+    {
+      "shot": "07-collapsed-after-pulldown"
+    },
+    {
+      "shot": "08-product-b"
+    },
+    {
+      "shot": "09-product-b-expanded"
+    },
+    {
+      "shot": "10-dismissed"
+    }
+  ],
+  "assertions": [
+    {
+      "name": "collapsed: deck top at collapsed height",
+      "ok": true,
+      "detail": {
+        "deckY": 295,
+        "expected": 295
+      }
+    },
+    {
+      "name": "collapsed: CTA flush with device bottom",
+      "ok": true,
+      "detail": {
+        "ctaBottom": 915
+      }
+    },
+    {
+      "name": "collapsed: hero 300 tall",
+      "ok": true,
+      "detail": {
+        "h": 300
+      }
+    },
+    {
+      "name": "collapsed: backdrop dimmed",
+      "ok": true,
+      "detail": {
+        "opacity": 0.78
+      }
+    },
+    {
+      "name": "collapsed: counter format",
+      "ok": true,
+      "detail": {
+        "counter": "1 / 68"
+      }
+    },
+    {
+      "name": "collapsed: title is product name, not UUID",
+      "ok": true,
+      "detail": {
+        "title": "Dantu Kura"
+      }
+    },
+    {
+      "name": "mid-drag: deck follows finger",
+      "ok": true,
+      "detail": {
+        "y": 175
+      }
+    },
+    {
+      "name": "expanded: deck near top inset",
+      "ok": true,
+      "detail": {
+        "y": 24
+      }
+    },
+    {
+      "name": "expanded: CTA still flush",
+      "ok": true,
+      "detail": {
+        "ctaBottom": 915
+      }
+    },
+    {
+      "name": "expanded: hero unchanged",
+      "ok": true,
+      "detail": {
+        "h": 300
+      }
+    },
+    {
+      "name": "expanded: same product",
+      "ok": true,
+      "detail": {
+        "title": "Dantu Kura"
+      }
+    },
+    {
+      "name": "scrolled: SV overflow-bounded + scrollable",
+      "ok": true,
+      "detail": {
+        "scrollTopResult": {
+          "applied": 81,
+          "scrollable": true,
+          "clientH": 807,
+          "scrollH": 888
+        }
+      }
+    },
+    {
+      "name": "scrolled: content actually moved",
+      "ok": true,
+      "detail": {
+        "heroY": 27
+      }
+    },
+    {
+      "name": "restored: back at scroll top",
+      "ok": true,
+      "detail": {
+        "heroY": 108
+      }
+    },
+    {
+      "name": "pull-down: deck collapsed again",
+      "ok": true,
+      "detail": {
+        "deckY": 295
+      }
+    },
+    {
+      "name": "pull-down: same product retained",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "horizontal: product changed",
+      "ok": true,
+      "detail": {
+        "from": "Dantu Kura",
+        "to": "Curry Leaves"
+      }
+    },
+    {
+      "name": "horizontal: counter advanced",
+      "ok": true,
+      "detail": {
+        "counter": "2 / 68"
+      }
+    },
+    {
+      "name": "horizontal: deck stayed collapsed (state preserved)",
+      "ok": true,
+      "detail": {
+        "deckY": 295
+      }
+    },
+    {
+      "name": "horizontal: CTA still flush",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "product B: expands",
+      "ok": true,
+      "detail": {
+        "y": 24
+      }
+    },
+    {
+      "name": "product B: title kept",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "dismiss: deck unmounted",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "name": "dismiss: underlying scroll position preserved",
+      "ok": true,
+      "detail": {
+        "before": 0,
+        "after": 0
+      }
+    },
+    {
+      "name": "dismiss: tapped product still in the feed",
+      "ok": true,
+      "detail": {
+        "firstInBand": {
+          "x": 16,
+          "y": 481
+        }
+      }
+    }
+  ],
+  "errors": [],
+  "underlyingProductBefore": {
+    "x": 100,
+    "y": 610,
+    "label": "View Dantu Kura"
+  },
+  "collapsed": {
+    "deck": {
+      "x": 0,
+      "y": 295,
+      "w": 412,
+      "h": 891,
+      "bottom": 1186,
+      "opacity": 1
+    },
+    "cta": {
+      "x": 0,
+      "y": 831,
+      "w": 412,
+      "h": 84,
+      "bottom": 915,
+      "opacity": 1
+    },
+    "hero": {
+      "x": 0,
+      "y": 379,
+      "w": 412,
+      "h": 300,
+      "bottom": 679,
+      "opacity": 1
+    },
+    "backdrop": 0.78,
+    "counter": "1 / 68",
+    "title": "Dantu Kura"
+  },
+  "expanded": {
+    "deck": {
+      "x": 0,
+      "y": 24,
+      "w": 412,
+      "h": 891,
+      "bottom": 915,
+      "opacity": 1
+    },
+    "cta": {
+      "x": 0,
+      "y": 831,
+      "w": 412,
+      "h": 84,
+      "bottom": 915,
+      "opacity": 1
+    },
+    "hero": {
+      "x": 0,
+      "y": 108,
+      "w": 412,
+      "h": 300,
+      "bottom": 408,
+      "opacity": 1
+    },
+    "counter": "1 / 68",
+    "title": "Dantu Kura"
+  },
+  "afterPull": {
+    "deck": {
+      "x": 0,
+      "y": 295,
+      "w": 412,
+      "h": 891,
+      "bottom": 1186,
+      "opacity": 1
+    },
+    "counter": "1 / 68"
+  },
+  "productB": {
+    "counter": "2 / 68",
+    "title": "Curry Leaves",
+    "deck": {
+      "x": 0,
+      "y": 295,
+      "w": 412,
+      "h": 891,
+      "bottom": 1186,
+      "opacity": 1
+    },
+    "cta": {
+      "x": 0,
+      "y": 831,
+      "w": 412,
+      "h": 84,
+      "bottom": 915,
+      "opacity": 1
+    }
+  },
+  "productBExpanded": {
+    "deck": {
+      "x": 0,
+      "y": 24,
+      "w": 412,
+      "h": 891,
+      "bottom": 915,
+      "opacity": 1
+    },
+    "title": "Curry Leaves"
+  },
+  "underlyingProductAfter": {
+    "x": 16,
+    "y": 481
+  },
+  "underlyingScroll": {
+    "before": 0,
+    "after": 0
+  }
+}

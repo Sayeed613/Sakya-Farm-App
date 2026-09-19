@@ -22,7 +22,8 @@
     "db:studio": "prisma studio",
     "catalog:normalize": "tsx prisma/normalize-catalog.ts",
     "catalog:import": "tsx prisma/import-catalog.ts",
-    "catalog:import:apply": "tsx prisma/import-catalog.ts --apply"
+    "catalog:import:apply": "tsx prisma/import-catalog.ts --apply",
+    "catalog:report": "tsx prisma/catalog-report.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.0.1",

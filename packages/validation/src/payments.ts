@@ -40,6 +40,22 @@ export const paymentWebhookProviderParamSchema = z.object({
 });
 export type PaymentWebhookProviderParam = z.infer<typeof paymentWebhookProviderParamSchema>;
 
+// --- Demo simulation (non-production only) ------------------------------------
+
+/**
+ * Simulate a provider outcome for a MOCK payment in a demo build.
+ *
+ * This is the demo harness's only money-shaped field, and it is deliberately
+ * outcome-only: the endpoint refuses to run in production (checked in the
+ * service), only moves payments the caller owns, and routes through the same
+ * `processWebhookEvent` state machine a real gateway event takes — amounts,
+ * currencies and payment ids are still read from server state.
+ */
+export const simulatePaymentSchema = z.object({
+  outcome: z.enum(['success', 'failure']),
+});
+export type SimulatePaymentRequest = z.infer<typeof simulatePaymentSchema>;
+
 // --- Cancel ------------------------------------------------------------------
 
 export const cancelPaymentSchema = z.object({

@@ -53,6 +53,11 @@ const ROLE_PERMISSIONS: Record<
     'inventory:transfer',
     'stores:read',
     'orders:read',
+    // Store-scoped order working: without these two the fulfilment endpoints
+    // (GET/PATCH /stores/:storeId/orders...) answer 403 for every store user,
+    // because no role held them and only ADMIN/SUPER_ADMIN inherit them.
+    'orders:read:store',
+    'orders:update:store',
     'orders:update:status',
     'orders:cancel',
     'delivery:read',
@@ -70,6 +75,9 @@ const ROLE_PERMISSIONS: Record<
     'inventory:adjust',
     'stores:read',
     'orders:read',
+    // See STORE_MANAGER: the store order endpoints are unusable without these.
+    'orders:read:store',
+    'orders:update:store',
     'orders:update:status',
     'delivery:update:status',
     'reviews:read',

@@ -19,6 +19,10 @@ export interface CartItemResponse {
   productTitle: string;
   /** Variant title snapshot taken when the item was added. */
   variantTitle: string;
+  /** The product's first display image, resolved server-side. Null when none. */
+  productImageUrl: string | null;
+  /** The product's slug, so the cart can link back to the detail page. */
+  productSlug: string;
   sku: string | null;
   quantity: number;
   /** Server-computed line total, in paise. */

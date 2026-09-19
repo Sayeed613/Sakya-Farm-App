@@ -100,7 +100,8 @@ export interface AdminOrderSummary {
   orderNumber: string;
   customer: {
     id: string;
-    email: string;
+    /** Null for phone-first customers who never added an email. */
+    email: string | null;
     firstName: string;
     lastName: string | null;
   };
@@ -159,7 +160,8 @@ export interface AdminOrderDetail extends AdminOrderSummary {
 
 export interface AdminCustomerSummary {
   id: string;
-  email: string;
+  /** Null for phone-first customers who never added an email. */
+  email: string | null;
   phone: string | null;
   firstName: string;
   lastName: string | null;
@@ -180,7 +182,8 @@ export interface AdminCustomerDetail extends AdminCustomerSummary {
 
 export interface AdminUserSummary {
   id: string;
-  email: string;
+  /** Null for phone-first identities that have no email on file. */
+  email: string | null;
   phone: string | null;
   firstName: string;
   lastName: string | null;

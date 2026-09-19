@@ -63,7 +63,8 @@ export interface InventoryMovementDetail extends InventoryMovement {
   };
   performedBy: {
     id: string;
-    email: string;
+    /** Null for phone-first identities that have no email on file. */
+    email: string | null;
     firstName: string;
     lastName: string | null;
   } | null;

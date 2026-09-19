@@ -5,6 +5,11 @@ import { buildPaginationMeta, toSkipTake, type PageRequest } from '@sakya/utils'
 import { canTransitionOrder, type OrderStatus } from '@sakya/types';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import {
+  deductOrderReservations,
+  releaseOrderReservations,
+} from '../inventory/order-reservations';
 
 /**
  * Admin order management and status updates.
@@ -40,7 +45,7 @@ interface AdminOrderRow {
   createdAt: Date;
   user: {
     id: string;
-    email: string;
+    email: string | null;
     firstName: string;
     lastName: string | null;
   };
@@ -66,7 +71,10 @@ function toAdminOrderSummary(row: AdminOrderRow): AdminOrderSummary {
 
 @Injectable()
 export class AdminOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   /** One page of all orders, newest first by default. */
   async list(query: AdminOrderListQuery): Promise<Paginated<AdminOrderSummary>> {
@@ -252,7 +260,7 @@ export class AdminOrdersService {
   async updateStatus(id: string, toStatus: OrderStatus, reason?: string): Promise<AdminOrderDetail> {
     const order = await this.prisma.order.findUnique({
       where: { id },
-      select: { id: true, status: true },
+      select: { id: true, status: true, userId: true, orderNumber: true },
     });
 
     if (order === null) {
@@ -280,6 +288,28 @@ export class AdminOrdersService {
           changedByUserId: null,
         },
       });
+
+      // Cancelling from the admin panel must give the reserved stock back too,
+      // exactly like a customer cancellation. The ledger keeps it idempotent.
+      if (toStatus === 'CANCELLED') {
+        await releaseOrderReservations(tx, id, reason ?? 'Order cancelled by admin');
+      }
+
+      // Marking an order delivered by hand has to finalise its stock, or the
+      // reservation would be held against the store forever. Idempotent through
+      // the same ledger, so it cannot deduct twice.
+      if (toStatus === 'DELIVERED') {
+        await deductOrderReservations(tx, id, 'Order delivered');
+      }
+    });
+
+    // Best-effort customer push; never fails the admin transition.
+    await this.notificationsService.sendOrderStatusPush({
+      userId: order.userId,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      status: toStatus,
+      reason: reason ?? null,
     });
 
     return this.getById(id);
