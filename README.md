@@ -34,22 +34,21 @@ If you prefer not to use Docker, any local PostgreSQL 14+ works — just point
 # 1. Install dependencies for every workspace.
 pnpm install
 
-# 2. Create the API's environment file and edit it.
-cp apps/api/.env.example apps/api/.env
+# 2. Create the API's environment file and fill in your values.
+#    The API reports every missing or malformed variable at boot.
+touch apps/api/.env
 
-# 3. Configure the local database container.
-cp .env.example .env
-
-# 4. Start PostgreSQL.
+# 3. Start PostgreSQL (docker-compose.yml ships local defaults; add a root
+#    .env only if you want to override POSTGRES_USER / PASSWORD / PORT / DB).
 pnpm db:up            # docker compose up -d postgres
 
-# 5. Apply the schema to a fresh database and generate the Prisma client.
+# 4. Apply the schema to a fresh database and generate the Prisma client.
 pnpm --filter @sakya/api db:migrate
 
-# 6. Seed roles and permissions (system data only — no catalog rows).
+# 5. Seed roles and permissions (system data only — no catalog rows).
 pnpm db:seed
 
-# 7. Start the API in watch mode.
+# 6. Start the API in watch mode.
 pnpm --filter @sakya/api dev
 ```
 
@@ -84,8 +83,7 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
 Any environment variable that is missing or malformed stops the boot with a report
-naming every problem. In production, leaving the `.env.example` placeholder text in
-place is itself a startup failure.
+naming every problem, so a stray placeholder value never survives startup.
 
 ## Common commands
 

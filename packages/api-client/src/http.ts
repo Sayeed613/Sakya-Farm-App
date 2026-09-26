@@ -87,7 +87,7 @@ function normalizeBaseUrl(baseUrl: string): string {
 
   if (trimmed === '') {
     throw configurationError(
-      'No API base URL configured. Set EXPO_PUBLIC_API_URL (see apps/customer/.env.example).',
+      'No API base URL configured. Set EXPO_PUBLIC_API_URL in the app .env.',
     );
   }
 

@@ -78,7 +78,7 @@ export const apiClient = baseUrl
 export function requireApiClient() {
   if (!apiClient) {
     throw new Error(
-      'EXPO_PUBLIC_API_URL is not configured. Copy apps/customer/.env.example to apps/customer/.env and set the API URL.',
+      'EXPO_PUBLIC_API_URL is not configured. Set it in apps/customer/.env.',
     );
   }
 

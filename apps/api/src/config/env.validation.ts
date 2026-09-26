@@ -199,7 +199,7 @@ export function validateEnvironment(raw: Record<string, unknown>): Environment {
       .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
       .join('\n');
     throw new Error(
-      `Invalid environment configuration. Fix the following and restart:\n${details}\n\nSee apps/api/.env.example for the expected variables.`,
+      `Invalid environment configuration. Fix the following and restart:\n${details}\n\nSet the variables in apps/api/.env.`,
     );
   }
 
