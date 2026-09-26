@@ -82,6 +82,24 @@ export const environmentSchema = z
     THROTTLE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
     THROTTLE_LIMIT: z.coerce.number().int().min(1).default(100),
 
+    // --- Commerce rules -----------------------------------------------------
+    /** GST percent applied to the discounted subtotal. 0 keeps the old behaviour. */
+    TAX_RATE_PERCENT: z.coerce.number().min(0).max(40).default(5),
+    /** Flat shipping fee in paise when below the free-shipping threshold. */
+    SHIPPING_FEE_IN_PAISE: z.coerce.number().int().min(0).default(4900),
+    /** Subtotal (after discount) at/above which shipping is free; empty = never free. */
+    FREE_SHIPPING_THRESHOLD_IN_PAISE: z.coerce.number().int().min(0).optional(),
+    /** Extra fee for Cash on Delivery in paise; 0 disables. */
+    COD_FEE_IN_PAISE: z.coerce.number().int().min(0).default(0),
+    /** Max units of one variant per cart line. */
+    MAX_QUANTITY_PER_LINE: z.coerce.number().int().min(1).max(20).default(10),
+    /** Max distinct lines per cart. */
+    MAX_CART_LINES: z.coerce.number().int().min(1).max(50).default(25),
+    /** Days after delivery within which a return can be requested. */
+    RETURN_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+    /** Minutes a PENDING_PAYMENT order may hold stock before expiry cleanup. */
+    PENDING_ORDER_EXPIRY_MINUTES: z.coerce.number().int().min(15).max(1440).default(120),
+
     // --- Payments (provider adapters) ---------------------------------------
     /**
      * HMAC secret for the non-production MOCK webhook adapter. Optional: the
@@ -104,14 +122,15 @@ export const environmentSchema = z
       .regex(/^\d{4}$/, 'OTP_DEMO_CODE must be exactly 4 digits')
       .optional(),
     /**
-     * Vonage credentials for production OTP delivery. Optional as a pair: when
+     * MSG91 credentials for production OTP delivery. Optional as a pair: when
      * absent, dev environments log the code and production fails closed
      * (a customer must be told a send failed, not left waiting).
      */
-    VONAGE_API_KEY: z.string().trim().min(1).optional(),
-    VONAGE_API_SECRET: z.string().trim().min(1).optional(),
-    /** Alphanumeric sender id shown in the SMS; regional restrictions apply. */
-    VONAGE_SMS_FROM: z.string().trim().min(3).max(11).default('SAKYAFRM'),
+    MSG91_AUTH_KEY: z.string().trim().min(1).optional(),
+    /** DLT-approved OTP template ID; its copy must contain ##OTP##. */
+    MSG91_OTP_TEMPLATE_ID: z.string().trim().min(1).optional(),
+    /** Sender/header id shown in the SMS; India DLT binds it to the template. */
+    MSG91_SMS_FROM: z.string().trim().min(3).max(11).default('SAKYAFRM'),
 
     // --- Observability ------------------------------------------------------
     LOG_LEVEL: z
@@ -152,16 +171,16 @@ export const environmentSchema = z
       });
     }
 
-    // Vonage credentials are optional individually but useless half-set: a
-    // key without a secret (or the reverse) always fails at send time, so
-    // reject the half-configuration at boot instead.
-    const hasKey = env.VONAGE_API_KEY !== undefined;
-    const hasSecret = env.VONAGE_API_SECRET !== undefined;
-    if (hasKey !== hasSecret) {
+    // MSG91 credentials are optional individually but useless half-set: an
+    // auth key without a template (or the reverse) always fails at send time,
+    // so reject the half-configuration at boot instead.
+    const hasAuthKey = env.MSG91_AUTH_KEY !== undefined;
+    const hasTemplate = env.MSG91_OTP_TEMPLATE_ID !== undefined;
+    if (hasAuthKey !== hasTemplate) {
       ctx.addIssue({
         code: 'custom',
-        path: [hasKey ? 'VONAGE_API_SECRET' : 'VONAGE_API_KEY'],
-        message: 'VONAGE_API_KEY and VONAGE_API_SECRET must be provided together',
+        path: [hasAuthKey ? 'MSG91_OTP_TEMPLATE_ID' : 'MSG91_AUTH_KEY'],
+        message: 'MSG91_AUTH_KEY and MSG91_OTP_TEMPLATE_ID must be provided together',
       });
     }
   });

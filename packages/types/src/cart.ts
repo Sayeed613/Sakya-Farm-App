@@ -64,6 +64,10 @@ export interface AppliedCouponResponse {
   valueInPaise: Paise;
   /** How the value should be interpreted. */
   discountDescription: string;
+  /** Minimum cart subtotal for the coupon to apply. */
+  minOrderInPaise: number;
+  /** Cap on the discount amount; null = uncapped. */
+  maxDiscountInPaise: number | null;
 }
 
 /** Inputs for adding or updating a cart item. */
@@ -71,8 +75,12 @@ export interface AppliedCouponResponse {
 export interface AddCartItemRequest {
   /** Variant to add. The server reads the price from the database, never from here. */
   variantId: string;
-  /** Store the variant belongs to / the cart is scoped to. */
-  storeId: string;
+  /**
+   * Optional fulfillment store. When omitted, the server resolves it: the
+   * cart's already-scoped store, else the first active store. Clients cannot
+   * choose a store — there is no public store endpoint to resolve one from.
+   */
+  storeId?: string;
   /** Quantity to stock in the cart. */
   quantity: number;
 }

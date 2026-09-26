@@ -93,8 +93,14 @@ export function ProductDetailsSheet({
         accessibilityRole="button"
         accessibilityLabel="Dismiss details sheet"
         onPress={onClose}
-        className="flex-1 justify-end bg-black/45"
-      >
+        className="absolute inset-0"
+        style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}
+      />
+      {/* Sibling of the sheet, never an ancestor: a wrapping backdrop makes
+          <button><button> in the DOM (React flags the hydration error) and
+          browser keystrokes inside the sheet fire a backdrop click. box-none
+          keeps taps in the dim area falling through to the backdrop. */}
+      <View className="absolute inset-0 justify-end" pointerEvents="box-none">
         <Pressable onPress={() => undefined}>
           <Animated.View
             entering={SlideInDown.springify().damping(26).stiffness(220)}
@@ -185,15 +191,20 @@ export function ProductDetailsSheet({
                 accessibilityRole="button"
                 accessibilityLabel="Add selected variant to cart"
                 accessibilityState={{ disabled: !hasSelection }}
-                className={'rounded-full px-6 py-3 ' + (hasSelection ? 'active:opacity-85' : 'opacity-40')}
-                style={{ backgroundColor: BRAND }}
+                className={
+                  'rounded-full border px-6 py-3 ' +
+                  (hasSelection ? 'active:opacity-85' : ' border-line opacity-40')
+                }
+                style={{ borderColor: BRAND }}
               >
-                <RNText className="text-[13.5px] font-bold text-white">Add to Cart</RNText>
+                <RNText className="text-[13.5px] font-bold" style={{ color: BRAND }}>
+                  Add to Cart
+                </RNText>
               </Pressable>
             </View>
           </Animated.View>
         </Pressable>
-      </Pressable>
+      </View>
     </Modal>
   );
 }

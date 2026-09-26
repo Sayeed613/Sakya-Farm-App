@@ -6,10 +6,10 @@ import { PassportModule } from '@nestjs/passport';
 import { PrismaModule } from '../../database/prisma.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { Msg91SmsService } from './services/msg91-sms.service';
 import { OtpSenderService } from './services/otp-sender.service';
 import { OtpService } from './services/otp.service';
 import { PasswordHasherService } from './services/password-hasher.service';
-import { VonageSmsService } from './services/vonage-sms.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 /**
@@ -17,7 +17,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
  *
  * Two authentication paths share this module:
  *
- * - **Customers**: phone + OTP (`POST /auth/otp/send`, `POST /auth/otp/verify`).
+ * - **Customers**: phone + OTP (`POST /auth/otp/send`, `POST /auth/otp/verify`),
+ *   delivered via MSG91 when configured.
  *   Verification is the registration event; no password ever exists for a
  *   phone-first customer.
  * - **Operators** (admin, store, delivery, support): email + password, kept for
@@ -57,7 +58,7 @@ function asExpiresIn(value: string): JwtSignOptions['expiresIn'] {
     }),
   ],
   controllers: [AuthController],
-  providers: [JwtStrategy, PasswordHasherService, VonageSmsService, OtpSenderService, OtpService, AuthService],
+  providers: [JwtStrategy, PasswordHasherService, Msg91SmsService, OtpSenderService, OtpService, AuthService],
   exports: [JwtModule, PasswordHasherService, OtpService, AuthService],
 })
 export class AuthModule {}

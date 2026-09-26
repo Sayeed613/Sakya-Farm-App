@@ -8,10 +8,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ordersApi } from '../../../src/api/orders-api';
 import { orderActionsApi } from '../../../src/api/order-actions';
 import { checkoutApi } from '../../../src/api/checkout';
+import { journeyApi } from '../../../src/api/journey';
 import { AuthGate } from '../../../src/components/AuthGate';
 import { ErrorState } from '../../../src/components/ErrorState';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
 import { CancelReasonSheet } from '../../../src/components/orders/CancelReasonSheet';
+import { ReturnSheet, type ReturnableItem } from '../../../src/components/orders/ReturnSheet';
+import { InvoiceSheet } from '../../../src/components/orders/InvoiceSheet';
 import { formatMoney } from '../../../src/lib/format';
 import {
   cancellationBanner,
@@ -24,6 +27,7 @@ import {
   type DeliveryUpdate,
 } from '../../../src/lib/order-tracking';
 import { cancellationAvailability } from '../../../src/lib/order-status-presentation';
+import { goBackOrHome } from '../../../src/lib/navigation';
 import { useAuthStore } from '../../../src/stores/auth-store';
 import type { OrderResponse, OrderStatus } from '@sakya/types';
 
@@ -49,6 +53,12 @@ export default function OrderDetailScreen() {
   const [cancelSheetOpen, setCancelSheetOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [returnSheetOpen, setReturnSheetOpen] = useState(false);
+  const [returnSubmitting, setReturnSubmitting] = useState(false);
+  const [returnError, setReturnError] = useState<string | null>(null);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [reorderState, setReorderState] = useState<'idle' | 'busy' | 'done' | 'partial'>('idle');
+  const [reorderNote, setReorderNote] = useState<string | null>(null);
 
   const order = useQuery({
     queryKey: ['orders', 'detail', id],
@@ -102,12 +112,70 @@ export default function OrderDetailScreen() {
     );
   }
 
+  /**
+   * Buy Again — posts `/reorder`; the server re-checks every variant's
+   * availability, adds what it can (caps respected) and reports skipped
+   * lines with reasons. On success the cart cache refreshes and the
+   * customer is taken there.
+   */
+  const submitReorder = async () => {
+    if (typeof id !== 'string' || reorderState === 'busy') return;
+    setReorderState('busy');
+    setReorderNote(null);
+    try {
+      const result = await journeyApi.reorder(id);
+      await queryClient.invalidateQueries({ queryKey: ['cart'] });
+      if (result.addedCount > 0 && result.skippedCount === 0) {
+        setReorderState('done');
+        router.push('/(shop)/cart');
+      } else if (result.addedCount > 0) {
+        setReorderState('partial');
+        setReorderNote(
+          `${result.addedCount} item${result.addedCount === 1 ? '' : 's'} added. ${result.skippedCount} unavailable: ${result.lines
+            .filter((line) => !line.added)
+            .map((line) => line.productTitle)
+            .join(', ')}`,
+        );
+        router.push('/(shop)/cart');
+      } else {
+        setReorderState('idle');
+        setReorderNote(
+          `Nothing could be added: ${result.lines.map((line) => `${line.productTitle} — ${line.unavailableReason ?? 'unavailable'}`).join(', ')}`,
+        );
+      }
+    } catch {
+      setReorderState('idle');
+      setReorderNote('Could not start the reorder. Check your connection and try again.');
+    }
+  };
+
+  /** Submit the return request for the chosen line + reason. */
+  const submitReturn = async (input: { orderItemId: string; reason: string; comment?: string }) => {
+    if (returnSubmitting) return;
+    setReturnSubmitting(true);
+    setReturnError(null);
+    try {
+      await journeyApi.createReturn({
+        orderItemId: input.orderItemId,
+        reason: input.reason as never,
+        comment: input.comment,
+      });
+      setReturnSheetOpen(false);
+      // The returns cache feeds the status card below; refresh it.
+      await queryClient.invalidateQueries({ queryKey: ['returns'] });
+    } catch (error) {
+      setReturnError(error instanceof Error ? error.message : 'Could not submit the return. Try again.');
+    } finally {
+      setReturnSubmitting(false);
+    }
+  };
+
   return (
     <View className="flex-1" style={{ backgroundColor: '#FAF7F0', paddingTop: insets.top }}>
       {/* Header */}
       <View className="flex-row items-center gap-1 px-3 pb-2 pt-2">
         <Pressable
-          onPress={() => router.back()}
+          onPress={goBackOrHome}
           accessibilityRole="button"
           accessibilityLabel="Go back"
           hitSlop={8}
@@ -149,6 +217,11 @@ export default function OrderDetailScreen() {
           <OrderBody
             order={order.data}
             onCancelPress={() => setCancelSheetOpen(true)}
+            onReturnPress={() => setReturnSheetOpen(true)}
+            onReorderPress={() => void submitReorder()}
+            reorderBusy={reorderState === 'busy'}
+            reorderNote={reorderNote}
+            onInvoicePress={() => setInvoiceOpen(true)}
           />
         </ScrollView>
       )}
@@ -164,11 +237,62 @@ export default function OrderDetailScreen() {
         }}
         onConfirm={(reason) => void submitCancellation(reason)}
       />
+
+      <ReturnSheet
+        visible={returnSheetOpen}
+        orderNumber={order.data?.orderNumber ?? ''}
+        items={returnableItems(order.data)}
+        submitting={returnSubmitting}
+        errorMessage={returnError}
+        onClose={() => {
+          setReturnSheetOpen(false);
+          setReturnError(null);
+        }}
+        onSubmit={(input) => void submitReturn(input)}
+      />
+
+      <InvoiceSheet
+        visible={invoiceOpen}
+        orderId={typeof id === 'string' ? id : null}
+        onClose={() => setInvoiceOpen(false)}
+      />
     </View>
   );
 }
 
-function OrderBody({ order, onCancelPress }: { order: OrderResponse; onCancelPress: () => void }) {
+/**
+ * The lines the customer may pick in the return sheet. All items are offered;
+ * the SERVER rejects ineligible ones per line with its own message (window,
+ * status, duplicates), so the client never guesses eligibility — it only
+ * renders the outcome.
+ */
+function returnableItems(order: OrderResponse | undefined): ReturnableItem[] {
+  if (!order) return [];
+  return order.items.map((item) => ({
+    orderItemId: item.id,
+    productTitle: item.productTitle,
+    variantTitle: item.variantTitle,
+    quantity: item.quantity,
+  }));
+}
+
+function OrderBody({
+  order,
+  onCancelPress,
+  onReturnPress,
+  onReorderPress,
+  reorderBusy,
+  reorderNote,
+  onInvoicePress,
+}: {
+  order: OrderResponse;
+  onCancelPress: () => void;
+  onReturnPress: () => void;
+  onReorderPress: () => void;
+  reorderBusy: boolean;
+  reorderNote: string | null;
+  onInvoicePress: () => void;
+}) {
   const placed = order.placedAt ?? order.createdAt;
   const date = new Date(placed).toLocaleDateString('en-IN', {
     day: 'numeric',
@@ -273,6 +397,48 @@ function OrderBody({ order, onCancelPress }: { order: OrderResponse; onCancelPre
         </View>
       ) : null}
 
+      {/* Buy Again + Invoice — always offered; the server reports what can be
+          re-ordered and whether this order is invoiceable. */}
+      <View className="gap-2">
+        {reorderNote !== null ? (
+          <RNText className="px-1 text-[11.5px] leading-4" style={{ color: MUTED }}>
+            {reorderNote}
+          </RNText>
+        ) : null}
+        <View className="flex-row gap-2">
+          <Pressable
+            onPress={onReorderPress}
+            disabled={reorderBusy}
+            accessibilityRole="button"
+            accessibilityLabel={`Buy again from order ${order.orderNumber}`}
+            className="h-11 flex-1 items-center justify-center rounded-full"
+            style={{ backgroundColor: BRAND, opacity: reorderBusy ? 0.6 : 1 }}
+          >
+            <RNText className="text-[13px] font-bold text-white">
+              {reorderBusy ? 'Adding…' : 'Buy Again'}
+            </RNText>
+          </Pressable>
+          <Pressable
+            onPress={onInvoicePress}
+            accessibilityRole="button"
+            accessibilityLabel={`View invoice for order ${order.orderNumber}`}
+            className="h-11 flex-1 items-center justify-center rounded-full border"
+            style={{ borderColor: LINE, backgroundColor: '#FFFFFF' }}
+          >
+            <View className="flex-row items-center gap-1.5">
+              <Ionicons name="receipt-outline" size={14} color={INK} />
+              <RNText className="text-[13px] font-bold" style={{ color: INK }}>
+                Invoice
+              </RNText>
+            </View>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Returns — request action on delivered orders; live status once a
+          request exists. Both come from the server, never local guessing. */}
+      <OrderReturnsSection order={order} onReturnPress={onReturnPress} />
+
       {/* Items */}
       <View className="rounded-2xl border p-4" style={{ borderColor: LINE, backgroundColor: '#FFFFFF' }}>
         <RNText className="mb-2.5 text-[14px] font-bold" style={{ color: INK }}>
@@ -327,14 +493,35 @@ function OrderBody({ order, onCancelPress }: { order: OrderResponse; onCancelPre
             Delivery address
           </RNText>
           <RNText className="text-[12.5px] leading-5" style={{ color: MUTED }}>
-            {Object.values(order.shippingAddress)
-              .filter((part) => typeof part === 'string' && part.length > 0)
-              .join(', ')}
+            {deliveryAddressLine(order.shippingAddress)}
           </RNText>
         </View>
       ) : null}
     </View>
   );
+}
+
+/**
+ * Human reading order for the order's shipping-address snapshot.
+ *
+ * `Object.values` follows the JSON column's stored key order, which is
+ * arbitrary — it rendered "Bengaluru, 12, Rose Villa…, Asha, 560001".
+ * Name and contact first, street lines next, locality last.
+ */
+function deliveryAddressLine(address: Record<string, unknown>): string {
+  const str = (key: string): string => {
+    const value = address[key];
+    return typeof value === 'string' ? value.trim() : '';
+  };
+  const locality = [
+    str('city'),
+    [str('state'), str('postalCode')].filter((part) => part !== '').join(' '),
+  ]
+    .filter((part) => part !== '')
+    .join(', ');
+  return [str('fullName'), str('phone'), str('line1'), str('line2'), str('landmark'), locality]
+    .filter((part) => part !== '')
+    .join(', ');
 }
 
 function TotalRow({ label, value }: { label: string; value: number }) {
@@ -346,6 +533,109 @@ function TotalRow({ label, value }: { label: string; value: number }) {
       <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
         {formatMoney(value)}
       </RNText>
+    </View>
+  );
+}
+
+/** Customer-facing copy for each return status. */
+function returnStatusLabel(status: string): string {
+  switch (status) {
+    case 'REQUESTED':
+      return 'Return requested';
+    case 'APPROVED':
+      return 'Return approved';
+    case 'REJECTED':
+      return 'Return declined';
+    case 'REFUNDED':
+      return 'Refunded';
+    case 'CLOSED':
+      return 'Return closed';
+    default:
+      return status;
+  }
+}
+
+/**
+ * Returns section for one order.
+ *
+ * - DELIVERED order, no open request → the "Request a return" action.
+ * - Any existing requests (this order's items) → status cards with the
+ *   server's state, including refund amount once REFUNDED.
+ * - Neither → renders nothing (no return action on ineligible orders).
+ */
+function OrderReturnsSection({
+  order,
+  onReturnPress,
+}: {
+  order: OrderResponse;
+  onReturnPress: () => void;
+}) {
+  const returns = useQuery({
+    queryKey: ['returns'],
+    queryFn: () => journeyApi.listReturns(),
+    staleTime: 30_000,
+  });
+
+  const orderReturns = (returns.data?.returns ?? []).filter(
+    (request) => request.orderId === order.id,
+  );
+  const isDelivered = order.status === 'DELIVERED';
+  const hasOpenRequest = orderReturns.some(
+    (request) => request.status === 'REQUESTED' || request.status === 'APPROVED',
+  );
+
+  if (!isDelivered && orderReturns.length === 0) return null;
+
+  return (
+    <View className="gap-2">
+      {orderReturns.map((request) => (
+        <View
+          key={request.id}
+          className="rounded-2xl border p-4"
+          style={{
+            borderColor:
+              request.status === 'REJECTED' ? '#E8C9C4' : request.status === 'REFUNDED' ? '#CFE5D8' : LINE,
+            backgroundColor:
+              request.status === 'REJECTED' ? '#FDF4F2' : request.status === 'REFUNDED' ? '#F2F9F5' : '#FFFFFF',
+          }}
+        >
+          <View className="flex-row items-center justify-between">
+            <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
+              {returnStatusLabel(request.status)}
+            </RNText>
+            {request.status === 'REFUNDED' ? (
+              <RNText className="text-[13px] font-bold" style={{ color: '#2E7D4F' }}>
+                {formatMoney(request.refundInPaise)}
+              </RNText>
+            ) : null}
+          </View>
+          <RNText className="mt-0.5 text-[12px] leading-4" style={{ color: MUTED }}>
+            {request.productTitle} · {request.variantTitle}
+          </RNText>
+          {request.decisionNote !== null ? (
+            <RNText className="mt-1 text-[12px] leading-4" style={{ color: MUTED }}>
+              {request.decisionNote}
+            </RNText>
+          ) : null}
+        </View>
+      ))}
+
+      {isDelivered && !hasOpenRequest ? (
+        <Pressable
+          onPress={onReturnPress}
+          accessibilityRole="button"
+          accessibilityLabel={`Request a return for order ${order.orderNumber}`}
+          className="h-11 items-center justify-center rounded-full border"
+          style={{ borderColor: LINE, backgroundColor: '#FFFFFF' }}
+        >
+          <View className="flex-row items-center gap-1.5">
+            <Ionicons name="return-up-back" size={14} color={INK} />
+            <RNText className="text-[13px] font-bold" style={{ color: INK }}>
+              Request a return
+            </RNText>
+          </View>
+        </Pressable>
+      ) : null}
     </View>
   );
 }

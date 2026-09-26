@@ -37,7 +37,9 @@ CREATE INDEX "otp_codes_phone_created_at_idx" ON "otp_codes"("phone", "created_a
 CREATE INDEX "otp_codes_expires_at_idx" ON "otp_codes"("expires_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "otp_codes_token_hash_key" ON "otp_codes"("token_hash");
+-- Non-unique index (was UNIQUE): demo mode hashes the same fixed code for every
+-- phone, so a unique constraint rejected the second OTP send with P2002/409.
+CREATE INDEX "otp_codes_token_hash_idx" ON "otp_codes"("token_hash");
 
 -- AlterTable
 ALTER TABLE "users" ALTER COLUMN "email" DROP NOT NULL;

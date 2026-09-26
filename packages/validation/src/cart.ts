@@ -8,7 +8,13 @@ import { couponCodeSchema, quantitySchema, uuidSchema } from './primitives';
 
 export const addCartItemSchema = z.object({
   variantId: uuidSchema,
-  storeId: uuidSchema,
+  /**
+   * Optional: the server resolves the fulfillment store when omitted — the
+   * cart's already-scoped store, else the first active store (the same rule
+   * merge-guest-cart applies). Clients cannot choose a store; no public
+   * store endpoint exists for them to resolve one.
+   */
+  storeId: uuidSchema.optional(),
   quantity: quantitySchema,
 });
 

@@ -2,14 +2,10 @@
  * Static editorial content for Home.
  *
  * This file holds the brand copy that is NOT catalog data: the shipping trust
- * line, hero slides (navigational, built on real categories), the brand-story
- * block, and testimonial quotes.
- *
- * NOTE ON TESTIMONIALS: the backend has no reviews/testimonials public feed
- * yet, so these three quotes are EDITABLE PLACEHOLDER CONTENT assembled with
- * the product owner's direction, kept in this one file so they can be replaced
- * with real customer reviews the moment the backend exposes them. Nothing else
- * in the app renders fabricated content.
+ * line, the welcome/hero banner slot, the mid-page promotional banner slot,
+ * and the brand-philosophy block. Banner artwork uses the supplied Sakya
+ * creatives; each slide's copy sits in code so the artwork can be swapped for
+ * a final asset without touching the screens.
  */
 
 import type { ImageSourcePropType } from 'react-native';
@@ -30,6 +26,26 @@ export interface HeroSlide {
   /** What VoiceOver/TalkBack should call the slide. */
   accessibilityLabel: string;
 }
+
+/**
+ * The editorial hero — one photograph, one message, one CTA.
+ *
+ * The photo should be art-directed so its subject sits in the upper third:
+ * the scrim's calm zone at the bottom carries the headline and CTA. Copy
+ * lives here so the creative can be re-shot without touching the screen.
+ */
+export const HERO_EDITORIAL = {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  image: require('../banner/fresh-veg.png'),
+  accessibilityLabel: 'Morning light over the Sakya farm rows',
+  /** Category the SHOP NOW CTA shops into. */
+  ctaHandle: 'daily-vegetables-copy',
+  headline: 'Pure food.\nRooted in tradition.',
+  body:
+    'Single-origin staples, cold-pressed oils and heritage pickles — from ' +
+    'our fields to your kitchen.',
+  cta: 'Shop Now',
+} as const;
 
 export const HERO_SLIDES: HeroSlide[] = [
   {
@@ -76,39 +92,64 @@ export const HERO_SLIDES: HeroSlide[] = [
   },
 ];
 
-export const BRAND_STORY = {
-  eyebrow: 'OUR PROMISE',
-  heading: 'What we create is not product — it is remembrance',
+/**
+ * Brand philosophy — the quiet premium block near the bottom of Home.
+ * Deliberately simple: no testimonials, no review-style marketing, no claims
+ * the backend cannot back. Copy lives here so it is editable in one place.
+ */
+export const BRAND_PHILOSOPHY = {
+  eyebrow: 'SAKYA FARMS',
+  heading: 'Good food begins with good ingredients.',
   body:
-    'Every jar, bottle and basket from Sakya Farms carries the rhythm of our land: ' +
-    'crops grown without shortcuts, recipes preserved across generations, and ' +
-    'fairness to the farming families who make it all possible.',
+    'Carefully sourced from farms and producers we trust, brought to your ' +
+    'kitchen with the goodness intact.',
 };
 
-export interface Testimonial {
+/**
+ * Mid-page promotional banner: theme + target category, rendered on the
+ * shared SakyaPromoBanner component with the brand artwork slot. The final
+ * creative can replace the image without any structural change.
+ */
+export interface PromoBannerDef {
   key: string;
-  quote: string;
-  author: string;
-  location: string;
+  eyebrow: string;
+  headline: string;
+  body: string;
+  cta: string;
+  /** Category handle the CTA navigates to. */
+  handle: string;
+  image?: ImageSourcePropType;
 }
 
-export const TESTIMONIALS: Testimonial[] = [
+export const PROMO_BANNERS: PromoBannerDef[] = [
   {
-    key: 't1',
-    quote: 'The ghee tastes exactly like what my grandmother used to set aside for us.',
-    author: 'Editorial preview',
-    location: 'Replace with a verified customer review',
+    key: 'sakya-fresh',
+    eyebrow: 'SAKYA FRESH',
+    headline: 'Harvested this week',
+    body: 'Vegetables and fruits picked at the farm, packed and shipped the same day.',
+    cta: 'Shop Fresh',
+    handle: 'leafy-greens',
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    image: require('../banner/fresh-veg.png'),
   },
   {
-    key: 't2',
-    quote: 'Vegetables arrived as if harvested that morning — because they were.',
-    author: 'Editorial preview',
-    location: 'Replace with a verified customer review',
+    key: 'andhra',
+    eyebrow: 'AUTHENTIC ANDHRA',
+    headline: 'Podulu, pickles & podis',
+    body: 'Recipes preserved across generations, made in small batches.',
+    cta: 'Shop Andhra Podulu',
+    handle: 'andhra-podulu',
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    image: require('../banner/traditional-andhra-products.png'),
   },
   {
-    key: 't3',
-    quote: 'The mango pickle took me straight back to my mother’s kitchen in Guntur.',
-    author: 'Editorial preview',
-    location: 'Replace with a verified customer review',
+    key: 'ghee-honey',
+    eyebrow: 'PREMIUM PANTRY',
+    headline: 'Ghee & honey, the old way',
+    body: 'Bilona ghee and raw honey from farms we visit ourselves.',
+    cta: 'Shop Ghee & Honey',
+    handle: 'best-ghee',
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    image: require('../banner/ghee.png'),
   },
 ];

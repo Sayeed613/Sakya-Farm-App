@@ -5,6 +5,7 @@ import { Text as RNText, View } from 'react-native';
 
 import { CATEGORY_ICONS, FALLBACK_CATEGORY_ICON } from '../../config/category-icons';
 import { getCategoryImage } from '../../config/category-images';
+import { getFreshCategoryImage } from '../../config/sakya-fresh-images';
 import { AnimatedPressable, usePressScale } from '../../lib/motion';
 
 const BRAND = '#0B594C';
@@ -21,6 +22,13 @@ export interface CategoryIconProps {
   shape?: 'circle' | 'square';
   /** Compact sidebar sizing. */
   compact?: boolean;
+  /**
+   * Which local artwork set feeds this instance: 'default' reads src/icons
+   * (Home strip), 'sakya-fresh' reads the dedicated src/sakya-fresh set
+   * (Fresh page sidebar). Falls back to the Ionicons glyph when a handle has
+   * no artwork in the selected set.
+   */
+  imageSet?: 'default' | 'sakya-fresh';
 }
 
 /**
@@ -35,9 +43,13 @@ function CategoryIconInner({
   onPress,
   shape = 'square',
   compact = false,
+  imageSet = 'default',
 }: CategoryIconProps) {
   const press = usePressScale();
-  const image = getCategoryImage(slug);
+  const image =
+    imageSet === 'sakya-fresh'
+      ? getFreshCategoryImage(slug)
+      : getCategoryImage(slug);
   const icon = (CATEGORY_ICONS[slug] ?? FALLBACK_CATEGORY_ICON) as keyof typeof Ionicons.glyphMap;
   const box = compact ? 'h-[48px] w-[48px]' : 'h-[56px] w-[56px]';
   const radius = shape === 'circle' ? 'rounded-full' : 'rounded-2xl';

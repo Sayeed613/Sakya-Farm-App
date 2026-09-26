@@ -31,6 +31,8 @@ export interface AddressPickerSheetProps {
   onConfirm: (address: CheckoutAddress) => void;
   /** Opens the manual-entry sheet prefilling from the chosen address. */
   onEdit: (address: CheckoutAddress) => void;
+  /** Opens the EMPTY manual-entry sheet (the customer wants a brand-new row). */
+  onAddNew: () => void;
 }
 
 /**
@@ -47,6 +49,7 @@ export function AddressPickerSheet({
   onClose,
   onConfirm,
   onEdit,
+  onAddNew,
 }: AddressPickerSheetProps) {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
@@ -62,14 +65,31 @@ export function AddressPickerSheet({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['addresses'] }),
   });
 
-  function sameAs(saved: AddressView, current: CheckoutAddress | null): boolean {
-    if (current === null) return false;
-    return (
-      saved.recipientName === current.fullName &&
-      saved.line1 === current.line1 &&
-      saved.pincode === current.postalCode
-    );
-  }
+/**
+ * Match a saved row to the currently-chosen address.
+ *
+ * The chosen address can come from three surfaces (checkout, cart card, the
+ * picker itself), so the comparison is deliberately forgiving: normalised
+ * phone (digits only) and pincode must be EXACT — they are the identity of a
+ * delivery destination — while the name and street line use trimmed,
+ * case-insensitive equality so "flat 101" vs "Flat  101" still matches.
+ *
+ * Previously name+line1+pincode compared raw, so a cart-picked address with a
+ * spacing/case difference failed to highlight its saved row — the customer
+ * could not tell which row was delivering-to.
+ */
+function sameAs(saved: AddressView, current: CheckoutAddress | null): boolean {
+  if (current === null) return false;
+  const samePincode =
+    saved.pincode.replace(/\D/g, '') === current.postalCode.replace(/\D/g, '');
+  const samePhone =
+    saved.phone.replace(/\D/g, '').slice(-10) ===
+    current.phone.replace(/\D/g, '').slice(-10);
+  const name = (value: string): string => value.trim().toLowerCase();
+  const sameName = name(saved.recipientName) === name(current.fullName);
+  const sameLine1 = name(saved.line1) === name(current.line1);
+  return samePincode && samePhone && sameName && sameLine1;
+}
 
   function confirmSaved(saved: AddressView) {
     onConfirm({
@@ -109,8 +129,14 @@ export function AddressPickerSheet({
           accessibilityRole="button"
           accessibilityLabel="Dismiss address picker"
           onPress={onClose}
-          className="flex-1 justify-end bg-black/40"
-        >
+          className="absolute inset-0"
+          style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
+        />
+        {/* Sibling of the sheet, not its ancestor — a wrapping backdrop makes
+            the DOM <button><button> (React flags it) and the browser fires
+            field keystrokes as a backdrop click. box-none keeps dim-area taps
+            hitting the backdrop. */}
+        <View className="absolute inset-0 justify-end" pointerEvents="box-none">
           <Pressable onPress={() => undefined}>
             <Animated.View
               entering={SlideInDown.duration(260).easing(Easing.out(Easing.cubic))}
@@ -248,8 +274,7 @@ export function AddressPickerSheet({
 
               <View className="px-4 pt-2">
                 <Pressable
-                  onPress={onClose}
-                  disabled={book.isPending}
+                  onPress={onAddNew}
                   accessibilityRole="button"
                   accessibilityLabel="Add a new address"
                   className="h-[46px] flex-row items-center justify-center gap-2 rounded-full border"
@@ -263,7 +288,7 @@ export function AddressPickerSheet({
               </View>
             </Animated.View>
           </Pressable>
-        </Pressable>
+        </View>
       </Animated.View>
     </Modal>
   );

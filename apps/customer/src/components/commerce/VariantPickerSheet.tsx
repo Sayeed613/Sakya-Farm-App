@@ -82,8 +82,14 @@ export function VariantPickerSheet({
         accessibilityRole="button"
         accessibilityLabel="Dismiss variant picker"
         onPress={close}
-        className="flex-1 justify-end bg-black/40"
-      >
+        className="absolute inset-0"
+        style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
+      />
+      {/* Backdrop stays a SIBLING of the sheet: as an ancestor it wraps every
+          inner button in a native <button> (invalid HTML that React flags),
+          and the browser turns keystrokes inside it into a backdrop click.
+          box-none lets taps in the dim area fall through to the backdrop. */}
+      <View className="absolute inset-0 justify-end" pointerEvents="box-none">
         <Pressable onPress={() => undefined}>
           <Animated.View
             entering={SlideInDown.duration(260).easing(Easing.out(Easing.cubic))}
@@ -134,7 +140,7 @@ export function VariantPickerSheet({
             )}
           </Animated.View>
         </Pressable>
-      </Pressable>
+      </View>
       </Animated.View>
     </Modal>
   );
@@ -228,10 +234,15 @@ function PickerBody({
           accessibilityRole="button"
           accessibilityLabel="Add selected variant to cart"
           accessibilityState={{ disabled: selected == null }}
-          className={'rounded-full px-6 py-3 ' + (selected == null ? 'opacity-40' : 'active:opacity-85')}
-          style={{ backgroundColor: BRAND }}
+          className={
+            'rounded-full border px-6 py-3 ' +
+            (selected == null ? ' border-line opacity-40' : ' active:opacity-85')
+          }
+          style={{ borderColor: BRAND }}
         >
-          <RNText className="text-[13.5px] font-bold text-white">Add to Cart</RNText>
+          <RNText className="text-[13.5px] font-bold" style={{ color: BRAND }}>
+            Add to Cart
+          </RNText>
         </Pressable>
       </View>
     </View>

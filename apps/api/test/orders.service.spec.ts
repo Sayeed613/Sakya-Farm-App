@@ -1,10 +1,30 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OrdersService } from '../src/modules/orders/orders.service';
 import { PrismaService } from '../src/database/prisma.service';
 import { NotificationsService } from '../src/modules/notifications/notifications.service';
 import { CartService } from '../src/modules/cart/cart.service';
+
+/** Commerce config the service reads; matches the production defaults. */
+function configMock() {
+  return {
+    get: (key: string) =>
+      key === 'commerce'
+        ? {
+            taxRatePercent: 5,
+            shippingFeeInPaise: 4900,
+            freeShippingThresholdInPaise: 59900,
+            codFeeInPaise: 0,
+            maxQuantityPerLine: 10,
+            maxCartLines: 25,
+            returnWindowDays: 7,
+            pendingOrderExpiryMinutes: 120,
+          }
+        : undefined,
+  } as unknown as ConfigService;
+}
 
 function cart(userId = 'user-1', id = 'cart-1', items?: Array<{ id: string; variantId: string; quantity: number; unitPriceInPaise: number; variant: any }>, coupon: any = null) {
   return {
@@ -54,6 +74,7 @@ describe('OrdersService', () => {
       providers: [
         OrdersService,
         { provide: PrismaService, useValue: prisma },
+        { provide: ConfigService, useValue: configMock() },
         { provide: CartService, useValue: cartService },
         { provide: NotificationsService, useValue: { sendOrderStatusPush: vi.fn(async () => undefined) } },
       ],
@@ -71,7 +92,7 @@ describe('OrdersService', () => {
     await expect(
       service.checkout('user-1', {
         idempotencyKey: 'key-1',
-        shippingAddress: { line1: 'Home' },
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
         notes: null,
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -105,10 +126,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
       placedAt: null,
@@ -143,10 +164,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -185,14 +206,14 @@ describe('OrdersService', () => {
 
     const result = await service.checkout('user-1', {
       idempotencyKey: 'key-1',
-      shippingAddress: { line1: 'Home' },
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
     });
 
     expect(result.orderNumber).toBe('ORD-001');
     expect(result.status).toBe('PENDING_PAYMENT');
-    expect(result.totalInPaise).toBe(4800);
+    expect(result.totalInPaise).toBe(9940);
     expect(result.items).toHaveLength(1);
     expect(result.items[0]!.productTitle).toBe('Mango');
     expect(result.payments).toHaveLength(1);
@@ -235,10 +256,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 480,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4320,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 216,
+      shippingInPaise: 4900,
+      totalInPaise: 9436,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
       placedAt: null,
@@ -284,10 +305,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 480,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4320,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 216,
+      shippingInPaise: 4900,
+      totalInPaise: 9436,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -327,14 +348,16 @@ describe('OrdersService', () => {
 
     const result = await service.checkout('user-1', {
       idempotencyKey: 'key-2',
-      shippingAddress: { line1: 'Home' },
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
     });
 
     expect(result.subtotalInPaise).toBe(4800);
     expect(result.discountInPaise).toBe(480);
-    expect(result.totalInPaise).toBe(4320);
+    expect(result.taxInPaise).toBe(216);
+    expect(result.shippingInPaise).toBe(4900);
+    expect(result.totalInPaise).toBe(9436);
   });
 
   it('requires an active fulfilment store on the cart before checkout', async () => {
@@ -352,7 +375,7 @@ describe('OrdersService', () => {
     await expect(
       service.checkout('user-1', {
         idempotencyKey: 'key-store',
-        shippingAddress: { line1: 'Home' },
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
         notes: null,
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -378,7 +401,7 @@ describe('OrdersService', () => {
     await expect(
       service.checkout('user-1', {
         idempotencyKey: 'key-nostock',
-        shippingAddress: { line1: 'Home' },
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
         notes: null,
       }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -411,7 +434,7 @@ describe('OrdersService', () => {
     await expect(
       service.checkout('user-1', {
         idempotencyKey: 'key-short',
-        shippingAddress: { line1: 'Home' },
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
         notes: null,
       }),
     ).rejects.toBeInstanceOf(ConflictException);
@@ -439,10 +462,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -464,10 +487,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -490,7 +513,7 @@ describe('OrdersService', () => {
 
     await service.checkout('user-1', {
       idempotencyKey: 'key-reserve',
-      shippingAddress: { line1: 'Home' },
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       notes: null,
     });
 
@@ -524,10 +547,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -552,10 +575,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -613,10 +636,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -641,10 +664,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: null,
       notes: null,
       placedAt: null,
@@ -712,10 +735,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
       placedAt: null,
@@ -732,7 +755,7 @@ describe('OrdersService', () => {
 
     const result = await service.checkout('user-1', {
       idempotencyKey: 'key-1',
-      shippingAddress: { line1: 'Home' },
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
     });
@@ -755,7 +778,7 @@ describe('OrdersService', () => {
         taxInPaise: 0,
         shippingInPaise: 0,
         totalInPaise: 4800,
-        shippingAddress: { line1: 'Home' },
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
         billingAddress: null,
         notes: null,
         placedAt: null,
@@ -797,10 +820,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
       placedAt: null,
@@ -825,10 +848,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
       placedAt: null,
@@ -859,10 +882,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
       placedAt: null,
@@ -892,10 +915,10 @@ describe('OrdersService', () => {
       currency: 'INR',
       subtotalInPaise: 4800,
       discountInPaise: 0,
-      taxInPaise: 0,
-      shippingInPaise: 0,
-      totalInPaise: 4800,
-      shippingAddress: { line1: 'Home' },
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
       billingAddress: undefined,
       notes: null,
       placedAt: null,
@@ -943,6 +966,12 @@ function createPrismaMock() {
       // The fulfilment store and coupon are read from the cart row during
       // checkout; the store lookup is what proves the store is active.
       findUnique: vi.fn(),
+    },
+    couponRedemption: {
+      // Checkout's redemption guard reads this before recording the coupon;
+      // null keeps the no-coupon specs on the plain path.
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn(),
     },
     inventory: {
       findUnique: vi.fn().mockResolvedValue(null),

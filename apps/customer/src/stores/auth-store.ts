@@ -73,6 +73,13 @@ interface AuthState {
   restore: () => Promise<void>;
   setPendingRedirect: (route: string | null) => void;
   /**
+   * Persist and apply a renewed session (token refresh). Unlike setSession
+   * this has NO guest-cart side effects — a mid-session refresh must never
+   * trigger a merge. Fire-and-forget from the 401 recovery path, which
+   * cannot await a zustand action.
+   */
+  updateSession: (session: AuthSessionResponse) => void;
+  /**
    * Persist a session AND merge the guest cart into the server cart.
    *
    * Every authentication path (OTP screen, auth gates) goes through here, so
@@ -101,13 +108,23 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     set({ session, restoring: false });
   },
   setPendingRedirect: (route) => set({ pendingRedirect: route }),
+  updateSession: (session) => {
+    void sessionStorage.setItem(JSON.stringify(session)).catch(() => {
+      // Persistence is best-effort here; the in-memory session is already
+      // applied so this process keeps a valid token either way.
+    });
+    set({ session });
+  },
   setSession: async (session) => {
     await sessionStorage.setItem(JSON.stringify(session));
     set({ session });
 
     // Register this device for order-status pushes, best-effort. Lazily
     // imported so the push module's api import cannot cycle the store.
+    // Web is skipped entirely: expo-notifications does not support push
+    // listeners there (console warning on every boot).
     void (async () => {
+      if (Platform.OS === 'web') return;
       try {
         const { registerPushToken } = await import('../push/push-notifications');
         await registerPushToken();
@@ -145,9 +162,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     }
     // Remove this device's push registration so no further order pushes are
     // delivered to a logged-out device. Best-effort, like every logout step.
+    // Web never registered, so it has nothing to remove.
     try {
-      const { unregisterPushToken } = await import('../push/push-notifications');
-      await unregisterPushToken();
+      if (Platform.OS === 'web') {
+        // Skip — nothing registered on web.
+      } else {
+        const { unregisterPushToken } = await import('../push/push-notifications');
+        await unregisterPushToken();
+      }
     } catch {
       // Local session is cleared below regardless.
     }

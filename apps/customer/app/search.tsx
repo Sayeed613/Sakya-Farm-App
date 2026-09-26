@@ -12,6 +12,7 @@ import { ProductQuickView } from '../src/components/commerce/ProductQuickView';
 import { VariantPickerSheet, type VariantPickerState } from '../src/components/commerce/VariantPickerSheet';
 import { ErrorState } from '../src/components/ErrorState';
 import { SkeletonBlock } from '../src/components/LoadingSkeleton';
+import { goBackOrHome } from '../src/lib/navigation';
 import { colors } from '../src/theme';
 
 /**
@@ -45,12 +46,13 @@ export default function SearchScreen() {
   });
 
   const openProduct = (slug: string) => router.push(`/(shop)/products/${slug}`);
+  const openCategory = (slug: string) => router.push(`/(shop)/categories/${slug}`);
 
   return (
     <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
       <View className="flex-row items-center gap-2 px-4 pb-2 pt-2">
         <Pressable
-          onPress={() => router.back()}
+          onPress={goBackOrHome}
           accessibilityRole="button"
           accessibilityLabel="Go back"
           hitSlop={8}
@@ -119,7 +121,9 @@ export default function SearchScreen() {
       ) : (
         <ScrollView
           className="flex-1"
-          contentContainerStyle={{ paddingBottom: 32 }}
+          // Clearance for the floating bottom tab bar — 32 left the last
+          // search results hidden underneath it.
+          contentContainerStyle={{ paddingBottom: 116 }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
@@ -152,6 +156,10 @@ export default function SearchScreen() {
         onOpenProduct={(slug) => {
           setQuickViewSlug(null);
           openProduct(slug);
+        }}
+        onOpenCategory={(categorySlug) => {
+          setQuickViewSlug(null);
+          openCategory(categorySlug);
         }}
       />
       <VariantPickerSheet pick={variantPick} onClose={() => setVariantPick(null)} />

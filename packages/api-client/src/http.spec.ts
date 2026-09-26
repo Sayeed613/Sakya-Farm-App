@@ -232,6 +232,115 @@ describe('responses', () => {
   });
 });
 
+describe('401 recovery', () => {
+  it('retries once with the fresh token after a successful recovery hook', async () => {
+    const double = createFetchDouble(
+      { status: 401, text: '' },
+      { body: { ok: true } },
+    );
+    let token = 'stale';
+    const client = createHttpClient({
+      baseUrl: BASE_URL,
+      fetchImpl: double.fetchImpl,
+      getAccessToken: () => token,
+      onUnauthorized: () => {
+        token = 'fresh';
+        return Promise.resolve(true);
+      },
+    });
+
+    await expect(client.request('/cart')).resolves.toEqual({ ok: true });
+    expect(double.calls).toHaveLength(2);
+    expect(double.calls[0]?.init.headers.authorization).toBe('Bearer stale');
+    expect(double.calls[1]?.init.headers.authorization).toBe('Bearer fresh');
+  });
+
+  it('surfaces the 401 when the recovery hook reports failure', async () => {
+    const double = createFetchDouble({ status: 401, text: '' });
+    const client = createHttpClient({
+      baseUrl: BASE_URL,
+      fetchImpl: double.fetchImpl,
+      getAccessToken: () => 'stale',
+      onUnauthorized: () => false,
+    });
+
+    await expect(client.request('/cart')).rejects.toMatchObject({
+      code: 'UNAUTHENTICATED',
+      statusCode: 401,
+    });
+    expect(double.calls).toHaveLength(1);
+  });
+
+  it('does not retry when no bearer was sent (anonymous 401s are final)', async () => {
+    const double = createFetchDouble({ status: 401, text: '' });
+    let hookCalls = 0;
+    const client = createHttpClient({
+      baseUrl: BASE_URL,
+      fetchImpl: double.fetchImpl,
+      getAccessToken: () => null,
+      onUnauthorized: () => {
+        hookCalls += 1;
+        return true;
+      },
+    });
+
+    await expect(client.request('/cart')).rejects.toMatchObject({ statusCode: 401 });
+    expect(hookCalls).toBe(0);
+    expect(double.calls).toHaveLength(1);
+  });
+
+  it('surfaces the second 401 instead of retrying forever', async () => {
+    const double = createFetchDouble(
+      { status: 401, text: '' },
+      { status: 401, text: '' },
+    );
+    const client = createHttpClient({
+      baseUrl: BASE_URL,
+      fetchImpl: double.fetchImpl,
+      getAccessToken: () => 'stale',
+      onUnauthorized: () => true,
+    });
+
+    await expect(client.request('/cart')).rejects.toMatchObject({ statusCode: 401 });
+    expect(double.calls).toHaveLength(2);
+  });
+
+  it('surfaces the original 401 when the recovery hook throws', async () => {
+    const double = createFetchDouble({ status: 401, text: '' });
+    const client = createHttpClient({
+      baseUrl: BASE_URL,
+      fetchImpl: double.fetchImpl,
+      getAccessToken: () => 'stale',
+      onUnauthorized: () => {
+        throw new Error('refresh exploded');
+      },
+    });
+
+    // A buggy hook must not mask the API's actual response.
+    await expect(client.request('/cart')).rejects.toMatchObject({ statusCode: 401 });
+    expect(double.calls).toHaveLength(1);
+  });
+
+  it('retries POST bodies intact', async () => {
+    const double = createFetchDouble(
+      { status: 401, text: '' },
+      { body: { id: 'line-1' } },
+    );
+    const client = createHttpClient({
+      baseUrl: BASE_URL,
+      fetchImpl: double.fetchImpl,
+      getAccessToken: () => 'stale',
+      onUnauthorized: () => true,
+    });
+
+    await expect(
+      client.request('/cart/items', { method: 'POST', body: { variantId: 'v1', quantity: 2 } }),
+    ).resolves.toEqual({ id: 'line-1' });
+    expect(double.lastBody()).toEqual({ variantId: 'v1', quantity: 2 });
+  });
+
+});
+
 describe('cancellation', () => {
   it('forwards a caller abort to the request', async () => {
     const double = createFetchDouble({ holdUntilAborted: true });

@@ -3,18 +3,26 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack, useRouter } from 'expo-router';
 import { useFonts } from 'expo-font';
 import { useEffect } from 'react';
-import { ActivityIndicator, View } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import { Platform, ActivityIndicator, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import '../global.css';
+import { MAX_APP_WIDTH } from '../src/lib/responsive';
 
 import { colors } from '../src/theme';
 import { useAuthStore } from '../src/stores/auth-store';
-import {
-  configureNotificationHandler,
-  initialNotificationRoute,
-  routeForNotificationData,
-} from '../src/push/push-notifications';
+import { useConnectivity } from '../src/hooks/use-connectivity';
+import { OfflineBanner } from '../src/components/OfflineBanner';
+
+/**
+ * Push support loads lazily and natively only. Merely importing
+ * expo-notifications on web registers push-token listeners that are
+ * unsupported there (console warning on every boot), so web never loads the
+ * module at all.
+ */
+type PushModule = typeof import('../src/push/push-notifications');
+function loadPushModule(): Promise<PushModule | null> {
+  return Platform.OS === 'web' ? Promise.resolve(null) : import('../src/push/push-notifications');
+}
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -29,25 +37,45 @@ export default function RootLayout() {
   const restore = useAuthStore((state) => state.restore);
   const [fontsLoaded, fontsError] = useFonts(Ionicons.font);
   const router = useRouter();
+  const { isConnected } = useConnectivity();
+  const offline = isConnected === false;
+  // Any viewport wider than the phone shell (desktop browser OR tablet) gets
+  // the centred shell. Previously this was web-only, so an iPad stretched the
+  // phone layout edge-to-edge.
+  const { width } = useWindowDimensions();
+  const constrainWidth = width > MAX_APP_WIDTH;
 
   // Foreground presentation: banners + list entry, sound on.
   useEffect(() => {
-    configureNotificationHandler();
+    void loadPushModule().then((push) => push?.configureNotificationHandler());
   }, []);
 
   /** Tap routing — order pushes deep-link to the order detail screen. */
   useEffect(() => {
-    // Cold start: the app was closed when the push was tapped.
-    void initialNotificationRoute().then((route) => {
-      if (route !== null) router.replace(route as never);
-    });
+    let cancelled = false;
+    let subscription: { remove: () => void } | null = null;
 
-    // App open: respond to the tap whenever it lands.
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      const route = routeForNotificationData(response.notification.request.content.data);
-      if (route !== null) router.push(route as never);
-    });
-    return () => subscription.remove();
+    void (async () => {
+      const push = await loadPushModule();
+      if (push === null) return;
+      const Notifications = await import('expo-notifications');
+
+      // Cold start: the app was closed when the push was tapped.
+      void push.initialNotificationRoute().then((route) => {
+        if (route !== null && !cancelled) router.replace(route as never);
+      });
+
+      // App open: respond to the tap whenever it lands.
+      subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+        const route = push.routeForNotificationData(response.notification.request.content.data);
+        if (route !== null) router.push(route as never);
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      subscription?.remove();
+    };
   }, [router]);
 
   useEffect(() => {
@@ -71,10 +99,38 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(shop)" />
-      </Stack>
+      {/* Phone-shaped shell: any viewport wider than MAX_APP_WIDTH (desktop
+          browser or tablet) shows the app centred at phone width instead of
+          stretched edge-to-edge — which broke alignment and pushed content
+          off-screen. Phone-sized viewports fill the screen exactly. */}
+      <View style={constrainWidth ? styles.webShell : styles.fill}>
+        <View style={constrainWidth ? styles.webShellInner : styles.fill}>
+          {/* Global offline state — sits above every screen so no flow can
+              pretend the network is fine. Mutations are gated in the http
+              layer; React Query keeps serving cached reads. */}
+          {offline ? <OfflineBanner /> : null}
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(shop)" />
+          </Stack>
+        </View>
+      </View>
     </QueryClientProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  fill: { flex: 1 },
+  webShell: {
+    flex: 1,
+    alignItems: 'center',
+    backgroundColor: '#EFE9DE',
+  },
+  webShellInner: {
+    width: '100%',
+    maxWidth: MAX_APP_WIDTH,
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    ...Platform.select({ web: { boxShadow: '0 0 32px rgba(23,26,24,0.14)' } as never, default: {} }),
+  },
+});

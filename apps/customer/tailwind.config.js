@@ -5,6 +5,13 @@ module.exports = {
     './src/**/*.{js,jsx,ts,tsx}',
   ],
   presets: [require('nativewind/preset')],
+  /**
+   * 'class' (not the default 'media') is required by react-native-css-interop
+   * on web: its runtime tries to set the color scheme manually and crashes
+   * with "dark mode is type 'media'" otherwise. No `dark:` variants are used
+   * in the codebase, so this changes nothing visually.
+   */
+  darkMode: 'class',
   theme: {
     extend: {
       /**

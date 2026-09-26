@@ -101,15 +101,27 @@ function StickyCartBarInner({ itemCount, onPress, bottomOffset = 0 }: StickyCart
     <Animated.View
       entering={FadeInDown.duration(180)}
       exiting={FadeOutDown.duration(140)}
-      className="absolute self-center"
+      // Explicit positioning, NOT className: Animated.View has no cssInterop
+      // registration in this app (NativeWind classes are ignored on it — the
+      // same reason images needed explicit styles), so `self-center` silently
+      // did nothing and the pill stretched to full width on Pixel 9 Pro.
       style={{
+        position: 'absolute',
         bottom: Math.max(insets.bottom, 10) + 86 + bottomOffset,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        // The wrapper spans the screen but must never eat touches meant for
+        // the content scrolling underneath it.
+        pointerEvents: 'box-none',
       }}
     >
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
         accessibilityLabel={`View cart, ${itemCount} items`}
+        // shrink-wrap: the pill is exactly as wide as its content, centred by
+        // the parent's alignItems — never full-width.
         className="flex-row items-center rounded-full py-1.5 pl-2 pr-3.5"
         style={{ backgroundColor: BRAND }}
       >
@@ -177,9 +189,10 @@ function StickyCartBarInner({ itemCount, onPress, bottomOffset = 0 }: StickyCart
 
 export const StickyCartBar = memo(StickyCartBarInner);
 
-/** Running count from the guest cart store. */
-export function useCartSummary(): { itemCount: number } {
+/** Running count + subtotal from the guest store or the server cart. */
+export function useCartSummary(): { itemCount: number; subtotalInPaise: number } {
   const lines = useGuestCartStore((state) => state.lines);
+  const priceTotals = useGuestCartStore((state) => state.priceTotals);
   const isAuthenticated = useAuthStore((state) => state.session !== null);
   const serverCart = useQuery({
     queryKey: ['cart'],
@@ -191,5 +204,15 @@ export function useCartSummary(): { itemCount: number } {
   const guestCount = lines.reduce((sum, line) => sum + line.quantity, 0);
   const serverCount = (serverCart.data?.items ?? []).reduce((sum, item) => sum + item.quantity, 0);
   const itemCount = isAuthenticated ? serverCount : guestCount;
-  return { itemCount };
+
+  // Guest subtotal is display-only (unit prices captured at add time); the
+  // server recomputes authoritative totals at merge/checkout.
+  const guestSubtotal = lines.reduce(
+    (sum, line) => sum + (priceTotals[line.variantId] ?? 0) * line.quantity,
+    0,
+  );
+  const serverSubtotal = serverCart.data?.subtotalInPaise ?? 0;
+  const subtotalInPaise = isAuthenticated ? serverSubtotal : guestSubtotal;
+
+  return { itemCount, subtotalInPaise };
 }

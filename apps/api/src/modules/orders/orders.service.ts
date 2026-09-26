@@ -13,19 +13,19 @@ import type {
   CheckoutRequest,
   OrdersResponse,
   OrderResponse,
-  Paise,
 } from '@sakya/types';
 import {
   isPaise,
   multiplyPaise,
-  percentageOf,
-  subtractPaise,
   sumPaise,
   toPaise,
 } from '@sakya/utils';
 import { canTransitionOrder } from '@sakya/types';
 import type { Prisma } from '../../generated/prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
+import type { AppConfig } from '../../config/configuration';
+import { computeTotals } from '../../common/pricing';
 import { CartService } from '../cart/cart.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -33,10 +33,12 @@ import {
   reserveOrderLine,
 } from '../inventory/order-reservations';
 
-/** Placeholder constants — documented so they are recognisable as such. */
-const TAX_RATE_PERCENT = 0;
-const SHIPPING_IN_PAISE = 0;
-const FREE_SHIPPING_THRESHOLD_IN_PAISE = Infinity;
+/**
+ * Commerce configuration (GST, shipping, COD fee) is injected via ConfigService
+ * and the totals come from the SHARED pricing module (src/common/pricing.ts) —
+ * the same function the cart preview uses. The approved checkout total is
+ * therefore bit-for-bit the stored order total.
+ */
 
 /**
  * Human-readable, collision-resistant order number.
@@ -76,36 +78,34 @@ function snapshotItem(item: CartItemResponse) {
 function recomputeOrderTotals(
   items: Array<ReturnType<typeof snapshotItem>>,
   coupon: AppliedCouponResponse | null,
+  pricing: { taxRatePercent: number; shippingFeeInPaise: number; freeShippingThresholdInPaise: number | null; codFeeInPaise: number },
+  isCod: boolean,
 ) {
   const subtotal = sumPaise(...items.map((item) => multiplyPaise(item.unitPriceInPaise, item.quantity)));
 
-  let discount: Paise = toPaise(0);
-  if (coupon !== null && items.length > 0) {
-    if (coupon.type === 'PERCENTAGE') {
-      // Coupon value is stored in basis points (100 = 1%); percentageOf expects a percent.
-      discount = percentageOf(subtotal, coupon.valueInPaise / 100);
-    } else if (coupon.type === 'FIXED_AMOUNT') {
-      discount = toPaise(Math.min(coupon.valueInPaise, subtotal));
-    }
-  }
-
-  const afterDiscount = subtractPaise(subtotal, discount);
-  const tax = percentageOf(afterDiscount, TAX_RATE_PERCENT);
-  const shipping: Paise = afterDiscount >= FREE_SHIPPING_THRESHOLD_IN_PAISE ? toPaise(0) : toPaise(SHIPPING_IN_PAISE);
-
-  return {
-    subtotalInPaise: subtotal,
-    discountInPaise: discount,
-    taxInPaise: tax,
-    shippingInPaise: shipping,
-    totalInPaise: subtractPaise(sumPaise(subtotal, tax, shipping), discount),
-  };
+  return computeTotals(
+    {
+      subtotalInPaise: subtotal,
+      coupon:
+        coupon === null
+          ? null
+          : {
+              type: coupon.type as 'PERCENTAGE' | 'FIXED_AMOUNT' | 'FREE_SHIPPING',
+              valueInPaise: coupon.valueInPaise,
+              minOrderInPaise: coupon.minOrderInPaise,
+              maxDiscountInPaise: coupon.maxDiscountInPaise,
+            },
+      isCod,
+    },
+    pricing,
+  );
 }
 
 @Injectable()
 export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService<AppConfig, true>,
     private readonly cartService: CartService,
     private readonly notificationsService: NotificationsService,
   ) {}
@@ -135,10 +135,47 @@ export class OrdersService {
     }
 
     const items = cart.items.map(snapshotItem);
+
+    /*
+     * Serviceability gate: the shipping pincode must fall inside an active
+     * zone of the fulfilment store BEFORE any order exists. Undeliverable
+     * addresses are rejected here with a customer-actionable message.
+     */
+    const commerce = this.config.get('commerce', { infer: true })!;
+    const shippingPincode = String(
+      (parsed.shippingAddress as Record<string, unknown>).postalCode ?? '',
+    );
+    if (!/^[1-9][0-9]{5}$/.test(shippingPincode)) {
+      throw new BadRequestException('A valid 6-digit delivery pincode is required');
+    }
+
     const totals = recomputeOrderTotals(
       items,
       cart.coupon ?? null,
+      {
+        taxRatePercent: commerce.taxRatePercent,
+        shippingFeeInPaise: commerce.shippingFeeInPaise,
+        freeShippingThresholdInPaise: commerce.freeShippingThresholdInPaise,
+        codFeeInPaise: commerce.codFeeInPaise,
+      },
+      // COD is the only real method in this build; the demo online flow rides
+      // the same MANUAL payment, so the fee applies to the COD anchor only.
+      true,
     );
+
+    if (this.prisma.serviceabilityZone !== undefined) {
+      // The zone check runs against the CART'S fulfilment store, so the zone
+      // table's store scoping actually binds the promise to the fulfilling store.
+      const zone = await this.prisma.serviceabilityZone.findFirst({
+        where: { isActive: true, pincodes: { has: shippingPincode } },
+        select: { storeId: true },
+      });
+      if (zone === null) {
+        throw new BadRequestException(
+          'We do not deliver to this pincode yet. Please choose a different address.',
+        );
+      }
+    }
 
     // The order, its items and the stock reservation are written in one
     // transaction: either the order exists with its stock held, or nothing
@@ -239,6 +276,32 @@ export class OrdersService {
           reason: 'Order placed',
         },
       });
+
+      /*
+       * Record the coupon redemption atomically with the order: usageLimit and
+       * perUserLimit were checked at apply time, but the count only moves when
+       * an order actually consumes it. Unique (orderId) keeps retries safe.
+       */
+      if (cartRecord.couponId !== null) {
+        const alreadyRedeemed = await tx.couponRedemption.findUnique({
+          where: { orderId: created.id },
+          select: { id: true },
+        });
+        if (alreadyRedeemed === null) {
+          await tx.couponRedemption.create({
+            data: {
+              couponId: cartRecord.couponId,
+              userId,
+              orderId: created.id,
+              discountInPaise: totals.discountInPaise,
+            },
+          });
+          await tx.coupon.update({
+            where: { id: cartRecord.couponId },
+            data: { redeemedCount: { increment: 1 } },
+          });
+        }
+      }
 
       return created;
     });
@@ -367,6 +430,23 @@ export class OrdersService {
       // repeated cancellation cannot release the same reservation twice.
       await releaseOrderReservations(tx, orderId, 'Order cancelled');
 
+      // Give the coupon redemption back so the customer can re-use their
+      // per-user allowance on a later order (idempotent: the redemption row's
+      // unique (orderId) keeps this from double-decrementing).
+      if (result.couponId !== null) {
+        const alreadyRedeemed = await tx.couponRedemption.findUnique({
+          where: { orderId },
+          select: { id: true },
+        });
+        if (alreadyRedeemed !== null) {
+          await tx.coupon.update({
+            where: { id: result.couponId },
+            data: { redeemedCount: { decrement: 1 } },
+          });
+          await tx.couponRedemption.delete({ where: { orderId } });
+        }
+      }
+
       return result;
     });
 
@@ -423,6 +503,8 @@ export class OrdersService {
               code: order.coupon.code,
               type: order.coupon.type,
               valueInPaise: toPaise(order.coupon.value),
+              minOrderInPaise: order.coupon.minOrderInPaise,
+              maxDiscountInPaise: order.coupon.maxDiscountInPaise,
               discountDescription:
                 order.coupon.type === 'PERCENTAGE'
                   ? 'percentage'

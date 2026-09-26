@@ -1,11 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, Text as RNText, View } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { router, useRouter } from 'expo-router';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cartApi } from '../../src/api/cart';
+import { journeyApi } from '../../src/api/journey';
 import {
   checkoutApi,
   newIdempotencyKey,
@@ -20,16 +23,40 @@ import { EmptyState } from '../../src/components/EmptyState';
 import { ErrorState } from '../../src/components/ErrorState';
 import { SkeletonBlock } from '../../src/components/LoadingSkeleton';
 import { formatMoney } from '../../src/lib/format';
+import { goBackOrHome } from '../../src/lib/navigation';
 import { addressesApi } from '../../src/api/notifications-api';
 import { useAuthStore } from '../../src/stores/auth-store';
 import { useLastAddressStore } from '../../src/stores/last-address-store';
+import { softShadow } from '../../src/lib/shadows';
 
 const BRAND = '#0B594C';
+const BRAND_DARK = '#08483E';
+const BRAND_TINT = 'rgba(11, 89, 76, 0.08)';
 const INK = '#171A18';
-const MUTED = '#8C8A80';
-const LINE = '#E4DED2';
+const MUTED = '#6F6C63';
+const SUBTLE = '#8C8A80';
+const LINE = '#EFEAE1';
 const SURFACE_MUTED = '#F3EDE3';
 const DANGER = '#B42318';
+/** Completed steps + savings figures. Deliberately lighter than BRAND. */
+const GREEN = '#1F7A43';
+/** Direct amber for the delivery-address glyph. */
+const AMBER = '#B4612F';
+const AMBER_TINT = '#F7E9DD';
+const GREEN_TINT = '#E3EFE9';
+/** Editorial hero copy, over the checkout artwork. */
+const HERO_GREEN = '#094A3C';
+/** Page background, and the hairline that draws each card. */
+const PAGE = '#FFFFFF';
+const CARD_BORDER = '#EDE7DC';
+
+/**
+ * The mock UPI/Card simulator is offered ONLY in explicit internal demo builds
+ * (`EXPO_PUBLIC_PAYMENTS_DEMO=true`). A customer-facing build must never show a
+ * fake payment method, and the server refuses online intents in production
+ * anyway — so the honest default is Cash on Delivery, with no dead options.
+ */
+const PAYMENTS_DEMO_ENABLED = process.env.EXPO_PUBLIC_PAYMENTS_DEMO === 'true';
 
 /**
  * Checkout — address + payment, over server-authoritative totals.
@@ -53,11 +80,18 @@ export default function CheckoutScreen() {
   const lastAddress = useLastAddressStore((state) => state.address);
   const rememberAddress = useLastAddressStore((state) => state.remember);
 
-  const [address, setAddress] = useState<CheckoutAddress | null>(lastAddress);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /** The Payment Method row is collapsed until the customer taps it. */
+  const [paymentOpen, setPaymentOpen] = useState(false);
   const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>('COD');
   const [placing, setPlacing] = useState(false);
+  /**
+   * Placement failures render INLINE above the action: RNW's Alert.alert is a
+   * no-op, so an alert-only error leaves a web customer tapping a button that
+   * silently does nothing.
+   */
+  const [orderError, setOrderError] = useState<string | null>(null);
 
   /*
    * DEMO PAYMENT SHEET — for online methods the flow goes: place order →
@@ -76,7 +110,101 @@ export default function CheckoutScreen() {
 
   const cart = useQuery({ queryKey: ['cart'], queryFn: cartApi.getCart, staleTime: 15_000 });
 
+  /**
+   * The saved address book (loaded with the screen, not on picker open) —
+   * used below to keep checkout in step with an address the customer already
+   * picked on the CART card.
+   */
+  const book = useQuery({
+    queryKey: ['addresses'],
+    queryFn: addressesApi.list,
+    enabled: session !== null,
+    staleTime: 30_000,
+  });
+
+  /**
+   * PRESELECT the cart-picked address.
+   *
+   * `lastAddress` is shared with the cart card, but it can be a manual entry
+   * (not a saved row) or stale. When it EXACTLY matches a saved row (same
+   * normalised pincode+phone+name+street as the picker's matcher), adopt the
+   * SERVER row so the picker highlights it, the address book stays the single
+   * source of truth, and checkout shows what the customer chose on the cart.
+   * A manual last-address that matches nothing still applies as-is.
+   */
+  const matchedSaved = useMemo(() => {
+    if (lastAddress === null) return null;
+    const addresses = book.data?.addresses ?? [];
+    const norm = (value: string): string => value.trim().toLowerCase();
+    return (
+      addresses.find(
+        (saved) =>
+          saved.pincode.replace(/\D/g, '') === lastAddress.postalCode.replace(/\D/g, '') &&
+          saved.phone.replace(/\D/g, '').slice(-10) === lastAddress.phone.replace(/\D/g, '').slice(-10) &&
+          norm(saved.recipientName) === norm(lastAddress.fullName) &&
+          norm(saved.line1) === norm(lastAddress.line1),
+      ) ?? null
+    );
+  }, [book.data, lastAddress]);
+
+  const [address, setAddress] = useState<CheckoutAddress | null>(() => {
+    if (lastAddress === null) return null;
+    if (matchedSaved) {
+      return {
+        fullName: matchedSaved.recipientName,
+        phone: matchedSaved.phone,
+        line1: matchedSaved.line1,
+        line2: matchedSaved.line2 ?? '',
+        landmark: matchedSaved.landmark ?? '',
+        city: matchedSaved.city,
+        state: matchedSaved.state,
+        postalCode: matchedSaved.pincode,
+      };
+    }
+    return lastAddress;
+  });
+
+  // The book can ARRIVE after mount (async query). When it does and the
+  // customer has not already confirmed a row in the picker this session, swap
+  // the provisional last-address for its saved twin so the picker highlights
+  // the right row without any extra tap.
+  const pickerConfirmedRef = useRef(false);
+  useEffect(() => {
+    if (pickerConfirmedRef.current || matchedSaved === null) return;
+    setAddress((current) => {
+      if (current === null || current !== lastAddress) return current;
+      return {
+        fullName: matchedSaved.recipientName,
+        phone: matchedSaved.phone,
+        line1: matchedSaved.line1,
+        line2: matchedSaved.line2 ?? '',
+        landmark: matchedSaved.landmark ?? '',
+        city: matchedSaved.city,
+        state: matchedSaved.state,
+        postalCode: matchedSaved.pincode,
+      };
+    });
+  }, [matchedSaved, lastAddress]);
+
   const hasItems = (cart.data?.items.length ?? 0) > 0;
+
+  /** Units in the cart (sum of quantities) — the reference's "(3 items)". */
+  const itemCount = (cart.data?.items ?? []).reduce((sum, item) => sum + item.quantity, 0);
+
+  /**
+   * Delivery ETA — the REAL serviceability check for the chosen address's
+   * pincode (server zone data; no decorative claims). Re-checked when the
+   * address changes; a retry exists for transient failures.
+   */
+  const pincode = address?.postalCode.replace(/\D/g, '') ?? '';
+  const delivery = useQuery({
+    queryKey: ['serviceability', pincode],
+    queryFn: () => journeyApi.checkServiceability(pincode),
+    enabled: pincode.length === 6,
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const recheckDelivery = useMutation({ mutationFn: () => journeyApi.checkServiceability(pincode) });
 
   const contactDefaults = useMemo(() => {
     if (session === null) return null;
@@ -112,6 +240,7 @@ export default function CheckoutScreen() {
     if (address === null || !hasItems || placing) return;
 
     setPlacing(true);
+    setOrderError(null);
     // One key per attempt: a retry after a network failure returns the same
     // order instead of creating a second one (server-side idempotency).
     const idempotencyKey = newIdempotencyKey();
@@ -162,11 +291,11 @@ export default function CheckoutScreen() {
         params: { id: order.id, justPlaced: '1' },
       });
     } catch (cause) {
-      Alert.alert(
-        'Could not place order',
-        cause instanceof Error ? friendlyError(cause.message) : 'Please try again in a moment.',
-        [{ text: 'OK' }],
-      );
+      const message =
+        cause instanceof Error ? friendlyError(cause.message) : 'Please try again in a moment.';
+      setOrderError(message);
+      // Native keeps the dialog; web reads the inline message above.
+      Alert.alert('Could not place order', message, [{ text: 'OK' }]);
     } finally {
       setPlacing(false);
     }
@@ -175,28 +304,19 @@ export default function CheckoutScreen() {
   if (session === null) {
     // Route-level guard; kept as a hard stop in case of deep-linking.
     return (
-      <View className="flex-1 items-center justify-center" style={{ backgroundColor: '#FAF7F0' }}>
+      <View className="flex-1 items-center justify-center bg-canvas">
         <RNText style={{ color: MUTED }}>Verify your phone to continue.</RNText>
       </View>
     );
   }
 
   return (
-    <View className="flex-1" style={{ backgroundColor: '#FAF7F0', paddingTop: insets.top }}>
-      {/* Header */}
-      <View className="flex-row items-center gap-1 px-3 pb-2 pt-2">
-        <Pressable
-          onPress={() => router.back()}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          hitSlop={8}
-          className="h-9 w-9 items-center justify-center"
-        >
-          <Ionicons name="chevron-back" size={22} color={INK} />
-        </Pressable>
-        <RNText className="flex-1 text-[17px] font-bold" style={{ color: INK }}>
-          Checkout
-        </RNText>
+    <View className="flex-1" style={{ backgroundColor: PAGE, paddingTop: insets.top }}>
+      {/* Header strip: the farm photo bleeds out from under it, so the
+          progress row and hero copy sit ON the artwork. */}
+      <View className="relative">
+        <CheckoutBackdrop />
+        <CheckoutHeaderBar />
       </View>
 
       {cart.isPending ? (
@@ -215,166 +335,405 @@ export default function CheckoutScreen() {
         <EmptyCart onBrowse={() => router.replace('/(shop)')} />
       ) : (
         <>
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140 }}>
-            {/* Delivery address */}
-            <Section title="Deliver to">
-              {address === null ? (
-                <Pressable
-                  onPress={() => setPickerOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Add delivery address"
-                  className="flex-row items-center gap-3 rounded-2xl border border-dashed p-4"
-                  style={{ borderColor: BRAND, backgroundColor: '#FFFFFF' }}
-                >
-                  <View className="h-9 w-9 items-center justify-center rounded-full" style={{ backgroundColor: SURFACE_MUTED }}>
-                    <Ionicons name="add" size={20} color={BRAND} />
-                  </View>
-                  <View className="flex-1">
-                    <RNText className="text-[14px] font-bold" style={{ color: BRAND }}>
-                      Add delivery address
-                    </RNText>
-                    <RNText className="text-[11.5px]" style={{ color: MUTED }}>
-                      Saved addresses and manual entry
-                    </RNText>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={MUTED} />
-                </Pressable>
-              ) : (
-                <Pressable
-                  onPress={() => setPickerOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Change delivery address"
-                  className="rounded-2xl border p-4"
-                  style={{ borderColor: LINE, backgroundColor: '#FFFFFF' }}
-                >
-                  <View className="flex-row items-start justify-between">
-                    <View className="flex-1 pr-3">
-                      <RNText className="text-[14px] font-bold" style={{ color: INK }}>
-                        {address.fullName} · {address.phone}
-                      </RNText>
-                      <RNText className="mt-1 text-[12.5px] leading-5" style={{ color: MUTED }}>
-                        {addressLine(address)}
-                      </RNText>
-                    </View>
-                    <RNText className="text-[12.5px] font-bold" style={{ color: BRAND }}>
-                      Change
-                    </RNText>
-                  </View>
-                </Pressable>
-              )}
-            </Section>
-
-            {/* Payment method */}
-            <Section title="Payment method">
-              <View className="rounded-2xl border" style={{ borderColor: LINE, backgroundColor: '#FFFFFF' }}>
-                <MethodRow
-                  selected={method === 'COD'}
-                  onSelect={() => setMethod('COD')}
-                  icon="cash-outline"
-                  title="Cash on Delivery"
-                  subtitle="Pay when your order arrives"
-                />
-                <View className="h-px" style={{ backgroundColor: LINE }} />
-                <MethodRow
-                  selected={method === 'UPI'}
-                  onSelect={() => setMethod('UPI')}
-                  icon="phone-portrait-outline"
-                  title="UPI"
-                  subtitle="Pay with any UPI app"
-                  trailing={
-                    <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
-                      <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
-                        DEMO
-                      </RNText>
-                    </View>
-                  }
-                />
-                <View className="h-px" style={{ backgroundColor: LINE }} />
-                <MethodRow
-                  selected={method === 'CARD'}
-                  onSelect={() => setMethod('CARD')}
-                  icon="card-outline"
-                  title="Card"
-                  subtitle="Credit or debit card"
-                  trailing={
-                    <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
-                      <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
-                        DEMO
-                      </RNText>
-                    </View>
-                  }
-                />
-              </View>
-            </Section>
-
-            {/* Bill details — the server cart's own numbers, verbatim */}
-            <Section title="Bill details">
-              <View className="rounded-2xl border p-4" style={{ borderColor: LINE, backgroundColor: '#FFFFFF' }}>
-                <View className="gap-1.5">
-                  <TotalRow label="Item total" value={cart.data.subtotalInPaise} />
-                  {cart.data.discountInPaise > 0 ? (
-                    <TotalRow label="Discount" value={-cart.data.discountInPaise} />
-                  ) : null}
-                  {cart.data.taxInPaise > 0 ? <TotalRow label="Tax" value={cart.data.taxInPaise} /> : null}
-                  <TotalRow
-                    label="Delivery"
-                    value={cart.data.shippingInPaise}
-                  />
-                  <View className="mt-1 flex-row items-center justify-between border-t pt-2" style={{ borderColor: LINE }}>
-                    <RNText className="text-[14px] font-bold" style={{ color: INK }}>
-                      To pay
-                    </RNText>
-                    <RNText className="text-[15px] font-bold" style={{ color: BRAND }}>
-                      {formatMoney(cart.data.totalInPaise)}
-                    </RNText>
-                  </View>
-                  {cart.data.coupon !== null ? (
-                    <RNText className="mt-0.5 text-[11px]" style={{ color: MUTED }}>
-                      Coupon {cart.data.coupon.code} applied
-                    </RNText>
-                  ) : null}
-                </View>
-              </View>
-            </Section>
-          </ScrollView>
-
-          {/* Sticky place-order bar */}
-          <View
-            className="absolute left-0 right-0 bottom-0 border-t px-4 pt-3"
-            style={{
-              borderColor: LINE,
-              backgroundColor: '#FFFFFF',
-              paddingBottom: Math.max(insets.bottom, 12) + 8,
-              elevation: 6,
-            }}
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 20 }}
           >
-            <View className="mb-2 flex-row items-center justify-between">
-              <RNText className="text-[12px]" style={{ color: MUTED }}>
-                {method === 'COD' ? 'Pay on delivery' : `Pay via ${method === 'CARD' ? 'card' : 'UPI'}`}
+            {/* Progress: Address → Delivery → Payment → Review. The states
+                reflect REAL screen state — address chosen? ETA known?
+                ordering in flight? */}
+            <CheckoutProgress
+              steps={[
+                { label: 'Address', state: address !== null ? 'done' : 'current' },
+                {
+                  label: 'Delivery',
+                  state:
+                    address === null ? 'future' : delivery.data?.serviceable ? 'done' : 'current',
+                },
+                { label: 'Payment', state: address === null ? 'future' : 'current' },
+                { label: 'Review', state: placing ? 'current' : 'future' },
+              ]}
+            />
+
+            {/* Editorial hero — the checkout's own artwork carries the copy. */}
+            <View className="px-5 pt-3 pb-1">
+              <RNText
+                className="font-serif text-[22px] leading-[27px] font-bold"
+                style={{ color: HERO_GREEN }}
+              >
+                Almost there!
               </RNText>
-              <RNText className="text-[14px] font-bold" style={{ color: INK }}>
-                {formatMoney(cart.data.totalInPaise)}
+              <RNText
+                className="mt-1 max-w-[280px] text-[12.5px] leading-[17px] font-semibold"
+                style={{ color: '#1D2A23' }}
+              >
+                Complete your order to get farm fresh goodness at your doorstep.
               </RNText>
             </View>
+
+            {/* Where it goes — one tap back into the address book. */}
+            {address === null ? (
+              <Pressable
+                onPress={() => setPickerOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Add delivery address"
+                className="mx-3 mt-2 flex-row items-center gap-3 rounded-[14px] border border-dashed bg-white p-3.5 active:opacity-85"
+                style={{ borderColor: BRAND, ...softShadow }}
+              >
+                <View
+                  className="h-[38px] w-[38px] items-center justify-center rounded-[11px]"
+                  style={{ backgroundColor: AMBER_TINT }}
+                >
+                  <Ionicons name="home" size={19} color={AMBER} />
+                </View>
+                <View className="min-w-0 flex-1">
+                  <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
+                    Add delivery address
+                  </RNText>
+                  <RNText className="mt-0.5 text-[11.5px]" style={{ color: MUTED }}>
+                    Where should we deliver your order?
+                  </RNText>
+                </View>
+                <Ionicons name="chevron-forward" size={17} color={SUBTLE} />
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={() => setPickerOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Change delivery address"
+                className="mx-3 mt-2 flex-row items-start gap-3 rounded-[14px] border bg-white p-3.5 active:opacity-85"
+                style={{ borderColor: CARD_BORDER, ...softShadow }}
+              >
+                <View
+                  className="h-[38px] w-[38px] items-center justify-center rounded-[11px]"
+                  style={{ backgroundColor: AMBER_TINT }}
+                >
+                  <Ionicons name="home" size={19} color={AMBER} />
+                </View>
+                <View className="min-w-0 flex-1">
+                  <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
+                    Delivering to Home
+                  </RNText>
+                  <RNText className="mt-0.5 text-[12px] leading-[16px]" style={{ color: MUTED }}>
+                    {addressLine(address)}
+                  </RNText>
+                </View>
+                <View className="rounded-[11px] px-2.5 py-1.5" style={{ backgroundColor: GREEN_TINT }}>
+                  <RNText className="text-[11.5px] font-bold" style={{ color: GREEN }}>
+                    Change
+                  </RNText>
+                </View>
+              </Pressable>
+            )}
+
+            {/* Delivery — real serviceability for the chosen pincode. */}
+            {address === null ? (
+              <DetailCard
+                icon="bicycle-outline"
+                iconColor={MUTED}
+                iconBackground={SURFACE_MUTED}
+                title="Delivery Details"
+                primary="Add an address to see delivery availability"
+                onPress={() => setPickerOpen(true)}
+                accessibilityLabel="Delivery details"
+              />
+            ) : delivery.isPending ? (
+              <DetailCard
+                icon="bicycle-outline"
+                iconColor={MUTED}
+                iconBackground={SURFACE_MUTED}
+                title="Delivery Details"
+                primary={`Checking delivery availability for ${address.postalCode}…`}
+                accessibilityLabel="Delivery details"
+              />
+            ) : delivery.isError || recheckDelivery.isPending ? (
+              <DetailCard
+                icon="cloud-offline-outline"
+                iconColor={AMBER}
+                iconBackground={AMBER_TINT}
+                title="Delivery Details"
+                primary="Could not check delivery"
+                secondary="Tap to retry"
+                onPress={() => recheckDelivery.mutate()}
+                trailingIcon="refresh"
+                trailingColor={BRAND}
+                accessibilityLabel="Retry delivery check"
+              />
+            ) : !delivery.data?.serviceable ? (
+              <DetailCard
+                icon="location-outline"
+                iconColor={AMBER}
+                iconBackground={AMBER_TINT}
+                title="Delivery Details"
+                primary="Not serviceable yet"
+                secondary={`We don't deliver to ${address.postalCode} right now — try another address.`}
+                onPress={() => setPickerOpen(true)}
+                accessibilityLabel="Delivery details"
+              />
+            ) : (
+              <DetailCard
+                icon="bicycle-outline"
+                iconColor={GREEN}
+                iconBackground={GREEN_TINT}
+                title="Delivery Details"
+                primary="Standard Delivery"
+                secondary={delivery.data.etaLabel ?? `Delivering to ${address.city} ${address.postalCode}`}
+                onPress={() => setPickerOpen(true)}
+                accessibilityLabel="Delivery details"
+              />
+            )}
+
+            {/* Payment method — ONE row per the reference. Tapping it opens
+                the COD / UPI / Card radios, which stay the source of truth. */}
+            <DetailCard
+              icon={method === 'COD' ? 'cash-outline' : 'card-outline'}
+              iconColor={INK}
+              iconBackground="#F1EEE6"
+              badge={method === 'UPI' ? 'UPI' : undefined}
+              title="Payment Method"
+              primary={paymentCopy(method).title}
+              secondary={paymentCopy(method).blurb}
+              onPress={() => setPaymentOpen((value) => !value)}
+              trailingIcon={paymentOpen ? 'chevron-up' : 'chevron-forward'}
+              accessibilityLabel="Change payment method"
+            >
+              {paymentOpen ? (
+                <View>
+                  <View className="h-px" style={{ backgroundColor: LINE }} />
+                  <MethodRow
+                    selected={method === 'COD'}
+                    onSelect={() => setMethod('COD')}
+                    icon="cash-outline"
+                    title="Cash on Delivery"
+                    subtitle="Pay when your order arrives"
+                  />
+                  {PAYMENTS_DEMO_ENABLED ? (
+                    <>
+                      <View className="h-px" style={{ backgroundColor: LINE }} />
+                      <MethodRow
+                        selected={method === 'UPI'}
+                        onSelect={() => setMethod('UPI')}
+                        icon="phone-portrait-outline"
+                        title="UPI"
+                        subtitle="Pay with any UPI app"
+                        trailing={
+                          <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
+                            <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
+                              DEMO
+                            </RNText>
+                          </View>
+                        }
+                      />
+                      <View className="h-px" style={{ backgroundColor: LINE }} />
+                      <MethodRow
+                        selected={method === 'CARD'}
+                        onSelect={() => setMethod('CARD')}
+                        icon="card-outline"
+                        title="Card"
+                        subtitle="Credit or debit card"
+                        trailing={
+                          <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
+                            <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
+                              DEMO
+                            </RNText>
+                          </View>
+                        }
+                      />
+                    </>
+                  ) : null}
+                </View>
+              ) : null}
+            </DetailCard>
+
+            {/* Order items — what is actually being approved, from the server
+                cart, WITH the product imagery. No client math. */}
+            <View className="mx-3 mt-3.5">
+              <View className="mb-2 flex-row items-center justify-between px-1">
+                <RNText className="text-[14px] font-extrabold" style={{ color: INK }}>
+                  {`Order items (${itemCount})`}
+                </RNText>
+                <Pressable
+                  onPress={() => router.push('/(shop)/cart')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit order items"
+                  hitSlop={8}
+                  className="active:opacity-60"
+                >
+                  <RNText className="text-[12.5px] font-bold" style={{ color: BRAND }}>
+                    Edit
+                  </RNText>
+                </Pressable>
+              </View>
+
+              <View
+                className="flex-row items-center gap-2.5 rounded-[14px] border bg-white p-2.5"
+                style={{ borderColor: CARD_BORDER, ...softShadow }}
+              >
+                {cart.data.items.slice(0, 3).map((item) => (
+                  <View
+                    key={item.id}
+                    className="items-center justify-center overflow-hidden rounded-[10px]"
+                    style={{ backgroundColor: SURFACE_MUTED, height: 62, width: 62 }}
+                  >
+                    {item.productImageUrl !== null ? (
+                      <ExpoImage
+                        source={{ uri: item.productImageUrl }}
+                        style={{ width: 62, height: 62 }}
+                        contentFit="cover"
+                        cachePolicy="disk"
+                        recyclingKey={item.id}
+                        accessibilityIgnoresInvertColors
+                      />
+                    ) : (
+                      <Ionicons name="leaf-outline" size={20} color={SUBTLE} />
+                    )}
+                  </View>
+                ))}
+
+                <View className="flex-1 items-end">
+                  <Pressable
+                    onPress={() => router.push('/(shop)/cart')}
+                    accessibilityRole="button"
+                    accessibilityLabel="Review all items"
+                    className="h-[34px] w-[34px] items-center justify-center rounded-full active:opacity-70"
+                    style={{ backgroundColor: '#F4F1E9' }}
+                  >
+                    <Ionicons name="chevron-forward" size={16} color={INK} />
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+
+            {/* Price details — the server cart's own numbers, verbatim. */}
+            <View
+              className="mx-3 mt-3 rounded-[14px] border bg-white px-3.5 py-3.5"
+              style={{ borderColor: CARD_BORDER, ...softShadow }}
+            >
+              <RNText className="mb-2.5 text-[14px] font-extrabold" style={{ color: INK }}>
+                Price Details
+              </RNText>
+
+              <View className="mb-1.5 flex-row items-center justify-between">
+                <RNText className="text-[12.5px]" style={{ color: MUTED }}>
+                  {`Items total (${itemCount} ${itemCount === 1 ? 'item' : 'items'})`}
+                </RNText>
+                <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
+                  {formatMoney(cart.data.subtotalInPaise)}
+                </RNText>
+              </View>
+
+              {cart.data.discountInPaise > 0 ? (
+                <View className="mb-1.5 flex-row items-center justify-between">
+                  <RNText className="text-[12.5px]" style={{ color: GREEN }}>
+                    {cart.data.coupon !== null
+                      ? `Discount (Coupon: ${cart.data.coupon.code})`
+                      : 'Discount'}
+                  </RNText>
+                  <RNText className="text-[12.5px] font-semibold" style={{ color: GREEN }}>
+                    {`−${formatMoney(cart.data.discountInPaise)}`}
+                  </RNText>
+                </View>
+              ) : null}
+
+              {cart.data.taxInPaise > 0 ? (
+                <View className="mb-1.5 flex-row items-center justify-between">
+                  <RNText className="text-[12.5px]" style={{ color: MUTED }}>
+                    Taxes & charges (GST incl.)
+                  </RNText>
+                  <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
+                    {formatMoney(cart.data.taxInPaise)}
+                  </RNText>
+                </View>
+              ) : null}
+
+              <View className="flex-row items-center justify-between">
+                <View className="flex-row items-center gap-1">
+                  <RNText className="text-[12.5px]" style={{ color: MUTED }}>
+                    Delivery charges
+                  </RNText>
+                  <Ionicons name="information-circle-outline" size={13} color={SUBTLE} />
+                </View>
+
+                {cart.data.shippingInPaise > 0 ? (
+                  <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
+                    {formatMoney(cart.data.shippingInPaise)}
+                  </RNText>
+                ) : (
+                  <RNText className="text-[12.5px] font-semibold" style={{ color: GREEN }}>
+                    FREE
+                  </RNText>
+                )}
+              </View>
+
+              <View
+                className="mt-2.5 flex-row items-center justify-between border-t pt-2.5"
+                style={{ borderColor: LINE }}
+              >
+                <RNText className="text-[14.5px] font-extrabold" style={{ color: INK }}>
+                  Total amount
+                </RNText>
+                <RNText className="text-[15.5px] font-extrabold" style={{ color: INK }}>
+                  {formatMoney(cart.data.totalInPaise)}
+                </RNText>
+              </View>
+            </View>
+          </ScrollView>
+
+          {/* Place-order bar — STATIC (not absolute) so the confirm button is
+              ALWAYS visible: one brand action carrying the amount. */}
+          <View
+            className="border-t bg-white px-3 pt-2.5"
+            style={{
+              borderColor: LINE,
+              paddingBottom: Math.max(insets.bottom, 10),
+              boxShadow: '0px -4px 14px rgba(58, 53, 43, 0.07)',
+              elevation: 12,
+              zIndex: 20,
+            }}
+          >
+            {orderError !== null ? (
+              <RNText
+                accessibilityLiveRegion="polite"
+                className="mb-2 text-center text-[12.5px] font-semibold"
+                style={{ color: DANGER }}
+              >
+                {orderError}
+              </RNText>
+            ) : null}
             <Pressable
               onPress={() => void handlePlaceOrder()}
               disabled={address === null || placing}
               accessibilityRole="button"
               accessibilityLabel="Place order"
               accessibilityState={{ disabled: address === null || placing, busy: placing }}
-              className={
-                'h-[50px] rounded-full bg-brand items-center justify-center' +
-                (address === null || placing ? ' opacity-55' : '')
-              }
+              style={({ pressed }) => [
+                styles.placeOrder,
+                (address === null || placing) && styles.placeOrderDisabled,
+                pressed && !placing && address !== null && styles.placeOrderPressed,
+              ]}
             >
               {placing ? (
-                <RNText className="text-white text-[15px] font-bold">Placing order…</RNText>
+                <RNText style={styles.placeOrderLabel}>Placing order…</RNText>
+              ) : address === null ? (
+                <RNText style={styles.placeOrderLabel}>Add address to continue</RNText>
               ) : (
-                <RNText className="text-white text-[15px] font-bold">
-                  {address === null ? 'Add address to continue' : 'Place order'}
-                </RNText>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <RNText style={styles.placeOrderLabel}>Place Order</RNText>
+                  <RNText style={styles.placeOrderLabel}>{formatMoney(cart.data.totalInPaise)}</RNText>
+                  <Ionicons name="arrow-forward" size={17} color="#FFFFFF" />
+                </View>
               )}
             </Pressable>
+
+            {/* Security reassurance. The demo-payment disclosure lives on the
+                payment sheet itself, at the moment money would move. */}
+            <View className="mt-2 flex-row items-center justify-center gap-1.5">
+              <Ionicons name="shield-checkmark" size={12} color={GREEN} />
+              <RNText className="text-[10.5px] font-semibold" style={{ color: MUTED }}>
+                100% secure payment
+              </RNText>
+            </View>
           </View>
 
           {/* Address book picker (signed-in): saved addresses from the server. */}
@@ -383,6 +742,9 @@ export default function CheckoutScreen() {
             selected={address}
             onClose={() => setPickerOpen(false)}
             onConfirm={(picked) => {
+              // An explicit picker confirm wins over the cart-derived match
+              // for the rest of this visit.
+              pickerConfirmedRef.current = true;
               setAddress(picked);
               rememberAddress(picked);
               setPickerOpen(false);
@@ -392,20 +754,30 @@ export default function CheckoutScreen() {
               setSheetOpen(true);
               editPrefillRef.current = prefill;
             }}
+            onAddNew={() => {
+              // Fresh entry: clear any edit prefill so the sheet opens EMPTY
+              // (session name/phone still apply via contactDefaults).
+              editPrefillRef.current = null;
+              setPickerOpen(false);
+              setSheetOpen(true);
+            }}
           />
 
           {/* Manual entry / edit. `sheetInitial` wins over the last-used
               default so editing a saved row opens THAT row's data. */}
           <AddressSheet
             visible={sheetOpen}
-            initial={sheetInitial ?? address}
+            initial={sheetInitial}
             contactDefaults={contactDefaults}
             canSaveToBook
             onSave={(saved, saveToBook) => {
+              // A manual save is an explicit customer choice too.
+              pickerConfirmedRef.current = true;
               setAddress(saved);
               rememberAddress(saved);
               setSheetOpen(false);
               if (saveToBook) {
+                // Visible outcome either way — a silent failure looks broken.
                 void (async () => {
                   try {
                     await addressesApi.create({
@@ -418,8 +790,13 @@ export default function CheckoutScreen() {
                       state: saved.state,
                       pincode: saved.postalCode,
                     });
+                    void queryClient.invalidateQueries({ queryKey: ['addresses'] });
                   } catch {
-                    // Saving to the book is optional; checkout proceeds either way.
+                    Alert.alert(
+                      'Address not saved to your address book',
+                      'Your order will still deliver to this address. You can save it to your address book next time.',
+                      [{ text: 'OK' }],
+                    );
                   }
                 })();
               }
@@ -430,9 +807,11 @@ export default function CheckoutScreen() {
             }}
           />
 
-          {/* DEMO PAYMENT SHEET — online methods. Drives the provider outcome
-              through the real state machine and navigates on polled state. */}
-          {pendingPayment !== null ? (
+          {/* DEMO PAYMENT SHEET — demo builds only; unreachable otherwise
+              because no online method can be selected. Drives the provider
+              outcome through the real state machine, navigating on polled
+              state rather than a client claim. */}
+          {PAYMENTS_DEMO_ENABLED && pendingPayment !== null ? (
             <DemoPaymentSheet
               payment={pendingPayment}
               onDone={(result) => {
@@ -476,6 +855,34 @@ function DemoPaymentSheet({
   onDone: (result: 'captured' | 'pending' | 'failed') => void;
 }) {
   const [phase, setPhase] = useState<'confirm' | 'processing' | 'failed'>('confirm');
+  /** Demo instrument entry: fields look like a real checkout, stay local. */
+  const [upiId, setUpiId] = useState('');
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardExpiry, setCardExpiry] = useState('');
+  const [cardCvv, setCardCvv] = useState('');
+  const [instrumentError, setInstrumentError] = useState<string | null>(null);
+
+  const isCard = payment.method === 'CARD';
+
+  /** Client-side format check for the DEMO instrument only. */
+  const instrumentValid = isCard
+    ? cardNumber.replace(/\s/g, '').length === 16 &&
+      /^(0[1-9]|1[0-2])\s?\/\s?([0-9]{2})$/.test(cardExpiry.trim()) &&
+      /^[0-9]{3,4}$/.test(cardCvv.trim())
+    : /^[[a-zA-Z0-9._-]+@[a-zA-Z]+$/.test(upiId.trim());
+
+  function proceed(outcome: 'success' | 'failure') {
+    if (!instrumentValid) {
+      setInstrumentError(
+        isCard
+          ? 'Enter a 16-digit card, expiry as MM/YY and the 3-digit CVV.'
+          : 'Enter a valid UPI id, e.g. name@upi.',
+      );
+      return;
+    }
+    setInstrumentError(null);
+    void simulate(outcome);
+  }
 
   async function simulate(outcome: 'success' | 'failure') {
     setPhase('processing');
@@ -517,6 +924,70 @@ function DemoPaymentSheet({
             </RNText>
           </View>
 
+          {phase === 'confirm' ? (
+            // Demo instrument entry — real-looking fields, nothing sent
+            // anywhere: the server only sees the simulated outcome.
+            <View className="mt-3 gap-2.5">
+              {isCard ? (
+                <>
+                  <TextInput
+                    value={cardNumber}
+                    onChangeText={(value) => setCardNumber(value.replace(/[^0-9]/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim())}
+                    placeholder="Card number"
+                    placeholderTextColor={MUTED}
+                    keyboardType="number-pad"
+                    accessibilityLabel="Card number"
+                    className="h-[46px] rounded-xl border px-3 text-[14px]"
+                    style={{ borderColor: LINE, color: INK }}
+                  />
+                  <View className="flex-row gap-2.5">
+                    <TextInput
+                      value={cardExpiry}
+                      onChangeText={(value) => {
+                        const digits = value.replace(/[^0-9]/g, '').slice(0, 4);
+                        setCardExpiry(digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits);
+                      }}
+                      placeholder="MM/YY"
+                      placeholderTextColor={MUTED}
+                      keyboardType="number-pad"
+                      accessibilityLabel="Card expiry"
+                      className="h-[46px] flex-1 rounded-xl border px-3 text-[14px]"
+                      style={{ borderColor: LINE, color: INK }}
+                    />
+                    <TextInput
+                      value={cardCvv}
+                      onChangeText={(value) => setCardCvv(value.replace(/[^0-9]/g, '').slice(0, 4))}
+                      placeholder="CVV"
+                      placeholderTextColor={MUTED}
+                      keyboardType="number-pad"
+                      secureTextEntry
+                      accessibilityLabel="Card CVV"
+                      className="h-[46px] flex-1 rounded-xl border px-3 text-[14px]"
+                      style={{ borderColor: LINE, color: INK }}
+                    />
+                  </View>
+                </>
+              ) : (
+                <TextInput
+                  value={upiId}
+                  onChangeText={setUpiId}
+                  placeholder="yourname@upi"
+                  placeholderTextColor={MUTED}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  accessibilityLabel="UPI id"
+                  className="h-[46px] rounded-xl border px-3 text-[14px]"
+                  style={{ borderColor: LINE, color: INK }}
+                />
+              )}
+              {instrumentError !== null ? (
+                <RNText className="text-[11.5px]" style={{ color: DANGER }}>
+                  {instrumentError}
+                </RNText>
+              ) : null}
+            </View>
+          ) : null}
+
           {phase === 'processing' ? (
             <View style={{ alignItems: 'center', marginTop: 18, gap: 8 }}>
               <Ionicons name="sync-circle-outline" size={30} color={BRAND} />
@@ -555,18 +1026,22 @@ function DemoPaymentSheet({
           ) : (
             <>
               <Pressable
-                onPress={() => void simulate('success')}
+                onPress={() => proceed('success')}
+                disabled={!instrumentValid}
                 accessibilityRole="button"
                 accessibilityLabel="Pay now"
                 className="h-[46px] rounded-full bg-brand items-center justify-center mt-4"
+                style={{ opacity: instrumentValid ? 1 : 0.5 }}
               >
                 <RNText className="text-white text-[14.5px] font-bold">Pay now</RNText>
               </Pressable>
               <Pressable
-                onPress={() => void simulate('failure')}
+                onPress={() => proceed('failure')}
+                disabled={!instrumentValid}
                 accessibilityRole="button"
                 accessibilityLabel="Simulate a declined payment"
                 className="h-[34px] items-center justify-center mt-1"
+                style={{ opacity: instrumentValid ? 1 : 0.5 }}
               >
                 <RNText className="text-[11.5px]" style={{ color: MUTED }}>
                   Simulate a declined payment
@@ -592,15 +1067,258 @@ function DemoPaymentSheet({
 
 /* ------------------------------------------------------------------ */
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/* ===========================================================================
+   HEADER ARTWORK
+
+   The checkout's own farm photo, pinned under the white header strip and
+   feathered into the page: a vertical wash keeps the step labels readable at
+   the top and melts the picture into the cards below, and a horizontal one
+   holds contrast under the serif hero copy.
+   =========================================================================== */
+
+function CheckoutBackdrop() {
   return (
-    <View className="px-4 pt-3">
-      <RNText className="mb-2 text-[13px] font-bold uppercase tracking-wide" style={{ color: MUTED }}>
-        {title}
-      </RNText>
+    <View pointerEvents="none" className="absolute left-0 right-0 top-0 h-[250px]">
+      <ExpoImage
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        source={require('../../src/images/checkout-header.png')}
+        style={StyleSheet.absoluteFill}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+        accessibilityIgnoresInvertColors
+      />
+
+      {/* Vertical: readable top → the picture → the page. */}
+      <LinearGradient
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        colors={[
+          'rgba(255,255,255,0.52)',
+          'rgba(255,255,255,0.06)',
+          'rgba(255,255,255,0)',
+          'rgba(255,255,255,0.72)',
+          '#FFFFFF',
+        ]}
+        locations={[0, 0.2, 0.46, 0.72, 0.9]}
+        style={StyleSheet.absoluteFill}
+      />
+
+      {/* Horizontal: calm the left edge under the hero copy. */}
+      <LinearGradient
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 0.7, y: 0.5 }}
+        colors={['rgba(255,255,255,0.5)', 'rgba(255,255,255,0)']}
+        style={StyleSheet.absoluteFill}
+      />
+    </View>
+  );
+}
+
+/* ===========================================================================
+   HEADER ROW — flat dark icons on white, title centred
+   =========================================================================== */
+
+function CheckoutHeaderBar() {
+  return (
+    <View className="h-12 flex-row items-center px-2">
+      <View className="w-[72px] flex-row items-center">
+        <Pressable
+          onPress={goBackOrHome}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={8}
+          className="h-[38px] w-[38px] items-center justify-center active:opacity-60"
+        >
+          <Ionicons name="chevron-back" size={23} color={INK} />
+        </Pressable>
+      </View>
+
+      <View className="flex-1 items-center">
+        <RNText className="text-[16.5px] font-bold tracking-[-0.1px]" style={{ color: INK }}>
+          Checkout
+        </RNText>
+      </View>
+
+      <View className="w-[72px] flex-row items-center justify-end">
+        <Pressable
+          onPress={() => router.push('/search')}
+          accessibilityRole="button"
+          accessibilityLabel="Search products"
+          hitSlop={6}
+          className="h-[38px] w-[34px] items-center justify-center active:opacity-60"
+        >
+          <Ionicons name="search-outline" size={20} color={INK} />
+        </Pressable>
+        <Pressable
+          onPress={() => router.push('/(shop)/cart')}
+          accessibilityRole="button"
+          accessibilityLabel="View cart"
+          hitSlop={6}
+          className="h-[38px] w-[34px] items-center justify-center active:opacity-60"
+        >
+          <Ionicons name="bag-handle-outline" size={20} color={INK} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+/* ===========================================================================
+   PROGRESS — Address → Delivery → Payment → Review
+
+   Every state is real screen state: done = green check, current = green
+   number, future = muted outline. The connector behind completed steps turns
+   green so the sequence reads at a glance over the artwork.
+   =========================================================================== */
+
+function CheckoutProgress({
+  steps,
+}: {
+  steps: readonly { label: string; state: 'done' | 'current' | 'future' }[];
+}) {
+  return (
+    <View className="flex-row items-start px-4 pt-2.5" pointerEvents="none">
+      {steps.map((step, index) => (
+        <Fragment key={step.label}>
+          {index > 0 ? (
+            <View
+              style={[
+                styles.progressLine,
+                steps[index - 1]?.state === 'done' ? styles.progressLineDone : null,
+              ]}
+            />
+          ) : null}
+
+          <View style={styles.progressStep}>
+            <View
+              style={[
+                styles.progressDot,
+                step.state === 'done' ? styles.progressDotDone : null,
+                step.state === 'current' ? styles.progressDotCurrent : null,
+                step.state === 'future' ? styles.progressDotFuture : null,
+              ]}
+            >
+              {step.state === 'done' ? (
+                <Ionicons name="checkmark" size={13} color="#FFFFFF" />
+              ) : (
+                <RNText
+                  style={[
+                    styles.progressIndex,
+                    step.state === 'current' ? styles.progressIndexCurrent : null,
+                  ]}
+                >
+                  {index + 1}
+                </RNText>
+              )}
+            </View>
+
+            <RNText
+              style={[
+                styles.progressLabel,
+                step.state === 'future' ? styles.progressLabelFuture : null,
+              ]}
+            >
+              {step.label}
+            </RNText>
+          </View>
+        </Fragment>
+      ))}
+    </View>
+  );
+}
+
+/* ===========================================================================
+   DETAIL CARD — icon tile + title + two-line detail + chevron
+
+   The checkout's one row shape (address, delivery, payment). `badge` swaps
+   the icon glyph for short text (the UPI mark); `children` renders below the
+   row inside the same card, which is how the payment radios expand.
+   =========================================================================== */
+
+function DetailCard({
+  icon,
+  iconColor,
+  iconBackground,
+  badge,
+  title,
+  primary,
+  secondary,
+  onPress,
+  accessibilityLabel,
+  trailingIcon = 'chevron-forward',
+  trailingColor = SUBTLE,
+  children,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  iconColor: string;
+  iconBackground: string;
+  badge?: string;
+  title: string;
+  primary?: string;
+  secondary?: string;
+  onPress?: () => void;
+  accessibilityLabel: string;
+  trailingIcon?: keyof typeof Ionicons.glyphMap;
+  trailingColor?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <View
+      className="mx-3 mt-3 overflow-hidden rounded-[14px] border bg-white"
+      style={{ borderColor: CARD_BORDER, ...softShadow }}
+    >
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        className="flex-row items-center gap-3 p-3.5 active:opacity-85"
+      >
+        <View
+          className="h-[38px] w-[38px] items-center justify-center rounded-full"
+          style={{ backgroundColor: iconBackground }}
+        >
+          {badge !== undefined ? (
+            <RNText className="text-[10px] font-extrabold" style={{ color: iconColor }}>
+              {badge}
+            </RNText>
+          ) : (
+            <Ionicons name={icon} size={19} color={iconColor} />
+          )}
+        </View>
+
+        <View className="min-w-0 flex-1">
+          <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
+            {title}
+          </RNText>
+          {primary !== undefined ? (
+            <RNText className="mt-0.5 text-[12px]" style={{ color: MUTED }}>
+              {primary}
+            </RNText>
+          ) : null}
+          {secondary !== undefined ? (
+            <RNText className="text-[11.5px] leading-[15px]" style={{ color: SUBTLE }}>
+              {secondary}
+            </RNText>
+          ) : null}
+        </View>
+
+        <Ionicons name={trailingIcon} size={17} color={trailingColor} />
+      </Pressable>
+
       {children}
     </View>
   );
+}
+
+/** Copy for the collapsed Payment Method row (mirrors the method radios). */
+function paymentCopy(method: 'COD' | OnlinePaymentMethod): { title: string; blurb: string } {
+  if (method === 'COD') {
+    return { title: 'Cash on Delivery', blurb: 'Pay when your order arrives' };
+  }
+  if (method === 'UPI') {
+    return { title: 'UPI', blurb: 'Pay using PhonePe, Google Pay, Paytm or any UPI app' };
+  }
+  return { title: 'Card', blurb: 'Credit or debit card' };
 }
 
 function MethodRow({
@@ -624,16 +1342,19 @@ function MethodRow({
       accessibilityRole="radio"
       accessibilityLabel={title}
       accessibilityState={{ selected }}
-      className="flex-row items-center gap-3 p-4"
+      className="flex-row items-center gap-3 p-3.5"
+      // Selected row gets the brand-tint wash — the navbar active-capsule
+      // recipe — so the choice reads at a glance without heavy borders.
+      style={selected ? { backgroundColor: BRAND_TINT } : null}
     >
       <View
-        className="h-9 w-9 items-center justify-center rounded-full"
+        className="h-[34px] w-[34px] items-center justify-center rounded-full"
         style={{ backgroundColor: selected ? BRAND : SURFACE_MUTED }}
       >
-        <Ionicons name={icon} size={18} color={selected ? '#FFFFFF' : INK} />
+        <Ionicons name={icon} size={17} color={selected ? '#FFFFFF' : INK} />
       </View>
       <View className="flex-1">
-        <RNText className="text-[14px] font-bold" style={{ color: INK }}>
+        <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
           {title}
         </RNText>
         <RNText className="text-[11.5px]" style={{ color: MUTED }}>
@@ -648,19 +1369,6 @@ function MethodRow({
         {selected ? <View className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: BRAND }} /> : null}
       </View>
     </Pressable>
-  );
-}
-
-function TotalRow({ label, value }: { label: string; value: number }) {
-  return (
-    <View className="flex-row items-center justify-between">
-      <RNText className="text-[12.5px]" style={{ color: MUTED }}>
-        {label}
-      </RNText>
-      <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
-        {formatMoney(value)}
-      </RNText>
-    </View>
   );
 }
 
@@ -681,12 +1389,104 @@ function EmptyCart({ onBrowse }: { onBrowse: () => void }) {
 function addressLine(address: CheckoutAddress): string {
   return [
     address.line1,
+    address.line2 ?? '',
     address.landmark ?? '',
     `${address.city}, ${address.state} ${address.postalCode}`,
   ]
     .filter((part) => part.trim() !== '')
     .join(', ');
 }
+
+const styles = StyleSheet.create({
+  /* ── Progress over the artwork ──────────────────────────────────────── */
+
+  progressLine: {
+    // Sits on the dot's centre line: the step column is dot + label tall.
+    alignSelf: 'flex-start',
+    backgroundColor: '#D9DED6',
+    flex: 1,
+    height: 1.5,
+    marginTop: 10,
+  },
+
+  progressLineDone: {
+    backgroundColor: 'rgba(31, 122, 67, 0.5)',
+  },
+
+  progressStep: {
+    alignItems: 'center',
+    width: 62,
+  },
+
+  progressDot: {
+    alignItems: 'center',
+    borderRadius: 11,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
+  },
+
+  progressDotDone: {
+    backgroundColor: GREEN,
+  },
+
+  progressDotCurrent: {
+    backgroundColor: GREEN,
+  },
+
+  progressDotFuture: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#C6CEC3',
+    borderWidth: 1.5,
+  },
+
+  progressIndex: {
+    color: SUBTLE,
+    fontSize: 10.5,
+    fontWeight: '800',
+  },
+
+  progressIndexCurrent: {
+    color: '#FFFFFF',
+  },
+
+  progressLabel: {
+    color: '#2F3830',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 5,
+  },
+
+  progressLabelFuture: {
+    color: SUBTLE,
+  },
+
+  /* ── Place-order bar — the cart CTA vocabulary ───────────────────────── */
+
+  /** One brand action per screen, matching the cart's CTA vocabulary. */
+  placeOrder: {
+    height: 52,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    backgroundColor: BRAND,
+    paddingHorizontal: 24,
+  },
+  placeOrderPressed: {
+    backgroundColor: BRAND_DARK,
+    transform: [{ scale: 0.985 }],
+  },
+  placeOrderDisabled: {
+    opacity: 0.55,
+  },
+  placeOrderLabel: {
+    color: '#FFFFFF',
+    fontSize: 15.5,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+});
 
 /** Map transport/service failures to what a customer should read. */
 function friendlyError(raw: string): string {
@@ -696,6 +1496,11 @@ function friendlyError(raw: string): string {
   }
   if (lower.includes('store')) {
     return 'This order cannot be fulfilled right now. Please try again shortly.';
+  }
+  // The server's delivery rejections are already customer-actionable copy
+  // ("we do not deliver to this pincode yet") — pass them through untouched.
+  if (lower.includes('pincode') || lower.includes('deliver')) {
+    return raw;
   }
   if (lower.includes('network') || lower.includes('fetch') || lower.includes('aborted')) {
     return 'Unable to connect. Please check your connection and try again.';

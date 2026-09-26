@@ -44,10 +44,12 @@ export function EmptyState({
           onPress={onCta}
           accessibilityRole="button"
           accessibilityLabel={ctaLabel}
-          className="mt-3 rounded-full px-7 py-3"
-          style={{ backgroundColor: BRAND }}
+          className="mt-3 rounded-full border px-7 py-3"
+          style={{ borderColor: BRAND }}
         >
-          <RNText className="text-[14px] font-bold text-white">{ctaLabel}</RNText>
+          <RNText className="text-[14px] font-bold" style={{ color: BRAND }}>
+            {ctaLabel}
+          </RNText>
         </Pressable>
       ) : null}
     </View>

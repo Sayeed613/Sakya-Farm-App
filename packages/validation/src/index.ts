@@ -2,6 +2,7 @@ export * from './admin';
 export * from './cart';
 export * from './catalog';
 export * from './catalog-query';
+export * from './customer-journey';
 export * from './delivery';
 export * from './inventory';
 export * from './notifications';

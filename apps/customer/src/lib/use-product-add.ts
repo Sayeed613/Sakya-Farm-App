@@ -1,8 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 
+import { cartApi } from '../api/cart';
 import { catalogApi } from '../api/catalog';
 import type { ProductDetail, ProductListItem } from '@sakya/types';
+import { useAuthStore } from '../stores/auth-store';
 import { useGuestCartStore } from '../stores/guest-cart-store';
 
 /**
@@ -57,6 +59,7 @@ export function useProductAdd(
   const setQuantity = useGuestCartStore((state) => state.setQuantity);
   const rememberPrice = useGuestCartStore((state) => state.rememberPrice);
   const lines = useGuestCartStore((state) => state.lines);
+  const isAuthenticated = useAuthStore((state) => state.session !== null);
   const preferredVariantId = options?.preferredVariantId ?? null;
 
   const [resolving, setResolving] = useState(false);
@@ -104,11 +107,27 @@ export function useProductAdd(
   const add = useCallback(async () => {
     const detail = await fetchDetail();
     const variant = defaultVariantOfDetail(detail);
-    if (variant) {
-      rememberPrice(variant.id, variant.priceInPaise);
-      addLine(variant.id, 1, displaySnapshot(detail, variant));
+    if (!variant) return;
+
+    /*
+     * AUTHENTICATED: add to the SERVER cart, then refresh the ['cart']
+     * cache — the View Cart pill and cart screen read that cache, so the
+     * pill must appear on the very first post-login add. Nothing enters
+     * the guest store, which would be invisible (and merged again later).
+     */
+    if (isAuthenticated) {
+      await cartApi.addItem({
+        variantId: variant.id,
+        quantity: 1,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['cart'] });
+      return;
     }
-  }, [fetchDetail, addLine, rememberPrice]);
+
+    /* GUEST: local cart only. */
+    rememberPrice(variant.id, variant.priceInPaise);
+    addLine(variant.id, 1, displaySnapshot(detail, variant));
+  }, [fetchDetail, addLine, rememberPrice, isAuthenticated, queryClient]);
 
   /** Add exactly the chosen variant (picker/detail flows). */
   const addVariant = useCallback(
@@ -128,10 +147,20 @@ export function useProductAdd(
       detail.variants.find((candidate) => candidate.id === (owned?.variantId ?? preferredVariantId)) ??
       defaultVariantOfDetail(detail);
     if (!variant) return;
+
+    if (isAuthenticated) {
+      await cartApi.addItem({
+        variantId: variant.id,
+        quantity: 1,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['cart'] });
+      return;
+    }
+
     rememberPrice(variant.id, variant.priceInPaise);
     const current = lines.find((line) => line.variantId === variant.id)?.quantity ?? 0;
     setQuantity(variant.id, current + 1);
-  }, [fetchDetail, lines, setQuantity, rememberPrice, preferredVariantId]);
+  }, [fetchDetail, lines, setQuantity, rememberPrice, preferredVariantId, isAuthenticated, queryClient]);
 
   const decrement = useCallback(() => {
     const detail = readDetail();

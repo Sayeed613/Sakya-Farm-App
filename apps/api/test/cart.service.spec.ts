@@ -1,9 +1,29 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Prisma } from '../src/generated/prisma/client';
 import { CartService } from '../src/modules/cart/cart.service';
 import { PrismaService } from '../src/database/prisma.service';
+
+/** Commerce config the service reads; matches the production defaults. */
+function configMock() {
+  return {
+    get: (key: string) =>
+      key === 'commerce'
+        ? {
+            taxRatePercent: 5,
+            shippingFeeInPaise: 4900,
+            freeShippingThresholdInPaise: 59900,
+            codFeeInPaise: 0,
+            maxQuantityPerLine: 10,
+            maxCartLines: 25,
+            returnWindowDays: 7,
+            pendingOrderExpiryMinutes: 120,
+          }
+        : undefined,
+  } as unknown as ConfigService;
+}
 
 const VARIANT_ID = '00000000-0000-4000-8000-000000000001';
 const STORE_ID = '00000000-0000-4000-8000-000000000002';
@@ -57,6 +77,8 @@ describe('CartService', () => {
       providers: [
         CartService,
         { provide: PrismaService, useValue: prisma },
+        // Commerce rules (tax, shipping, caps) come from configuration.
+        { provide: ConfigService, useValue: configMock() },
       ],
     }).overrideProvider(PrismaService).useValue(prisma).compile();
     service = testModule.get(CartService);
@@ -92,11 +114,16 @@ describe('CartService', () => {
 
     const result = await service.getCurrentCart('user-1');
 
-    expect(result.subtotalInPaise).toBe(2 * 2400);
+    // Real commerce defaults from the config mock: 5% GST on the discounted
+    // subtotal, ₹49 shipping below the free threshold (₹599).
+    const subtotal = 2 * 2400;
+    const tax = Math.round(subtotal * 0.05);
+    const shipping = 4900;
+    expect(result.subtotalInPaise).toBe(subtotal);
     expect(result.discountInPaise).toBe(0);
-    expect(result.taxInPaise).toBe(0);
-    expect(result.shippingInPaise).toBe(0);
-    expect(result.totalInPaise).toBe(2 * 2400);
+    expect(result.taxInPaise).toBe(tax);
+    expect(result.shippingInPaise).toBe(shipping);
+    expect(result.totalInPaise).toBe(subtotal + tax + shipping);
   });
 
   it('recomputes line totals from the stored unit price, not from any client value', async () => {
@@ -231,8 +258,12 @@ describe('CartService', () => {
 
     expect(result.coupon).not.toBeNull();
     expect(result.coupon!.code).toBe('SAVE10');
+    // Real pricing: 10% off 2400, 5% GST on the discounted 2160, shipping
+    // below the free threshold.
     expect(result.discountInPaise).toBe(240);
-    expect(result.totalInPaise).toBe(2400 - 240);
+    expect(result.taxInPaise).toBe(108);
+    expect(result.shippingInPaise).toBe(4900);
+    expect(result.totalInPaise).toBe(2400 - 240 + 108 + 4900);
   });
 
   it('caps a fixed-amount coupon at the cart subtotal', async () => {
@@ -267,7 +298,10 @@ describe('CartService', () => {
     const result = await service.applyCoupon('user-1', { code: 'flat500' });
 
     expect(result.discountInPaise).toBe(200);
-    expect(result.totalInPaise).toBe(0);
+    // The discount zeroes the goods; the shipping charge remains.
+    expect(result.taxInPaise).toBe(0);
+    expect(result.shippingInPaise).toBe(4900);
+    expect(result.totalInPaise).toBe(4900);
   });
 
   it('rejects a coupon code that does not exist', async () => {

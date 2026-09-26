@@ -1,97 +1,39 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
-
-import { BottomTabBar } from '../../src/components/navigation/BottomTabBar';
+import { Stack } from 'expo-router';
 
 /**
- * Shop tabs: Home | Categories | Sakya Fresh | Orders | Account.
+ * Shop stack.
  *
- * The tab bar is the custom Sakya component. Cart has NO tab — cart state is
- * reached through the green View Cart pill, so the bottom bar stays pure
- * navigation (Blinkit pattern). Detail routes are part of the navigator for
- * stack history but render no tab (`href: null`, honoured by the custom bar).
+ * Structure: this Stack wraps the (tabs) navigator and every pushed
+ * destination. That is the fix for the long-standing back-button defect — in
+ * the previous layout every detail screen was a *tab* (`href: null`), and a
+ * tab navigator resolves back to its first route, so back from cart, product,
+ * order detail, settings, … always dumped the customer on Home.
+ *
+ * With a Stack above the tabs:
+ *   Home → product → back            → Home
+ *   Home → category → product → back → category
+ *   Home → cart → checkout → back    → cart
+ *   Orders → order detail → back     → Orders
+ *
+ * Pushed screens also cover the floating tab bar automatically, so no route
+ * needs `tabBarStyle: { display: 'none' }` any more.
  */
 export default function ShopLayout() {
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-      }}
-      tabBar={(props) => <BottomTabBar {...props} />}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="categories"
-        options={{
-          title: 'Categories',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="grid-outline" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="fresh"
-        options={{
-          title: 'Sakya Fresh',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="leaf" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="orders"
-        options={{
-          title: 'Orders',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="receipt-outline" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Account',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-outline" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="cart"
-        options={{
-          href: null,
-          // Cart is a focused review step: the floating nav bar hides here so
-          // the list and checkout CTA own the bottom of the screen.
-          tabBarStyle: { display: 'none' },
-        }}
-      />
-      <Tabs.Screen
-        name="checkout"
-        options={{
-          href: null,
-          // Checkout is a focused flow: the floating nav bar stays hidden.
-          tabBarStyle: { display: 'none' },
-        }}
-      />
-      <Tabs.Screen
-        name="products/[slug]"
-        options={{
-          href: null,
-          // Full-bleed product experience: the floating nav bar hides for the
-          // detail page and returns on back (custom bar honours this option).
-          tabBarStyle: { display: 'none' },
-        }}
-      />
-      <Tabs.Screen name="categories/[slug]" options={{ href: null }} />
-      <Tabs.Screen name="notifications" options={{ href: null }} />
-    </Tabs>
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="cart" />
+      <Stack.Screen name="checkout" />
+      <Stack.Screen name="products/[slug]" />
+      <Stack.Screen name="categories/[slug]" />
+      <Stack.Screen name="orders/[id]" />
+      <Stack.Screen name="notifications" />
+      <Stack.Screen name="edit-profile" />
+      <Stack.Screen name="settings" />
+      <Stack.Screen name="support" />
+      <Stack.Screen name="delete-account" />
+      <Stack.Screen name="wishlist" />
+      <Stack.Screen name="address-book" />
+    </Stack>
   );
 }

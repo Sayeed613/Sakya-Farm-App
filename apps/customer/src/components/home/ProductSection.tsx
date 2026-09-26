@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { FlatList, Pressable, Text as RNText, View, type ListRenderItemInfo } from 'react-native';
 
 import type { ProductListItem } from '@sakya/types';
+import { useResponsive } from '../../lib/responsive';
 import { ProductCard } from '../commerce/ProductCard';
 
 export interface ProductSectionProps {
@@ -26,8 +27,12 @@ export interface ProductSectionProps {
 function ProductSectionInner({ title, subtitle, products, onPressProduct, onSeeAll, onQuickView, onPickVariant }: ProductSectionProps) {
   if (products.length === 0) return null;
 
+  const { railCardWidth, screenPadding } = useResponsive();
+
   const renderItem = ({ item }: ListRenderItemInfo<ProductListItem>) => (
-    <View className="w-[168px]">
+    // Responsive width (≈2.2 cards visible): fixed 168px cards hid info on
+    // small phones and looked lost on large ones.
+    <View style={{ width: railCardWidth }}>
       <ProductCard product={item} onPress={onPressProduct} onQuickView={onQuickView} onPickVariant={onPickVariant} />
     </View>
   );
@@ -57,7 +62,7 @@ function ProductSectionInner({ title, subtitle, products, onPressProduct, onSeeA
         showsHorizontalScrollIndicator={false}
         data={products}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}
+        contentContainerStyle={{ paddingHorizontal: screenPadding, gap: 12 }}
         renderItem={renderItem}
       />
     </View>

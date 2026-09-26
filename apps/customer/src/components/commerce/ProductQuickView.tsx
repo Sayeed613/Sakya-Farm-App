@@ -1,10 +1,10 @@
+import { BackHandler, Platform } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { router } from 'expo-router';
+import type { ComponentProps, MutableRefObject, ReactNode } from 'react';
 
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import {
-  Dimensions,
   FlatList,
   Modal,
   PanResponder,
@@ -12,9 +12,12 @@ import {
   ScrollView,
   Share,
   Text,
+  useWindowDimensions,
   View,
   type GestureResponderEvent,
   type PanResponderGestureState,
+  type NativeSyntheticEvent,
+  type NativeScrollEvent,
   type ViewToken,
 } from 'react-native';
 
@@ -28,117 +31,112 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
 import { useQuery } from '@tanstack/react-query';
+import { router } from 'expo-router';
 
 import { catalogApi } from '../../api/catalog';
+import { FALLBACK_CATEGORY_ICON } from '../../config/category-icons';
+import { getCategoryImage } from '../../config/category-images';
 import type {
+  CategorySummary,
   ProductDetail,
   ProductListItem,
 } from '@sakya/types';
 
 import { formatMoney } from '../../lib/format';
+import { deckFeaturesFor } from './deck-features';
 import { useProductAdd } from '../../lib/use-product-add';
-import { VariantPickerSheet, type VariantPickerState } from './VariantPickerSheet';
+import { useWishlist } from '../../hooks/use-wishlist';
+import { useResponsive } from '../../lib/responsive';
+import { useAuthStore } from '../../stores/auth-store';
+import { ProductImageGallery } from './ProductImageGallery';
+import { QuantityStepper } from './QuantityStepper';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+/* ============================================================
+   REFERENCE QUICK-VIEW GEOMETRY
+
+   [peek][gap][ CURRENT PRODUCT ][gap][peek]
+
+   The card is almost full height, but it is a real rounded sheet:
+   the home screen remains visible above/below it and the product
+   content scrolls vertically inside the card.
+
+   The widths are derived per-render from the live viewport (see
+   CategoryProductPager) — this file used to freeze them from `Dimensions`
+   at module load, so on a wide browser the cards sized to the whole window.
+============================================================ */
+const INNER_PEEK = 22;
+const INNER_GAP = 10;
 
 const BRAND = '#0B594C';
-const BG = '#F6F6FC';
-const TEXT = '#292D2B';
-const MUTED = '#858982';
-const BORDER = '#E9E9E7';
+const CARD_BG = '#FFFFFF';
+const TEXT = '#171A18';
+const MUTED = '#8C8A80';
+const BORDER = '#E4DACA';
+const CTA_GREEN = '#0B594C';
 
-/* ============================================================
-   PRODUCT DECK MEASUREMENTS — named constants, no magic numbers.
-
-   GEOMETRY MODEL (keeps the CTA on screen in BOTH states):
-
-     CONTAINER  bottom-anchored, height = EXPANDED_HEIGHT, overflow
-                hidden. Its bottom edge IS the device bottom, so a
-                gap below the deck is geometrically impossible.
-                ONE shared value (deckTy) drives everything:
-                  0 ............ expanded
-                  SHIFT ........ collapsed (quick view)
-                  > SHIFT ...... dismissal (deck leaves with finger)
-
-     FOOTER     lives inside the container, absolutely at its
-                bottom, with a UI-thread counter-translate of
-                −min(deckTy, SHIFT). Collapse: container slides
-                down, footer slides back up — pinned to the device
-                bottom in both states. Dismissal: the counter-
-                translate saturates, so the footer travels down
-                WITH the deck and leaves the screen together.
-
-     Overflow   dragging below the collapsed snap moves deckTy
-                past SHIFT — the whole deck (rounded face + footer)
-                exits with the finger.
-============================================================ */
-
-/** Deck's top inset when fully expanded (status-bar aware at runtime). */
-const QUICK_VIEW_EXPANDED_TOP_INSET = 24;
-/** Collapsed (quick view) deck height. Clamped for small screens. */
-const QUICK_VIEW_COLLAPSED_HEIGHT = Math.min(620, SCREEN_HEIGHT - 120);
-/** Full deck height: one surface, bottom-anchored. */
-const QUICK_VIEW_EXPANDED_HEIGHT = SCREEN_HEIGHT - QUICK_VIEW_EXPANDED_TOP_INSET;
-/** Hero image height — identical in both states so switching products never resizes the deck. */
-const QUICK_VIEW_HERO_HEIGHT = 300;
-/** Header control strip height. */
-const QUICK_VIEW_HEADER_HEIGHT = 56;
-/** Drag-handle strip height (the pan zone above the header). */
-const QUICK_VIEW_HANDLE_HEIGHT = 28;
-/** Fixed Add-to-Cart bar: content height before the device bottom inset. */
-const QUICK_VIEW_CTA_MIN_HEIGHT = 84;
-/** Deck top-corner radius. */
-const QUICK_VIEW_BORDER_RADIUS = 24;
-/** Deck horizontal padding. */
-const QUICK_VIEW_HORIZONTAL_PADDING = 14;
-
-/** Entrance: bottom → collapsed. Single timing animation, no bounce. */
+const CARD_TOP_EXTRA = 10;
+const CARD_BOTTOM_EXTRA = 10;
+const QUICK_VIEW_HANDLE_HEIGHT = 22;
+const QUICK_VIEW_HEADER_HEIGHT = 54;
+const QUICK_VIEW_HERO_HEIGHT = 320;
+const QUICK_VIEW_BORDER_RADIUS = 22;
+const QUICK_VIEW_HORIZONTAL_PADDING = 12;
 const QUICK_VIEW_ENTRANCE_MS = 320;
-/** Snap settling (expand/collapse after release). */
-const QUICK_VIEW_SETTLE_MS = 280;
-/** Dismissal: collapsed → off-screen, then unmount. */
-const QUICK_VIEW_EXIT_MS = 260;
-/** Flick velocity (px/ms) counting as directional intent. */
-const QUICK_VIEW_FLICK_VELOCITY = 0.75;
-/** Displacement past the collapsed snap that commits a dismissal. */
-const QUICK_VIEW_DISMISS_BUFFER = 110;
+const QUICK_VIEW_SETTLE_MS = 260;
+const QUICK_VIEW_EXIT_MS = 240;
+const QUICK_VIEW_FLICK_VELOCITY = 0.45;
+const QUICK_VIEW_DISMISS_DRAG = 0.16;
+/* Footer: variant title + price + "Inclusive of all taxes" (3 lines ≈ 52px)
+ * plus padding — sized so the taxes line is never clipped. */
+const BOTTOM_CTA_HEIGHT = 78;
 
-/** deckTy snaps: 0 = expanded; SHIFT = collapsed. */
-const DECK_EXPANDED = 0;
-const DECK_SHIFT = QUICK_VIEW_EXPANDED_HEIGHT - QUICK_VIEW_COLLAPSED_HEIGHT;
-/** Fully below the screen — the entrance start / dismissal target. */
-const DECK_OFFSCREEN = QUICK_VIEW_EXPANDED_HEIGHT;
+export function derivePerUnitLine(
+  unitTitle: string,
+  priceInPaise: number,
+): string | null {
+  const match = /^\s*([0-9]+(?:\.[0-9]+)?)\s*(g|kg|ml|l|pc|pcs)\s*$/i.exec(unitTitle);
+  if (!match) return null;
+  const value = Number(match[1]);
+  const unit = (match[2] ?? '').toLowerCase();
+  if (!Number.isFinite(value) || value <= 0 || priceInPaise <= 0) return null;
 
-/* ============================================================
-   PRODUCT CONTEXT
+  let baseValue = value;
+  let baseUnit = unit;
+  if (unit === 'kg') {
+    baseValue = value * 1000;
+    baseUnit = 'g';
+  } else if (unit === 'l') {
+    baseValue = value * 1000;
+    baseUnit = 'ml';
+  }
 
-   Whatever products the caller passes become the slides.
-   Veg = 10 products → 10 slides (1/10 … 10/10). Search results,
-   Fresh, filtered listings — the current context IS the deck.
-   Never the whole catalog, never an injected item.
-============================================================ */
+  if (baseUnit === 'pc' || baseUnit === 'pcs') {
+    const perPc = (priceInPaise / 100) / value;
+    return `₹${trimNumber(perPc)} / pc`;
+  }
+
+  const per100 = ((priceInPaise / 100) * 100) / baseValue;
+  return `₹${trimNumber(per100)} / 100 ${baseUnit}`;
+}
+
+function trimNumber(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isInteger(rounded)
+    ? String(rounded)
+    : rounded.toFixed(2).replace(/0$/, '');
+}
 
 export interface CategoryProductPagerProps {
   visible: boolean;
-
-  /** Optional client-side narrowing by category slug (slugs are the public id). */
   categorySlug?: string | null;
-
   categoryName?: string;
-
   products: ProductListItem[];
-
   initialProductSlug?: string | null;
-
   onClose: () => void;
-
-  /** Real cross-sell items for the "Similar products" rail. */
   relatedProducts?: ProductListItem[];
-
-  /** View-details tap → full product page. */
   onOpenProduct?: (slug: string) => void;
+  onOpenCategory?: (slug: string) => void;
 }
 
 export function CategoryProductPager({
@@ -150,49 +148,46 @@ export function CategoryProductPager({
   onClose,
   relatedProducts,
   onOpenProduct,
+  onOpenCategory,
 }: CategoryProductPagerProps) {
+  void categoryName;
+
+  const insets = useSafeAreaInsets();
+
   /*
-   * ONLY PRODUCTS FROM THE GIVEN CONTEXT (when a category is provided).
-   * Slugs — not internal ids — are the public category identifier.
+   * Live viewport, not `Dimensions` at module load. The pager is a full-screen
+   * Modal; without this cap a desktop browser sized its cards to the whole
+   * window while the rest of the app lives in a 480px shell.
    */
+  const { contentWidth } = useResponsive();
+  const { height: windowHeight } = useWindowDimensions();
+  const CARD_WIDTH = contentWidth - 2 * (INNER_PEEK + INNER_GAP);
+  const SNAP_INTERVAL = CARD_WIDTH + INNER_GAP;
+  const PAGER_PAD = (contentWidth - CARD_WIDTH) / 2;
+  const SCREEN_HEIGHT = windowHeight;
+
   const categoryProducts = useMemo(() => {
     if (!categorySlug) return products;
     return products.filter((product) =>
-      product.categories?.some(
-        (category) => category.slug === categorySlug,
-      ),
+      product.categories?.some((category) => category.slug === categorySlug),
     );
   }, [products, categorySlug]);
 
-  const slides = useMemo(() => {
-    if (categoryProducts.length > 0) {
-      return categoryProducts;
-    }
-    return products;
-  }, [categoryProducts, products]);
+  const slides = useMemo(
+    () => (categoryProducts.length > 0 ? categoryProducts : products),
+    [categoryProducts, products],
+  );
 
   const initialIndex = useMemo(() => {
     if (!initialProductSlug) return 0;
-    const index = slides.findIndex(
-      (product) => product.slug === initialProductSlug,
-    );
-    return index >= 0 ? index : 0;
+    const found = slides.findIndex((product) => product.slug === initialProductSlug);
+    return found >= 0 ? found : 0;
   }, [slides, initialProductSlug]);
 
   const [activeIndex, setActiveIndex] = useState(initialIndex);
-  const [expanded, setExpanded] = useState(false);
-  /**
-   * Pager viewport height, measured once. Slides get this as an EXPLICIT
-   * pixel height — the VirtualizedList's cell-renderer wrappers size to
-   * content, so flex alone cannot bound a slide; explicit pixels can.
-   */
   const [pagerHeight, setPagerHeight] = useState(0);
-  /**
-   * Selected variant per product slug. Lives here (deck level) so the
-   * expanded-state chips and the fixed footer always agree — there is
-   * ONE purchasable selection per product at any moment.
-   */
   const [variantSelections, setVariantSelections] = useState<Record<string, string>>({});
+
   const selectVariant = useCallback((slug: string, variantId: string | null) => {
     setVariantSelections((previous) => ({
       ...previous,
@@ -200,227 +195,140 @@ export function CategoryProductPager({
     }));
   }, []);
 
-  /*
-   * GESTURE STATE MIRRORS — the PanResponder is created once, so its
-   * callbacks read refs, never stale closure state. No re-renders happen
-   * per gesture frame: deckTy is a shared value written on the UI thread.
-   */
-  const expandedRef = useRef(false);
-  useEffect(() => {
-    expandedRef.current = expanded;
-  }, [expanded]);
-
-  /** The active slide's live scroll offset (for pull-down gesture transfer). */
-  const activeScrollYRef = useRef(0);
-
   const listRef = useRef<FlatList<ProductListItem>>(null);
+  const activeScrollY = useRef(0);
+  const dragStart = useRef(0);
+  const hasEntered = useRef(false);
+  const closingRef = useRef(false);
+
+  /*
+   * True while the user is touching the image carousel inside a slide.
+   * The outer product pager then releases horizontal scrolling so gallery
+   * swipes page images instead of flipping products.
+   */
+  const [galleryGesture, setGalleryGesture] = useState(false);
+
+  const deckTy = useSharedValue(SCREEN_HEIGHT);
+
+  const snapOffsets = useMemo(
+    () => slides.map((_, index) => SNAP_INTERVAL * index),
+    [slides],
+  );
+
+  const categoryIndex = useQuery({
+    queryKey: ['catalog', 'categories'],
+    queryFn: catalogApi.listCategories,
+    staleTime: 5 * 60_000,
+  });
+  const categories: CategorySummary[] = categoryIndex.data ?? [];
 
   useEffect(() => {
     if (!visible) return;
     setActiveIndex(initialIndex);
+    activeScrollY.current = 0;
   }, [visible, initialIndex]);
-
-  /*
-   * DECK POSITION — ONE shared value for the whole surface:
-   *   0 = expanded, DECK_SHIFT = collapsed, offscreen = gone.
-   * The entrance runs ONCE per open (timing, no bounce); switching
-   * products never touches it; expanded/collapsed state survives
-   * product switches.
-   */
-  const deckTy = useSharedValue(DECK_OFFSCREEN);
-  const hasEntered = useRef(false);
-  const closingRef = useRef(false);
 
   useEffect(() => {
     if (visible && !hasEntered.current) {
       hasEntered.current = true;
       closingRef.current = false;
-      deckTy.value = DECK_OFFSCREEN;
-      deckTy.value = withTiming(DECK_EXPANDED + DECK_SHIFT, {
+      deckTy.value = SCREEN_HEIGHT;
+      deckTy.value = withTiming(0, {
         duration: QUICK_VIEW_ENTRANCE_MS,
         easing: Easing.out(Easing.cubic),
       });
-      setExpanded(false);
     }
+
     if (!visible) {
       hasEntered.current = false;
       closingRef.current = false;
     }
   }, [visible, deckTy]);
 
-  const snapDeckTo = useCallback(
-    (target: number) => {
-      deckTy.value = withTiming(target, {
-        duration: QUICK_VIEW_SETTLE_MS,
-        easing: Easing.out(Easing.cubic),
-      });
-    },
-    [deckTy],
-  );
+  const snapDeckToRest = useCallback(() => {
+    deckTy.value = withTiming(0, {
+      duration: QUICK_VIEW_SETTLE_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [deckTy]);
 
-  const collapse = useCallback(() => {
-    setExpanded(false);
-    snapDeckTo(DECK_EXPANDED + DECK_SHIFT);
-  }, [snapDeckTo]);
-
-  const expand = useCallback(() => {
-    setExpanded(true);
-    snapDeckTo(DECK_EXPANDED);
-  }, [snapDeckTo]);
-
-  /**
-   * DISMISSAL — the deck (footer included) animates down, the backdrop
-   * fades with it, and only after the exit completes does the Modal
-   * unmount. The parent's onClose runs once, after the surface is gone.
-   */
   const handleClose = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
-    deckTy.value = withTiming(DECK_OFFSCREEN, {
+    deckTy.value = withTiming(SCREEN_HEIGHT, {
       duration: QUICK_VIEW_EXIT_MS,
       easing: Easing.in(Easing.cubic),
     });
-    setTimeout(() => {
-      onClose();
-    }, QUICK_VIEW_EXIT_MS + 20);
+    setTimeout(onClose, QUICK_VIEW_EXIT_MS + 20);
   }, [deckTy, onClose]);
 
-  /*
-   * GESTURE SYSTEM — one vertical pan, four entry points:
-   *
-   *   1. CAPTURE around the pager (ancestor of the FlatList)  → wins the
-   *      gesture BEFORE the horizontal pager can swallow it. Collapsed:
-   *      any vertical intent. Expanded: only a top-of-content pull-down.
-   *   2. handle + header   → deck follows the finger (both states)
-   *   3. expanded content  → ScrollView scrolls; at scroll top a downward
-   *                          pull transfers to the deck via (1).
-   *
-   * Horizontal intent is always refused here so the pager owns left/right.
-   */
-  const dragStart = useRef(0);
+  useEffect(() => {
+    // BackHandler is Android-only; importing its API on web logs a warning
+    // ("BackHandler is not supported on web"). Web closes the deck via the
+    // close button / backdrop, so only subscribe on Android.
+    if (!visible || Platform.OS !== 'android') return;
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        handleClose();
+        return true;
+      },
+    );
+    return () => subscription.remove();
+  }, [visible, handleClose]);
 
-  const isVerticalIntent = (gesture: PanResponderGestureState, min: number) =>
-    Math.abs(gesture.dy) > min && Math.abs(gesture.dy) > Math.abs(gesture.dx);
+  /*
+   * Only capture a downward vertical gesture when the active product
+   * ScrollView is already at the top. Upward gestures remain owned by
+   * the ScrollView, so product details can actually scroll.
+   */
+  const isVerticalDownIntent = (
+    gesture: PanResponderGestureState,
+    min: number,
+  ) =>
+    gesture.dy > min && gesture.dy > Math.abs(gesture.dx);
 
   const panResponder = useRef(
     PanResponder.create({
-      // Never claim on touch start: taps on content must stay taps.
       onStartShouldSetPanResponderCapture: () => false,
       onStartShouldSetPanResponder: () => false,
-
-      /*
-       * CAPTURE PHASE — attached to the wrapper AROUND the FlatList so
-       * vertical intent beats the horizontal pager's own responder.
-       */
       onMoveShouldSetPanResponderCapture: (
         _event: GestureResponderEvent,
         gesture: PanResponderGestureState,
-      ) => {
-        if (!isVerticalIntent(gesture, 6)) return false;
-        if (expandedRef.current) {
-          return activeScrollYRef.current <= 0.5 && gesture.dy > 0;
-        }
-        return true;
-      },
-
-      /*
-       * BUBBLE PHASE (handle + header): deck control in both states.
-       * While expanded this only fires for touches on the handle/header —
-       * content scrolls normally below them.
-       */
+      ) =>
+        activeScrollY.current <= 1 &&
+        isVerticalDownIntent(gesture, 7),
       onMoveShouldSetPanResponder: (
         _event: GestureResponderEvent,
         gesture: PanResponderGestureState,
-      ) => !expandedRef.current && isVerticalIntent(gesture, 8),
-
+      ) =>
+        activeScrollY.current <= 1 &&
+        isVerticalDownIntent(gesture, 9),
       onPanResponderGrant: () => {
         dragStart.current = deckTy.value;
       },
-
-      // Finger movement = deck movement. Direct, no easing while dragging.
       onPanResponderMove: (_event, gesture) => {
         const next = dragStart.current + gesture.dy;
-        if (next < DECK_EXPANDED) {
-          // Soft rubber-band above the expanded snap.
-          deckTy.value = DECK_EXPANDED + (next - DECK_EXPANDED) * 0.15;
-        } else {
-          deckTy.value = Math.min(next, DECK_OFFSCREEN);
-        }
+        deckTy.value = Math.min(Math.max(next, 0), SCREEN_HEIGHT);
       },
-
-      /*
-       * RELEASE — destination from velocity + displacement + direction:
-       *
-       *   dragged past collapse + buffer, or flick down → dismiss
-       *   from expanded:  strong/small downward → collapse; upward → expand
-       *   from collapsed: strong up / past halfway up → expand
-       *                   otherwise → nearest snap
-       */
       onPanResponderRelease: (_event, gesture) => {
         const current = dragStart.current + gesture.dy;
         const flickDown = gesture.vy > QUICK_VIEW_FLICK_VELOCITY;
-        const flickUp = gesture.vy < -QUICK_VIEW_FLICK_VELOCITY;
-        const collapsedTy = DECK_EXPANDED + DECK_SHIFT;
-
-        if (current > collapsedTy) {
-          if (
-            current > collapsedTy + QUICK_VIEW_DISMISS_BUFFER ||
-            flickDown
-          ) {
-            handleClose();
-          } else {
-            collapse();
-          }
-          return;
-        }
-
-        if (expandedRef.current) {
-          if (flickDown || current > DECK_SHIFT / 2) {
-            collapse();
-          } else {
-            snapDeckTo(DECK_EXPANDED);
-          }
-          return;
-        }
-
-        if (flickDown) {
-          if (current > DECK_SHIFT / 2 + QUICK_VIEW_DISMISS_BUFFER) {
-            handleClose();
-          } else {
-            collapse();
-          }
-          return;
-        }
-        if (flickUp) {
-          expand();
-          return;
-        }
-        if (current < DECK_SHIFT / 2) {
-          expand();
+        const dismissDrag = SCREEN_HEIGHT * QUICK_VIEW_DISMISS_DRAG;
+        if (flickDown || current > dismissDrag) {
+          handleClose();
         } else {
-          collapse();
+          snapDeckToRest();
         }
       },
-
-      onPanResponderTerminate: () => {
-        // Gesture stolen mid-drag: settle to the nearest snap, never hang.
-        if (deckTy.value < DECK_SHIFT / 2) {
-          expand();
-        } else {
-          collapse();
-        }
-      },
+      onPanResponderTerminate: () => snapDeckToRest(),
     }),
   ).current;
 
-  const panHandlers = panResponder.panHandlers;
-
-  /* Backdrop rides the deck's own position: one shared value drives both,
-     so entry and exit dim/un-dim together with the surface. */
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: interpolate(
       deckTy.value,
-      [DECK_EXPANDED + DECK_SHIFT, DECK_OFFSCREEN],
+      [0, SCREEN_HEIGHT],
       [0.78, 0],
       Extrapolation.CLAMP,
     ),
@@ -430,44 +338,19 @@ export function CategoryProductPager({
     transform: [{ translateY: deckTy.value }],
   }));
 
-  /* Footer counter-translate: pinned to the device bottom while deckTy
-     goes 0 → SHIFT; saturates past SHIFT so dismissal takes it away. */
-  const footerStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: -Math.min(deckTy.value, DECK_SHIFT) }],
-  }));
-
-  const viewabilityConfig = useRef({
-    itemVisiblePercentThreshold: 70,
-  }).current;
-
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 70 }).current;
   const onViewableItemsChanged = useRef(
-    ({
-      viewableItems,
-    }: {
-      viewableItems: ViewToken[];
-    }) => {
-      const item = viewableItems.find(
-        (candidate) => candidate.isViewable,
-      );
+    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      const item = viewableItems.find((candidate) => candidate.isViewable);
       if (item?.index != null) {
         setActiveIndex(item.index);
+        activeScrollY.current = 0;
       }
     },
   ).current;
 
-  const activeProduct = slides[activeIndex] ?? null;
-
-  const handleSearch = () => {
-    onClose();
-    router.push('/search');
-  };
-
-  const handleShare = () => {
-    if (!activeProduct) return;
-    void Share.share({
-      message: `${activeProduct.title} — Sakya Farms`,
-    });
-  };
+  const cardTopGap = insets.top + CARD_TOP_EXTRA;
+  const cardBottomGap = Math.max(insets.bottom, 10) + CARD_BOTTOM_EXTRA;
 
   return (
     <Modal
@@ -478,10 +361,6 @@ export function CategoryProductPager({
       statusBarTranslucent
       onRequestClose={handleClose}
     >
-      {/* DIM LAYER — a SIBLING of the deck (never its parent). Parent
-          opacity would dim the deck subtree too; siblings keep the page
-          dimmed and the deck fully opaque. Opacity is tied to the deck's
-          translate so they enter/leave together. */}
       <Animated.View
         testID="deck-backdrop"
         style={[
@@ -496,193 +375,116 @@ export function CategoryProductPager({
           backdropStyle,
         ]}
       />
-      {/* Tap-to-close catcher — above the backdrop, below the deck. */}
+
       <Pressable
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
         onPress={handleClose}
         accessibilityLabel="Close product browser"
       />
 
-        {/* THE PRODUCT DECK — ONE bottom-anchored surface. Its bottom edge
-            is always the device bottom: no gap is geometrically possible. */}
-        <Animated.View
-          testID="deck-surface"
-          style={[
-            {
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: QUICK_VIEW_EXPANDED_HEIGHT,
-              borderTopLeftRadius: QUICK_VIEW_BORDER_RADIUS,
-              borderTopRightRadius: QUICK_VIEW_BORDER_RADIUS,
-              overflow: 'hidden',
-              backgroundColor: BG,
-            },
-            deckStyle,
-          ]}
+      <Animated.View
+        testID="deck-surface"
+        style={[
+          {
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 0,
+            overflow: 'hidden',
+          },
+          deckStyle,
+        ]}
+      >
+        <View
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: cardTopGap,
+            bottom: cardBottomGap,
+            overflow: 'hidden',
+          }}
+          onLayout={(event) => {
+            const next = event.nativeEvent.layout.height;
+            setPagerHeight((previous) =>
+              Math.abs(previous - next) > 1 ? next : previous,
+            );
+          }}
+          {...panResponder.panHandlers}
         >
-          {/* DRAG HANDLE */}
-          <View
-            {...panHandlers}
-            style={{
-              height: QUICK_VIEW_HANDLE_HEIGHT,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: BG,
-            }}
-          >
-            <View style={{ width: 44, height: 4, borderRadius: 2, backgroundColor: '#D6D3C8' }} />
-          </View>
-
-          {/* PRODUCT HEADER — close / context name + position counter / actions */}
-          <View
-            {...panHandlers}
-            style={{
-              height: QUICK_VIEW_HEADER_HEIGHT,
-              flexDirection: 'row',
-              alignItems: 'center',
-              paddingHorizontal: 12,
-              backgroundColor: BG,
-            }}
-          >
-            <Pressable
-              onPress={handleClose}
-              accessibilityRole="button"
-              accessibilityLabel="Close product browser"
-              style={{ height: 44, width: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: '#FFFFFF' }}
-            >
-              <Ionicons name="chevron-down" size={22} color={TEXT} />
-            </Pressable>
-
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 }}>
-              <Text style={{ color: TEXT, fontSize: 15, fontWeight: '800' }} numberOfLines={1}>
-                {categoryName ?? 'Sakya Farms'}
-              </Text>
-              <Text testID="deck-counter" style={{ color: MUTED, fontSize: 10.5, marginTop: 1 }}>
-                {slides.length === 0
-                  ? 'No products'
-                  : `${activeIndex + 1} / ${slides.length}`}
-              </Text>
-            </View>
-
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable
-                onPress={handleSearch}
-                accessibilityRole="button"
-                accessibilityLabel="Search products"
-                style={{ height: 44, width: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: '#FFFFFF' }}
+          <FlatList
+            ref={listRef}
+            data={slides}
+            horizontal
+            /*
+             * While the user is swiping the image carousel inside a slide,
+             * the outer product pager must not claim the same horizontal
+             * gesture — otherwise gallery swipes flip products instead of
+             * images. The slide reports touches via onCarouselTouchStart/End.
+             */
+            scrollEnabled={!galleryGesture}
+            showsHorizontalScrollIndicator={false}
+            bounces={false}
+            decelerationRate="fast"
+            snapToOffsets={snapOffsets}
+            snapToAlignment="start"
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: PAGER_PAD }}
+            initialScrollIndex={initialIndex}
+            viewabilityConfig={viewabilityConfig}
+            onViewableItemsChanged={onViewableItemsChanged}
+            getItemLayout={(_, index) => ({
+              length: SNAP_INTERVAL,
+              offset: PAGER_PAD + SNAP_INTERVAL * index,
+              index,
+            })}
+            keyExtractor={(item) => item.id ?? item.slug}
+            renderItem={({ item, index }) => (
+              <View
+                style={{
+                  width: CARD_WIDTH,
+                  height: pagerHeight > 0 ? pagerHeight : undefined,
+                  marginRight: INNER_GAP,
+                  overflow: 'hidden',
+                  borderRadius: QUICK_VIEW_BORDER_RADIUS,
+                  backgroundColor: CARD_BG,
+                }}
               >
-                <Ionicons name="search-outline" size={20} color={TEXT} />
-              </Pressable>
-
-              <Pressable
-                onPress={handleShare}
-                accessibilityRole="button"
-                accessibilityLabel="Share product"
-                style={{ height: 44, width: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: '#FFFFFF' }}
-              >
-                <Ionicons name="share-outline" size={19} color={TEXT} />
-              </Pressable>
-            </View>
-          </View>
-
-          {/* HORIZONTAL PRODUCT PAGING — one swipe = one product. The
-              capture-phase pan on this wrapper takes vertical intent
-              BEFORE the pager sees it; horizontal intent is refused, so
-              the two gesture systems cannot cross-trigger.
-              overflow:'hidden' is required: it zeroes the flex item's
-              implicit min-height so the FlatList (and the slide
-              ScrollViews inside it) stay BOUNDED to the deck instead of
-              growing to their content height — that bound is what makes
-              the expanded content scrollable at all. */}
-          <View
-            style={{ flex: 1, overflow: 'hidden' }}
-            onLayout={(event) => {
-              const next = event.nativeEvent.layout.height;
-              setPagerHeight((previous) =>
-                Math.abs(previous - next) > 1 ? next : previous,
-              );
-            }}
-            {...panHandlers}
-          >
-            <FlatList
-              ref={listRef}
-              data={slides}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              bounces={false}
-              decelerationRate="fast"
-              style={{ flex: 1 }}
-              initialScrollIndex={initialIndex}
-              viewabilityConfig={viewabilityConfig}
-              onViewableItemsChanged={onViewableItemsChanged}
-              getItemLayout={(_, index) => ({
-                length: SCREEN_WIDTH,
-                offset: SCREEN_WIDTH * index,
-                index,
-              })}
-              keyExtractor={(item) => item.id ?? item.slug}                renderItem={({ item, index }) => (
-                  /* EXPLICIT pixel height (measured via onLayout) — the
-                     VirtualizedList's cell renderer sizes to content, so
-                     only absolute pixels bound the slide; that bound is
-                     what makes the expanded ScrollView scrollable. */
-                  <View
-                    style={{
-                      width: SCREEN_WIDTH,
-                      height: pagerHeight > 0 ? pagerHeight : undefined,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <ProductSlide
-                      product={item}
-                      isActive={index === activeIndex}
-                      expanded={expanded}
-                      slideHeight={pagerHeight}
-                      selectedVariantId={variantSelections[item.slug] ?? null}
-                      onSelectVariant={selectVariant}
-                      relatedProducts={relatedProducts}
-                      onOpenProduct={onOpenProduct}
-                      onExpand={expand}
-                      activeScrollYRef={activeScrollYRef}
-                    />
-                  </View>
-                )}
-            />
-          </View>
-
-          {/* FIXED ADD-TO-CART BAR — inside the container, absolutely at
-              its bottom, counter-translated so it stays pinned to the
-              device bottom in BOTH states and leaves WITH the deck on
-              dismissal. Never scrolls, never re-mounts on product switch. */}
-          <Animated.View testID="deck-footer" style={footerStyle}>
-            <SlideFooter
-              activeProduct={activeProduct}
-              selectedVariantId={
-                activeProduct ? variantSelections[activeProduct.slug] ?? null : null
-              }
-              onSelectVariant={selectVariant}
-            />
-          </Animated.View>
-        </Animated.View>
+                <ProductSlide
+                  product={item}
+                  isActive={index === activeIndex}
+                  slideHeight={pagerHeight}
+                  selectedVariantId={variantSelections[item.slug] ?? null}
+                  onSelectVariant={selectVariant}
+                  onOpenCategory={onOpenCategory}
+                  onOpenProduct={onOpenProduct}
+                  categories={categories}
+                  relatedProducts={relatedProducts ?? []}
+                  scrollOffsetRef={activeScrollY}
+                  bottomInset={insets.bottom}
+                  onGalleryGesture={setGalleryGesture}
+                />
+                <SlideChrome
+                  product={item}
+                  onClose={handleClose}
+                />
+              </View>
+            )}
+          />
+        </View>
+      </Animated.View>
     </Modal>
   );
 }
 
-/* ============================================================
-   PRODUCT QUICK VIEW — adapter kept for the screens that open
-   the deck from a tapped product.
-============================================================ */
-
 export interface ProductQuickViewProps {
   slug: string | null;
   onClose: () => void;
-  /** The surface's product list — this IS the swipe deck. */
   pagerProducts: ProductListItem[];
-  /** Cross-sell items for the similar-products rail. */
   relatedProducts: ProductListItem[];
   onOpenProduct: (slug: string) => void;
+  onOpenCategory?: (slug: string) => void;
 }
 
 export function ProductQuickView({
@@ -691,6 +493,7 @@ export function ProductQuickView({
   pagerProducts,
   relatedProducts,
   onOpenProduct,
+  onOpenCategory,
 }: ProductQuickViewProps) {
   return (
     <CategoryProductPager
@@ -700,107 +503,825 @@ export function ProductQuickView({
       onClose={onClose}
       relatedProducts={relatedProducts}
       onOpenProduct={onOpenProduct}
+      onOpenCategory={onOpenCategory}
     />
   );
 }
 
 /* ============================================================
-   FIXED FOOTER — Add-to-Cart bar for the ACTIVE slide. Rendered
-   once (outside the pager) so it never scrolls and never re-
-   mounts when products switch.
+   PRODUCT SLIDE
 ============================================================ */
 
-function SlideFooter({
-  activeProduct,
+function SlideChrome({
+  product,
+  onClose,
+}: {
+  product: ProductListItem;
+  onClose: () => void;
+}) {
+  const { isSaved, toggle } = useWishlist();
+  const saved = isSaved(product.slug);
+
+  const handleShare = () => {
+    void Share.share({ message: `${product.title} — Sakya Farms` });
+  };
+
+  /*
+   * The heart writes to the SERVER wishlist (the same book the Wishlist
+   * screen reads). Guests are sent to sign in first, with this surface as the
+   * place to come back to.
+   */
+  const handleToggleWishlist = () => {
+    void toggle(product.slug).then((result) => {
+      if (result === 'auth-required') {
+        useAuthStore.getState().setPendingRedirect('/(shop)');
+        router.push('/(auth)/phone');
+      }
+    });
+  };
+
+  return (
+    <View
+      pointerEvents="box-none"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 20,
+      }}
+    >
+      <View
+        pointerEvents="none"
+        style={{
+          height: QUICK_VIEW_HANDLE_HEIGHT,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <View
+          style={{
+            width: 42,
+            height: 4,
+            borderRadius: 2,
+            backgroundColor: 'rgba(255,255,255,0.75)',
+          }}
+        />
+      </View>
+
+      <View
+        style={{
+          height: QUICK_VIEW_HEADER_HEIGHT,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingHorizontal: 10,
+        }}
+      >
+        <RoundHeaderButton
+          label="Close product browser"
+          onPress={onClose}
+        >
+          <Ionicons name="chevron-down" size={22} color={TEXT} />
+        </RoundHeaderButton>
+
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <RoundHeaderButton
+            label={saved ? 'Remove from saved' : 'Save product'}
+            onPress={handleToggleWishlist}
+          >
+            <Ionicons
+              name={saved ? 'heart' : 'heart-outline'}
+              size={19}
+              color={saved ? '#B4612F' : TEXT}
+            />
+          </RoundHeaderButton>
+
+          {/* The old "Product image search" button had `onPress={() => undefined}`
+              — a visible control that did nothing. Removed rather than faked. */}
+
+          <RoundHeaderButton label="Share product" onPress={handleShare}>
+            <Ionicons name="share-outline" size={18} color={TEXT} />
+          </RoundHeaderButton>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function RoundHeaderButton({
+  label,
+  onPress,
+  children,
+}: {
+  label: string;
+  onPress: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.94)',
+      }}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+function ProductSlide({
+  product,
+  isActive,
+  slideHeight,
   selectedVariantId,
   onSelectVariant,
+  onOpenCategory,
+  onOpenProduct,
+  categories,
+  relatedProducts,
+  scrollOffsetRef,
+  bottomInset,
+  onGalleryGesture,
 }: {
-  activeProduct: ProductListItem | null;
+  product: ProductListItem;
+  isActive: boolean;
+  slideHeight: number;
   selectedVariantId: string | null;
   onSelectVariant: (slug: string, variantId: string | null) => void;
+  onOpenCategory?: (slug: string) => void;
+  onOpenProduct?: (slug: string) => void;
+  categories: CategorySummary[];
+  relatedProducts: ProductListItem[];
+  scrollOffsetRef: MutableRefObject<number>;
+  bottomInset: number;
+  onGalleryGesture?: (active: boolean) => void;
 }) {
-  const insets = useSafeAreaInsets();
-
   const detail = useQuery({
-    queryKey: ['catalog', 'product', activeProduct?.slug ?? 'none'],
-    queryFn: () => catalogApi.getProduct(activeProduct!.slug),
-    enabled: activeProduct != null,
+    queryKey: ['catalog', 'product', product.slug],
+    queryFn: () => catalogApi.getProduct(product.slug),
+    enabled: isActive,
     staleTime: 120_000,
   });
 
-  const product = detail.data ?? null;
-
-  const footerBox = {
-    minHeight: QUICK_VIEW_CTA_MIN_HEIGHT,
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    justifyContent: 'space-between' as const,
-    paddingHorizontal: QUICK_VIEW_HORIZONTAL_PADDING,
-    paddingTop: 12,
-    paddingBottom: Math.max(insets.bottom, 12),
-    borderTopWidth: 1,
-    borderTopColor: BORDER,
-    backgroundColor: '#FFFFFF',
-  };
-
-  if (product == null) {
-    // Slide loading / failed: keep the bar mounted with a neutral body so
-    // the footer height (and the geometry) never changes.
+  if (detail.isPending) {
     return (
       <View
-        testID="deck-cta"
         style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          ...footerBox,
+          flex: 1,
+          height: slideHeight > 0 ? slideHeight : undefined,
+          backgroundColor: CARD_BG,
         }}
       >
-        <Text style={{ color: MUTED, fontSize: 12 }}>
-          {detail.isPending ? 'Loading…' : 'Currently unavailable'}
-        </Text>
+        <View style={{ height: QUICK_VIEW_HERO_HEIGHT, backgroundColor: '#ECECE8' }} />
+        <View style={{ padding: 12 }}>
+          <View style={{ height: 12, width: '45%', borderRadius: 6, backgroundColor: '#ECECE8' }} />
+          <View style={{ marginTop: 10, height: 20, width: '84%', borderRadius: 7, backgroundColor: '#ECECE8' }} />
+          <View style={{ marginTop: 8, height: 14, width: '64%', borderRadius: 6, backgroundColor: '#ECECE8' }} />
+          <View style={{ marginTop: 18, height: 70, borderRadius: 11, backgroundColor: '#ECECE8' }} />
+        </View>
       </View>
     );
   }
 
-  return <SlideFooterContent
-    product={product}
-    selectedVariantId={selectedVariantId}
-    onSelectVariant={onSelectVariant}
-  />;
+  if (detail.isError || !detail.data) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+        <Ionicons name="leaf-outline" size={38} color={BRAND} />
+        <Text style={{ fontSize: 15, fontWeight: '700', color: TEXT }}>
+          Could not load product
+        </Text>
+        <Pressable
+          onPress={() => detail.refetch()}
+          accessibilityRole="button"
+          accessibilityLabel="Retry"
+          style={{
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: BRAND,
+            backgroundColor: 'rgba(255,255,255,0.96)',
+            paddingHorizontal: 18,
+            paddingVertical: 8,
+          }}
+        >
+          <Text style={{ fontSize: 13, fontWeight: '800', color: BRAND }}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <ProductSlideContent
+      product={detail.data}
+      slideHeight={slideHeight}
+      selectedVariantId={selectedVariantId}
+      onSelectVariant={onSelectVariant}
+      onOpenCategory={onOpenCategory}
+      onOpenProduct={onOpenProduct}
+      categories={categories}
+      relatedProducts={relatedProducts}
+      scrollOffsetRef={scrollOffsetRef}
+      bottomInset={bottomInset}
+      onGalleryGesture={onGalleryGesture}
+    />
+  );
 }
 
-function SlideFooterContent({
+function ProductSlideContent({
   product,
+  slideHeight,
   selectedVariantId,
   onSelectVariant,
+  onOpenCategory,
+  onOpenProduct,
+  categories,
+  relatedProducts,
+  scrollOffsetRef,
+  bottomInset,
+  onGalleryGesture,
 }: {
   product: ProductDetail;
+  slideHeight: number;
   selectedVariantId: string | null;
   onSelectVariant: (slug: string, variantId: string | null) => void;
+  onOpenCategory?: (slug: string) => void;
+  onOpenProduct?: (slug: string) => void;
+  categories: CategorySummary[];
+  relatedProducts: ProductListItem[];
+  scrollOffsetRef: MutableRefObject<number>;
+  bottomInset: number;
+  onGalleryGesture?: (active: boolean) => void;
 }) {
-  const insets = useSafeAreaInsets();
-
-  const variants =
-    product.variants?.filter(
-      (variant) => variant.isAvailable,
-    ) ?? [];
-
+  const variants = product.variants?.filter((variant) => variant.isAvailable) ?? [];
   const selectedVariant =
-    variants.find((variant) => variant.id === selectedVariantId) ?? variants[0] ?? null;
+    variants.find((variant) => variant.id === selectedVariantId) ??
+    variants[0] ??
+    null;
 
-  const { add, addVariant, resolving } = useProductAdd(product);
+  const productRecord = product as ProductDetail & {
+    rating?: number | null;
+    reviewCount?: number | null;
+    deliveryTimeMinutes?: number | null;
+    isSponsored?: boolean;
+  };
 
-  const [pickerPick, setPickerPick] = useState<VariantPickerState | null>(null);
+  const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollOffsetRef.current = Math.max(0, event.nativeEvent.contentOffset.y);
+  };
+
+  const handleViewDetails = () => {
+    onOpenProduct?.(product.slug);
+  };
+
+  return (
+    <View
+      style={{
+        height: slideHeight > 0 ? slideHeight : undefined,
+        flex: slideHeight > 0 ? undefined : 1,
+        backgroundColor: CARD_BG,
+      }}
+    >
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingBottom: BOTTOM_CTA_HEIGHT + Math.max(bottomInset, 1) + 2,
+        }}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
+        bounces
+        scrollEventThrottle={16}
+        onScroll={onScroll}
+      >
+        <ProductImageGallery
+          product={product}
+          fixedHeight={QUICK_VIEW_HERO_HEIGHT}
+          onCarouselTouchStart={() => onGalleryGesture?.(true)}
+          onCarouselTouchEnd={() => onGalleryGesture?.(false)}
+        />
+
+        <View style={{ paddingHorizontal: QUICK_VIEW_HORIZONTAL_PADDING }}>
+          <ProductFeatureStrip product={product} />
+
+          <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+            {productRecord.deliveryTimeMinutes != null ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="time-outline" size={13} color={MUTED} />
+                <Text style={{ color: MUTED, fontSize: 10.5, fontWeight: '600' }}>
+                  {productRecord.deliveryTimeMinutes} mins
+                </Text>
+              </View>
+            ) : null}
+
+            {productRecord.rating != null ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="star" size={11} color="#D9A52B" />
+                <Text style={{ color: '#D9A52B', fontSize: 10.5, fontWeight: '800' }}>
+                  {productRecord.rating.toFixed(1)}
+                </Text>
+                {productRecord.reviewCount != null ? (
+                  <Text style={{ color: MUTED, fontSize: 10 }}>
+                    {productRecord.reviewCount >= 1000
+                      ? `${(productRecord.reviewCount / 1000).toFixed(1)} lac`
+                      : productRecord.reviewCount}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+
+          <Text
+            style={{
+              color: TEXT,
+              fontSize: 17,
+              lineHeight: 21,
+              fontWeight: '800',
+              marginTop: 7,
+            }}
+          >
+            {product.title}
+          </Text>
+
+          {variants.length > 0 ? (
+            <VariantSelector
+              variants={variants}
+              selectedVariantId={selectedVariant?.id ?? null}
+              onSelect={(variantId) => onSelectVariant(product.slug, variantId)}
+            />
+          ) : null}
+
+          <ReplacementRow />
+
+          {relatedProducts.length > 0 ? (
+            <SimilarProductsRail
+              items={relatedProducts}
+              currentSlug={product.slug}
+              onOpenProduct={onOpenProduct}
+            />
+          ) : null}
+
+          <ProductDetailsBlock product={product} onViewDetails={handleViewDetails} />
+
+          <CustomerTrustRow />
+
+          <DeckTrustStrip />
+
+          <ExploreCategories
+            product={product}
+            categories={categories}
+            onOpenCategory={onOpenCategory}
+          />
+        </View>
+      </ScrollView>
+
+      <BottomAddToCart
+        product={product}
+        selectedVariant={selectedVariant}
+        variants={variants}
+        bottomInset={bottomInset}
+      />
+    </View>
+  );
+}
+
+
+
+function ProductFeatureStrip({ product }: { product: ProductDetail }) {
+  const categoryFeatures = deckFeaturesFor(
+    product.categories?.map((category) => category.slug) ?? [],
+  );
+
+  const fallbackFeatures = [
+    { label: 'Fresh & quality checked', icon: 'checkmark-circle-outline' as const },
+    { label: 'Carefully sourced', icon: 'leaf-outline' as const },
+    { label: 'Packed with care', icon: 'cube-outline' as const },
+    { label: 'Trusted by customers', icon: 'heart-outline' as const },
+  ];
+
+  const features = [...categoryFeatures, ...fallbackFeatures]
+    .filter(
+      (feature, index, list) =>
+        list.findIndex((candidate) => candidate.label === feature.label) === index,
+    )
+    .slice(0, 4);
+
+  return (
+    <View style={{ marginTop: 6, paddingVertical: 6, paddingHorizontal: 8 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+        {features.map((feature) => (
+          <View
+            key={feature.label}
+            style={{
+              width: '24%',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <View
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: 15,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#EAF3EA',
+              }}
+            >
+              <Ionicons name={feature.icon} size={15} color={BRAND} />
+            </View>
+            <Text
+              numberOfLines={2}
+              style={{
+                marginTop: 4,
+                color: TEXT,
+                fontSize: 8.5,
+                lineHeight: 10.5,
+                fontWeight: '700',
+                textAlign: 'center',
+              }}
+            >
+              {feature.label}
+            </Text>
+          </View>
+        ))}
+      </View>
+
+    </View>
+  );
+}
+
+
+function VariantSelector({
+  variants,
+  selectedVariantId,
+  onSelect,
+}: {
+  variants: NonNullable<ProductDetail['variants']>;
+  selectedVariantId: string | null;
+  onSelect: (variantId: string) => void;
+}) {
+  return (
+    <View style={{ marginTop: 10 }}>
+      <Text style={{ color: TEXT, fontSize: 12.5, fontWeight: '800', marginBottom: 7 }}>
+        Select Unit
+      </Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 8 }}
+      >
+        {variants.map((variant) => {
+          const meta = variant as typeof variant & { mrpInPaise?: number | null };
+          const mrp = meta.mrpInPaise ?? null;
+          const discount =
+            mrp != null && mrp > variant.priceInPaise
+              ? Math.round((1 - variant.priceInPaise / mrp) * 100)
+              : null;
+          const selected = variant.id === selectedVariantId;
+
+          return (
+            <Pressable
+              key={variant.id}
+              onPress={() => onSelect(variant.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              style={{
+                minWidth: 112,
+                paddingHorizontal: 10,
+                paddingVertical: 8,
+                borderRadius: 11,
+                borderWidth: selected ? 1.5 : 1,
+                borderColor: selected ? '#6A9E6A' : '#E8E7E3',
+                backgroundColor: selected ? '#F4FAF1' : '#FFFFFF',
+              }}
+            >
+              <Text style={{ color: TEXT, fontSize: 11.5, fontWeight: '800' }}>
+                {variant.title}
+              </Text>
+              <View style={{ marginTop: 3, flexDirection: 'row', alignItems: 'baseline', gap: 5 }}>
+                <Text style={{ color: TEXT, fontSize: 13, fontWeight: '800' }}>
+                  {formatMoney(variant.priceInPaise)}
+                </Text>
+                {mrp != null && mrp > variant.priceInPaise ? (
+                  <Text style={{ color: MUTED, fontSize: 9.5, textDecorationLine: 'line-through' }}>
+                    {formatMoney(mrp)}
+                  </Text>
+                ) : null}
+              </View>
+              {discount != null ? (
+                <Text style={{ color: '#4E7B50', fontSize: 9.5, fontWeight: '800', marginTop: 2 }}>
+                  {discount}% OFF on MRP
+                </Text>
+              ) : null}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function ReplacementRow() {
+  return (
+    <Pressable
+      style={{
+        marginTop: 8,
+        minHeight: 48,
+        borderRadius: 11,
+        backgroundColor: '#FAFAF7',
+        borderWidth: 1,
+        borderColor: '#F0EEE9',
+        paddingHorizontal: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+      }}
+    >
+      <View
+        style={{
+          width: 25,
+          height: 25,
+          borderRadius: 13,
+          backgroundColor: '#F1F1EA',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Ionicons name="shield-checkmark-outline" size={14} color={TEXT} />
+      </View>
+      <Text style={{ flex: 1, color: TEXT, fontSize: 11.5, fontWeight: '700', marginLeft: 8 }}>
+        72 hours only replacement
+      </Text>
+      <Ionicons name="chevron-forward" size={17} color={MUTED} />
+    </Pressable>
+  );
+}
+
+function SimilarProductsRail({
+  items,
+  currentSlug,
+  onOpenProduct,
+}: {
+  items: ProductListItem[];
+  currentSlug: string;
+  onOpenProduct?: (slug: string) => void;
+}) {
+  const visibleItems = items.filter((item) => item.slug !== currentSlug).slice(0, 5);
+  if (visibleItems.length === 0) return null;
+
+  return (
+    <View style={{ marginTop: 13 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 7 }}>
+        <Text style={{ flex: 1, color: TEXT, fontSize: 14, fontWeight: '900' }}>
+          Similar products
+        </Text>
+        <Ionicons name="chevron-forward" size={17} color={MUTED} />
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 8 }}
+      >
+        {visibleItems.map((item) => (
+          <Pressable
+            key={item.slug}
+            onPress={() => onOpenProduct?.(item.slug)}
+            style={{ width: 78 }}
+          >
+            <Image
+              source={item.primaryImageUrl ? { uri: item.primaryImageUrl } : undefined}
+              style={{ width: 78, height: 78, borderRadius: 10, backgroundColor: '#F3EDE3' }}
+              contentFit="cover"
+              cachePolicy="disk"
+              transition={100}
+            />
+            <Text
+              numberOfLines={2}
+              style={{ color: TEXT, fontSize: 9.5, fontWeight: '600', marginTop: 3, lineHeight: 12 }}
+            >
+              {item.title}
+            </Text>
+            {item.price?.minInPaise != null ? (
+              <Text style={{ color: TEXT, fontSize: 10.5, fontWeight: '800', marginTop: 1 }}>
+                {formatMoney(item.price.minInPaise)}
+              </Text>
+            ) : null}
+          </Pressable>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+function ProductDetailsBlock({
+  product,
+  onViewDetails,
+}: {
+  product: ProductDetail;
+  onViewDetails: () => void;
+}) {
+  return (
+    <View style={{ marginTop: 8 }}>
+      {product.description ? (
+        <Text
+          numberOfLines={4}
+          style={{ color: MUTED, fontSize: 11.5, lineHeight: 17 }}
+        >
+          {product.description}
+        </Text>
+      ) : null}
+
+      <Pressable
+        onPress={onViewDetails}
+        accessibilityRole="button"
+        accessibilityLabel="View product details"
+        style={{
+          minHeight: 40,
+          marginTop: product.description ? 4 : 0,
+          borderTopWidth: 1,
+          borderBottomWidth: 1,
+          borderColor: '#EEECE7',
+          flexDirection: 'row',
+          alignItems: 'center',
+        }}
+      >
+        <Text style={{ flex: 1, color: TEXT, fontSize: 12.5, fontWeight: '800' }}>
+          View details
+        </Text>
+        <Ionicons name="chevron-forward" size={17} color={MUTED} />
+      </Pressable>
+    </View>
+  );
+}
+
+function CustomerTrustRow() {
+  return (
+    <View
+      style={{
+        marginTop: 8,
+        minHeight: 40,
+        borderRadius: 10,
+        backgroundColor: '#F7FAF5',
+        borderWidth: 1,
+        borderColor: '#E5EDE1',
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 10,
+      }}
+    >
+      <Ionicons name="people-outline" size={17} color={BRAND} />
+      <Text style={{ marginLeft: 7, color: TEXT, fontSize: 11.5, fontWeight: '800' }}>
+        Trusted by 1.8 lakh customers
+      </Text>
+    </View>
+  );
+}
+
+const TRUST_ITEMS: {
+  icon: ComponentProps<typeof Ionicons>['name'];
+  label: string;
+}[] = [
+  { icon: 'shield-checkmark-outline', label: '100% genuine products' },
+  { icon: 'lock-closed-outline', label: 'Secure payment' },
+  { icon: 'chatbubble-ellipses-outline', label: '24/7 support' },
+  { icon: 'cash-outline', label: 'COD available' },
+  { icon: 'bicycle-outline', label: 'Free shipping above ₹499' },
+];
+
+function DeckTrustStrip() {
+  return (
+    <View
+      style={{
+        marginTop: 12,
+        borderRadius: 11,
+        borderWidth: 1,
+        borderColor: BORDER,
+        backgroundColor: '#FAF8F2',
+        paddingHorizontal: 9,
+        paddingVertical: 8,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        rowGap: 6,
+      }}
+    >
+      {TRUST_ITEMS.map((item) => (
+        <View
+          key={item.label}
+          style={{
+            width: '50%',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            paddingRight: 5,
+          }}
+        >
+          <Ionicons name={item.icon} size={12} color={BRAND} />
+          <Text numberOfLines={1} style={{ color: TEXT, fontSize: 9, fontWeight: '600', flex: 1 }}>
+            {item.label}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function ExploreCategories({
+  product,
+  categories,
+  onOpenCategory,
+}: {
+  product: ProductDetail;
+  categories: CategorySummary[];
+  onOpenCategory?: (slug: string) => void;
+}) {
+  const nameBySlug = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const category of categories) map.set(category.slug, category.name);
+    return map;
+  }, [categories]);
+
+  const slugs = product.categories?.map((category) => category.slug).slice(0, 3) ?? [];
+  if (slugs.length === 0) return null;
+
+  return (
+    <View style={{ marginTop: 14 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        {slugs.map((slug) => {
+          const artwork = getCategoryImage(slug);
+          return (
+            <Pressable
+              key={slug}
+              onPress={() => onOpenCategory?.(slug)}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: BORDER,
+                backgroundColor: '#FFFFFF',
+                paddingLeft: 5,
+                paddingRight: 9,
+                paddingVertical: 4,
+              }}
+            >
+              {artwork ? (
+                <Image
+                  source={artwork}
+                  style={{ width: 22, height: 22, borderRadius: 11 }}
+                  contentFit="cover"
+                  cachePolicy="disk"
+                />
+              ) : (
+                <View
+                  style={{
+                    width: 22,
+                    height: 22,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: 11,
+                    backgroundColor: '#E4EFE7',
+                  }}
+                >
+                  <Ionicons name={FALLBACK_CATEGORY_ICON} size={13} color={BRAND} />
+                </View>
+              )}
+              <Text style={{ color: TEXT, fontSize: 10.5, fontWeight: '700' }}>
+                {nameBySlug.get(slug) ?? slug}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function BottomAddToCart({
+  product,
+  selectedVariant,
+  variants,
+  bottomInset,
+}: {
+  product: ProductDetail;
+  selectedVariant: ProductDetail['variants'][number] | null;
+  variants: ProductDetail['variants'];
+  bottomInset: number;
+}) {
+  const { quantity, add, addVariant, increment, decrement, resolving } = useProductAdd(product);
+  const meta = selectedVariant as (typeof selectedVariant & { mrpInPaise?: number | null }) | null;
+  const perUnit = selectedVariant
+    ? derivePerUnitLine(selectedVariant.title, selectedVariant.priceInPaise)
+    : null;
 
   const handleAdd = () => {
-    if (!product.isAvailable || !selectedVariant) return;
-    if (variants.length > 1 && !selectedVariantId) {
-      // No explicit chip choice yet: ask explicitly, never blind-add.
-      setPickerPick({ product });
-      return;
-    }
+    if (!selectedVariant || !product.isAvailable) return;
     if (variants.length > 1) {
       addVariant({
         id: selectedVariant.id,
@@ -813,39 +1334,66 @@ function SlideFooterContent({
   };
 
   return (
-    <>
-      <View
-        testID="deck-cta"
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          minHeight: QUICK_VIEW_CTA_MIN_HEIGHT,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingHorizontal: QUICK_VIEW_HORIZONTAL_PADDING,
-          paddingTop: 12,
-          paddingBottom: Math.max(insets.bottom, 12),
-          borderTopWidth: 1,
-          borderTopColor: BORDER,
-          backgroundColor: '#FFFFFF',
-        }}
-      >
-        <View style={{ flex: 1, paddingRight: 10 }}>
-          {selectedVariant ? (
-            <>
-              <Text style={{ color: TEXT, fontSize: 11 }}>{selectedVariant.title}</Text>
-              <Text style={{ color: TEXT, fontSize: 17, fontWeight: '800', marginTop: 2 }}>
+    <View
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        minHeight: BOTTOM_CTA_HEIGHT + Math.max(bottomInset, 0),
+        paddingHorizontal: QUICK_VIEW_HORIZONTAL_PADDING,
+        paddingTop: 14,
+        paddingBottom: Math.max(bottomInset, 1),
+        backgroundColor: '#ffffff',
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(228,226,220,0.70)',
+        shadowColor: '#000000',
+        shadowOpacity: 0.12,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: -4 },
+        elevation: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+      }}
+    >
+      <View style={{ flex: 1, minWidth: 0 }}>
+        {selectedVariant ? (
+          <>
+            <Text style={{ color: TEXT, fontSize: 12, fontWeight: '800' }} numberOfLines={1}>
+              {selectedVariant.title}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 5 }}>
+              <Text style={{ color: TEXT, fontSize: 17, fontWeight: '900', marginTop: 0 }}>
                 {formatMoney(selectedVariant.priceInPaise)}
               </Text>
-            </>
-          ) : (
-            <Text style={{ color: MUTED, fontSize: 12 }}>Currently unavailable</Text>
-          )}
-        </View>
+              {meta?.mrpInPaise != null && meta.mrpInPaise > selectedVariant.priceInPaise ? (
+                <Text style={{ color: MUTED, fontSize: 9.5, textDecorationLine: 'line-through' }}>
+                  {formatMoney(meta.mrpInPaise)}
+                </Text>
+              ) : null}
+            </View>
+            <Text style={{ color: MUTED, fontSize: 9, marginTop: 2 }} numberOfLines={1}>
+              {perUnit ? `${perUnit} · Inclusive of all taxes` : 'Inclusive of all taxes'}
+            </Text>
+          </>
+        ) : (
+          <Text style={{ color: MUTED, fontSize: 12, fontWeight: '700' }}>
+            Currently unavailable
+          </Text>
+        )}
+      </View>
 
+      {quantity > 0 ? (
+        <QuantityStepper
+          quantity={quantity}
+          disabled={resolving || !product.isAvailable}
+          width={110}
+          onAdd={handleAdd}
+          onIncrement={() => void increment()}
+          onDecrement={decrement}
+        />
+      ) : (
         <Pressable
           testID="deck-add"
           disabled={!selectedVariant || resolving || !product.isAvailable}
@@ -853,488 +1401,23 @@ function SlideFooterContent({
           accessibilityRole="button"
           accessibilityLabel="Add to cart"
           style={{
-            height: 38,
-            minWidth: 148,
+            height: 42,
+            minWidth: 112,
+            borderRadius: 12,
             alignItems: 'center',
             justifyContent: 'center',
-            borderRadius: 12,
-            paddingHorizontal: 24,
-            backgroundColor: !selectedVariant || resolving || !product.isAvailable ? '#B9BDB4' : '#238A19',
+            paddingHorizontal: 15,
+            backgroundColor:
+              !selectedVariant || resolving || !product.isAvailable
+                ? '#B9BDB4'
+                : CTA_GREEN,
           }}
         >
-          <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '800' }}>
+          <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>
             {resolving ? 'Adding…' : 'Add to cart'}
           </Text>
         </Pressable>
-      </View>
-
-      <VariantPickerSheet
-        pick={pickerPick}
-        onClose={() => setPickerPick(null)}
-        onAdded={(variant) => onSelectVariant(product.slug, variant.id)}
-      />
-    </>
-  );
-}
-
-/* ============================================================
-   ONE PRODUCT SLIDE
-============================================================ */
-
-function ProductSlide({
-  product,
-  isActive,
-  expanded,
-  slideHeight,
-  selectedVariantId,
-  onSelectVariant,
-  relatedProducts,
-  onOpenProduct,
-  onExpand,
-  activeScrollYRef,
-}: {
-  product: ProductListItem;
-  isActive: boolean;
-  expanded: boolean;
-  slideHeight: number;
-  selectedVariantId: string | null;
-  onSelectVariant: (slug: string, variantId: string | null) => void;
-  relatedProducts?: ProductListItem[];
-  onOpenProduct?: (slug: string) => void;
-  onExpand: () => void;
-  activeScrollYRef: { current: number };
-}) {
-  const detail = useQuery({
-    queryKey: [
-      'catalog',
-      'product',
-      product.slug,
-    ],
-    queryFn: () =>
-      catalogApi.getProduct(product.slug),
-    enabled: isActive,
-    staleTime: 120_000,
-  });
-
-  if (detail.isPending) {
-    return (
-      <View style={{ flex: 1, height: slideHeight > 0 ? slideHeight : undefined, padding: 12 }}>
-        <View style={{ height: QUICK_VIEW_HERO_HEIGHT, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.08)' }} />
-        <View style={{ marginTop: 14, height: 20, width: '75%', borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.08)' }} />
-        <View style={{ marginTop: 8, height: 14, width: '33%', borderRadius: 6, backgroundColor: 'rgba(0,0,0,0.08)' }} />
-      </View>
-    );
-  }
-
-  if (detail.isError || !detail.data) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-        <Ionicons name="leaf-outline" size={38} color={BRAND} />
-        <Text style={{ fontSize: 15, fontWeight: '700', color: TEXT }}>Could not load product</Text>
-        <Pressable
-          onPress={() => detail.refetch()}
-          accessibilityRole="button"
-          accessibilityLabel="Retry"
-          style={{ borderRadius: 10, borderWidth: 1, borderColor: BRAND, backgroundColor: '#FFFFFF', paddingHorizontal: 18, paddingVertical: 8 }}
-        >
-          <Text style={{ fontSize: 13, fontWeight: '800', color: BRAND }}>Retry</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  return (
-    <ProductSlideContent
-      product={detail.data}
-      isActive={isActive}
-      expanded={expanded}
-      slideHeight={slideHeight}
-      selectedVariantId={selectedVariantId}
-      onSelectVariant={onSelectVariant}
-      relatedProducts={relatedProducts}
-      onOpenProduct={onOpenProduct}
-      onExpand={onExpand}
-      activeScrollYRef={activeScrollYRef}
-    />
-  );
-}
-
-/* ============================================================
-   PRODUCT UI
-
-   COLLAPSED — quick view: hero, name, variant, price. The deck
-   pans (expand / dismiss); the footer stays pinned.
-
-   EXPANDED — the same content becomes a vertical scroll of full
-   details. At the scroll top, a downward pull transfers to the
-   deck (capture-phase gesture) and collapses it with the finger.
-
-   The Add-to-Cart bar is FIXED to the deck bottom in BOTH states
-   and lives outside the pager entirely (see SlideFooter).
-============================================================ */
-
-function ProductSlideContent({
-  product,
-  isActive,
-  expanded,
-  slideHeight,
-  selectedVariantId,
-  onSelectVariant,
-  relatedProducts,
-  onOpenProduct,
-  onExpand,
-  activeScrollYRef,
-}: {
-  product: ProductDetail;
-  isActive: boolean;
-  expanded: boolean;
-  slideHeight: number;
-  selectedVariantId: string | null;
-  onSelectVariant: (slug: string, variantId: string | null) => void;
-  relatedProducts?: ProductListItem[];
-  onOpenProduct?: (slug: string) => void;
-  onExpand: () => void;
-  activeScrollYRef: { current: number };
-}) {
-  const insets = useSafeAreaInsets();
-
-  const variants =
-    product.variants?.filter(
-      (variant) => variant.isAvailable,
-    ) ?? [];
-
-  const selectedVariant =
-    variants.find((variant) => variant.id === selectedVariantId) ?? variants[0] ?? null;
-
-  const similar =
-    (relatedProducts ?? [])
-      .filter((item) => item.slug !== product.slug)
-      .slice(0, 3);
-
-  const scrollRef = useRef<ScrollView>(null);
-
-  // Product switching opens each product at the top (and keeps the
-  // pull-down transfer's scrollY mirror truthful).
-  useEffect(() => {
-    if (!isActive) return;
-    scrollRef.current?.scrollTo({ y: 0, animated: false });
-    activeScrollYRef.current = 0;
-  }, [isActive, activeScrollYRef]);
-
-  // Clearance the scroll content must keep for the FIXED footer.
-  const ctaClearance =
-    QUICK_VIEW_CTA_MIN_HEIGHT + Math.max(insets.bottom, 12) + 16;
-
-  const info = (
-    <>
-      {/* PRODUCT NAME + VARIANT + PRICE — hierarchy per spec:
-          image → name → variant → price. */}
-      <View style={{ paddingHorizontal: QUICK_VIEW_HORIZONTAL_PADDING, paddingTop: 12 }}>
-        <Text testID="deck-title" style={{ color: TEXT, fontSize: 19, fontWeight: '800', lineHeight: 25 }}>
-          {product.title}
-        </Text>
-
-        {selectedVariant ? (
-          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 6 }}>
-            <Text style={{ color: TEXT, fontSize: 13, fontWeight: '600' }}>
-              {selectedVariant.title}
-            </Text>
-            <Text style={{ color: TEXT, fontSize: 16, fontWeight: '800' }}>
-              {formatMoney(selectedVariant.priceInPaise)}
-            </Text>
-            {selectedVariant.compareAtPriceInPaise != null &&
-            selectedVariant.compareAtPriceInPaise > selectedVariant.priceInPaise ? (
-              <Text style={{ color: MUTED, fontSize: 12.5, textDecorationLine: 'line-through' }}>
-                {formatMoney(selectedVariant.compareAtPriceInPaise)}
-              </Text>
-            ) : null}
-          </View>
-        ) : (
-          <Text style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
-            Currently unavailable
-          </Text>
-        )}
-      </View>
-
-      {/* EXPANDED-ONLY SECTIONS — variant chips, vendor, view-details,
-          similar rail. Only data the backend actually returns. */}
-      {expanded ? (
-        <>
-          {/* VARIANT SELECTOR — backend titles verbatim; never inferred units. */}
-          {variants.length > 1 ? (
-            <View style={{ paddingHorizontal: QUICK_VIEW_HORIZONTAL_PADDING, marginTop: 10 }}>
-              <Text style={{ color: MUTED, fontSize: 11, fontWeight: '700', marginBottom: 6 }}>
-                SELECT PACK
-              </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {variants.map((variant) => {
-                  const active = variant.id === selectedVariant?.id;
-                  return (
-                    <Pressable
-                      key={variant.id}
-                      onPress={() => onSelectVariant(product.slug, variant.id)}
-                      accessibilityRole="radio"
-                      accessibilityLabel={`Select ${variant.title}`}
-                      accessibilityState={{ selected: active }}
-                      style={{
-                        paddingHorizontal: 12,
-                        paddingVertical: 7,
-                        borderRadius: 10,
-                        borderWidth: 1,
-                        borderColor: active ? BRAND : BORDER,
-                        backgroundColor: active ? '#EEF7ED' : '#FFFFFF',
-                      }}
-                    >
-                      <Text
-                        style={{ fontSize: 12.5, fontWeight: active ? '800' : '600', color: active ? BRAND : TEXT }}
-                      >
-                        {variant.title}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          ) : null}
-
-          <View style={{ marginHorizontal: 12, marginTop: 12, minHeight: 64, flexDirection: 'row', alignItems: 'center', borderRadius: 15, backgroundColor: '#FFFFFF', paddingHorizontal: 14 }}>
-            <View style={{ height: 42, width: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#EEF7ED' }}>
-              <Ionicons name="leaf" size={22} color={BRAND} />
-            </View>
-            <View style={{ marginLeft: 12, flex: 1 }}>
-              <Text style={{ color: TEXT, fontSize: 14, fontWeight: '800' }}>Sakya Farms</Text>
-              <Text style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-                {product.vendor ?? 'Farm to home'}
-              </Text>
-            </View>
-          </View>
-
-          <Pressable
-            onPress={() => onOpenProduct?.(product.slug)}
-            accessibilityRole="button"
-            accessibilityLabel="Open the full product page"
-            style={{ marginHorizontal: 12, marginTop: 8, minHeight: 54, flexDirection: 'row', alignItems: 'center', borderRadius: 15, backgroundColor: '#FFFFFF', paddingHorizontal: 12 }}
-          >
-            <View style={{ height: 38, width: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#F4F4F1' }}>
-              <Ionicons name="cube-outline" size={21} color={TEXT} />
-            </View>
-            <Text style={{ marginLeft: 10, flex: 1, color: TEXT, fontSize: 13, fontWeight: '700' }}>
-              View full product page
-            </Text>
-            <Ionicons name="chevron-forward" size={20} color={MUTED} />
-          </Pressable>
-
-          {similar.length > 0 ? (
-            <View style={{ marginTop: 14, paddingHorizontal: 12 }}>
-              <Text style={{ color: TEXT, fontSize: 16, fontWeight: '800', marginBottom: 10 }}>
-                Similar products
-              </Text>
-              <View style={{ flexDirection: 'row', gap: 9 }}>
-                {similar.map((item) => (
-                  <SimilarProduct
-                    key={item.id}
-                    item={item}
-                    onPress={() =>
-                      onOpenProduct?.(item.slug)
-                    }
-                  />
-                ))}
-              </View>
-            </View>
-          ) : null}
-        </>
-      ) : null}
-    </>
-  );
-
-  return (
-    /* EXPLICIT measured height — see the pager wrapper comment. With a
-       definite height, the ScrollView below gets a definite flex container
-       and actually overflows → scrolls. */
-    <View
-      style={
-        slideHeight > 0
-          ? { height: slideHeight, backgroundColor: BG }
-          : { flex: 1, overflow: 'hidden', backgroundColor: BG }
-      }
-    >
-      {expanded ? (
-        // EXPANDED — scrollable details. The capture-phase pan on the
-        // pager wrapper transfers a top-of-content downward pull to the deck.
-        <ScrollView
-          ref={scrollRef}
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: ctaClearance }}
-          showsVerticalScrollIndicator={false}
-          overScrollMode="never"
-          // iOS bounce at the top would fight the capture-phase gesture
-          // transfer (the deck must own the first downward pull), so the
-          // content view never rubber-bands vertically.
-          bounces={false}
-          scrollEventThrottle={16}
-          onScroll={(event) => {
-            activeScrollYRef.current = event.nativeEvent.contentOffset.y;
-          }}
-        >
-          <HeroImage product={product} height={QUICK_VIEW_HERO_HEIGHT} />
-          {info}
-        </ScrollView>
-      ) : (
-        // COLLAPSED — static column: hero + name + variant + price.
-        // The pan lives on the pager wrapper (ancestor), so no handler
-        // is needed here; taps stay taps.
-        <View style={{ flex: 1 }}>
-          <HeroImage product={product} height={QUICK_VIEW_HERO_HEIGHT} />
-          {info}
-        </View>
       )}
-
-      {/* Collapsed affordance: tapping the hero also expands. */}
-      {!expanded ? (
-        <Pressable
-          onPress={onExpand}
-          accessibilityRole="button"
-          accessibilityLabel="Expand product details"
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, height: QUICK_VIEW_HERO_HEIGHT }}
-        />
-      ) : null}
     </View>
-  );
-}
-
-function HeroImage({ product, height }: { product: ProductDetail; height: number }) {
-  if (!product.primaryImageUrl) {
-    return (
-      <View style={{ height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EFEFEA' }}>
-        <Ionicons name="leaf-outline" size={44} color={MUTED} />
-      </View>
-    );
-  }
-
-  return (
-    <View testID="deck-hero" style={{ height, width: '100%', backgroundColor: '#F7F7FF' }}>
-      <Image
-        source={{ uri: product.primaryImageUrl }}
-        style={{ width: '100%', height: '100%' }}
-        contentFit="cover"
-        cachePolicy="disk"
-        transition={150}
-      />
-    </View>
-  );
-}
-
-/* ============================================================
-   SIMILAR PRODUCT — real catalog item, tap opens its page, with
-   a one-tap ADD of the default variant.
-============================================================ */
-
-function SimilarProduct({
-  item,
-  onPress,
-}: {
-  item: ProductListItem;
-  onPress: () => void;
-}) {
-  const { add, resolving } = useProductAdd(item);
-
-  const hasDiscount =
-    item.compareAtMaxInPaise != null &&
-    item.price?.minInPaise != null &&
-    item.compareAtMaxInPaise > item.price.minInPaise;
-
-  const discountPercent = hasDiscount
-    ? Math.round(
-        (1 -
-          item.price!.minInPaise / item.compareAtMaxInPaise!) *
-          100,
-      )
-    : null;
-
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`View ${item.title}`}
-      style={{ flex: 1, borderRadius: 16, backgroundColor: '#FFFFFF', padding: 8 }}
-    >
-      <View
-        style={{
-          position: 'relative',
-          aspectRatio: 1,
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden',
-          borderRadius: 10,
-          backgroundColor: '#F5F5F7',
-        }}
-      >
-        {item.primaryImageUrl ? (
-          <Image
-            source={{ uri: item.primaryImageUrl }}
-            style={{ width: '100%', height: '100%' }}
-            contentFit="cover"
-            cachePolicy="disk"
-            recyclingKey={item.primaryImageUrl}
-            transition={150}
-          />
-        ) : (
-          <Ionicons name="leaf-outline" size={25} color={MUTED} />
-        )}
-
-        {item.isAvailable ? (
-          <Pressable
-            onPress={(event) => {
-              event.stopPropagation();
-              void add();
-            }}
-            disabled={resolving}
-            accessibilityRole="button"
-            accessibilityLabel={`Add ${item.title} to cart`}
-            style={{
-              position: 'absolute',
-              bottom: -10,
-              right: 6,
-              borderRadius: 999,
-              borderWidth: 1,
-              borderColor: BRAND,
-              backgroundColor: '#FFFFFF',
-              paddingHorizontal: 12,
-              paddingVertical: 3,
-              opacity: resolving ? 0.5 : 1,
-            }}
-          >
-            <Text style={{ fontSize: 10, fontWeight: '800', color: BRAND }}>ADD</Text>
-          </Pressable>
-        ) : null}
-      </View>
-
-      <Text
-        style={{ marginTop: 10, color: TEXT, fontSize: 11, fontWeight: '600', lineHeight: 14 }}
-        numberOfLines={2}
-      >
-        {item.title}
-      </Text>
-
-      {item.price?.minInPaise != null ? (
-        <View style={{ marginTop: 3, flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
-          <Text style={{ color: TEXT, fontSize: 12, fontWeight: '800' }}>
-            {formatMoney(item.price.minInPaise)}
-          </Text>
-
-          {hasDiscount ? (
-            <Text style={{ color: MUTED, fontSize: 10, textDecorationLine: 'line-through' }}>
-              {formatMoney(item.compareAtMaxInPaise!)}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-
-      {discountPercent != null && discountPercent > 0 ? (
-        <Text style={{ color: '#38883E', fontSize: 10, fontWeight: '700' }}>
-          {discountPercent}% OFF
-        </Text>
-      ) : null}
-    </Pressable>
   );
 }

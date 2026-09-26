@@ -12,6 +12,25 @@ export interface ProductBadges {
   isOutOfStock: boolean;
 }
 
+/** Merchandising badges — curated by section, never fabricated product data. */
+export type MerchBadge = 'premium' | 'fresh';
+
+/**
+ * The catalog's "Premium Vegetables" category (gourds-local-vegetables-copy —
+ * broccoli, capsicum, baby corn, asparagus class produce). Anything inside it
+ * legitimately wears the Premium badge; fresh produce (All Fresh) wears Fresh.
+ */
+const PREMIUM_CATEGORY_SLUG = 'gourds-local-vegetables-copy';
+const FRESH_CATEGORY_SLUGS = new Set(['all-fresh', 'country-special-copy']);
+
+export function deriveMerchBadges(product: ProductListItem): MerchBadge[] {
+  const slugs = product.categories.map((category) => category.slug);
+  const badges: MerchBadge[] = [];
+  if (slugs.includes(PREMIUM_CATEGORY_SLUG)) badges.push('premium');
+  if (FRESH_CATEGORY_SLUGS.has(slugs[0] ?? '')) badges.push('fresh');
+  return badges;
+}
+
 /**
  * Data-driven badge derivation.
  *

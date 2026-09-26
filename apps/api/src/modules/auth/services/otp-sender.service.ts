@@ -1,21 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
-import { VonageSmsService } from './vonage-sms.service';
+import { Msg91SmsService } from './msg91-sms.service';
 
 /**
  * Phone OTP delivery.
  *
  * Two delivery paths behind one seam:
  *
- * - **Vonage configured** (`VONAGE_API_KEY` + `VONAGE_API_SECRET`): the code
- *   is handed to Vonage's REST API for real SMS delivery. Rejections throw so
- *   the customer is told the send failed rather than left waiting.
+ * - **MSG91 configured** (`MSG91_AUTH_KEY` + `MSG91_OTP_TEMPLATE_ID`): the
+ *   code is handed to MSG91's v5 OTP API for real SMS delivery. Rejections
+ *   throw so the customer is told the send failed rather than left waiting.
  * - **Not configured**: development logs the code (and the controller may
  *   return it in the response — dev builds only); production fails closed.
  *
  * `lastDevCode` exists ONLY so the auth controller can expose the code in
- * development responses (never in production). Vonage-path sends do not
+ * development responses (never in production). MSG91-path sends do not
  * record it, and the field is not part of any persisted state.
  */
 export interface OtpDeliveryResult {
@@ -32,16 +32,16 @@ export class OtpSenderService {
 
   constructor(
     config: ConfigService,
-    private readonly vonage: VonageSmsService,
+    private readonly msg91: Msg91SmsService,
   ) {
     this.isProduction = config.getOrThrow<boolean>('app.isProduction');
   }
 
   async send(phone: string, code: string): Promise<OtpDeliveryResult> {
-    // Real delivery whenever Vonage is configured, in any environment — this
+    // Real delivery whenever MSG91 is configured, in any environment — this
     // lets staging exercise the production path end-to-end.
-    if (this.vonage.configured) {
-      const accepted = await this.vonage.send(phone, code);
+    if (this.msg91.configured) {
+      const accepted = await this.msg91.send(phone, code);
       return { accepted };
     }
 
@@ -52,7 +52,9 @@ export class OtpSenderService {
     }
 
     this.lastDevCode = code;
-    this.logger.log(`OTP for ${phone}: ${code} (development delivery — not sent to any provider)`);
+    this.logger.log(
+      `OTP for ${phone}: ${code} (development delivery — not sent to any provider)`,
+    );
 
     return { accepted: true };
   }

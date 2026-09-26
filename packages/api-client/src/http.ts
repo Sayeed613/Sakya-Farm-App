@@ -52,6 +52,24 @@ export interface HttpClientOptions {
   readonly fetchImpl?: FetchLike;
   readonly timeoutMs?: number;
   readonly defaultHeaders?: Record<string, string>;
+  /**
+   * Called once when a request fails with 401 while a bearer token was sent.
+   * Implement session recovery here (e.g. exchange the refresh token); the
+   * failing request is retried ONCE after the hook resolves. Returning
+   * `false` (or throwing) skips the retry and the 401 surfaces to the caller.
+   * The hook MUST be single-flight — parallel 401s across requests share one
+   * invocation — because refresh endpoints typically rotate and replay-detect
+   * tokens: two concurrent refreshes would revoke the whole family.
+   */
+  readonly onUnauthorized?: () => Promise<boolean> | boolean;
+  /**
+   * Optional connectivity gate. When provided and it resolves `false`, the
+   * request fails FAST with a `NETWORK_ERROR` ApiError instead of hanging
+   * until the transport timeout — used by mobile shells that know the OS
+   * network state. Reads and writes behave identically: a cached UI keeps
+   * rendering, mutations surface a retryable offline error.
+   */
+  readonly isOnline?: () => boolean;
 }
 
 export interface HttpClient {
@@ -61,7 +79,6 @@ export interface HttpClient {
 
 /** Requests that hang forever are worse than ones that fail: they block a screen. */
 const DEFAULT_TIMEOUT_MS = 15_000;
-
 /** Marks a body that was present but not JSON, e.g. a gateway's HTML page. */
 const NOT_JSON = Symbol('not-json');
 
@@ -177,9 +194,25 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  async function request<T>(path: string, requestOptions: HttpRequestOptions = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    requestOptions: HttpRequestOptions = {},
+    allowAuthRetry = true,
+  ): Promise<T> {
     const url = appendQuery(`${baseUrl}${normalizePath(path)}`, requestOptions.query);
     const method = requestOptions.method ?? 'GET';
+
+    // Offline gate: when the shell knows there is no network, fail fast with
+    // a retryable NETWORK_ERROR rather than a long transport timeout. The
+    // banner + retry states in the app handle recovery when the connection
+    // returns.
+    if (options.isOnline !== undefined && !options.isOnline()) {
+      throw new ApiError({
+        code: 'NETWORK_ERROR',
+        message: 'You are offline. Reconnect and try again.',
+        statusCode: 0,
+      });
+    }
 
     const headers: Record<string, string> = {
       accept: 'application/json',
@@ -193,10 +226,12 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
       headers['content-type'] ??= 'application/json';
     }
 
+    let sentBearer = false;
     if (requestOptions.auth !== 'none' && options.getAccessToken !== undefined) {
       const token = await options.getAccessToken();
       if (typeof token === 'string' && token !== '') {
         headers.authorization = `Bearer ${token}`;
+        sentBearer = true;
       }
     }
 
@@ -225,11 +260,41 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
       unlink();
     }
 
-    return readResponse<T>(
-      response,
-      `${method} ${normalizePath(path)}`,
-      response.headers.get('x-request-id') ?? undefined,
-    );
+    try {
+      return await readResponse<T>(
+        response,
+        `${method} ${normalizePath(path)}`,
+        response.headers.get('x-request-id') ?? undefined,
+      );
+    } catch (error) {
+      /*
+       * One-shot session recovery: an authenticated request rejected with 401
+       * gets exactly one retry after the caller's recovery hook (token
+       * refresh) succeeds. A hook that reports failure or THROWS counts as
+       * failed recovery — the original 401 surfaces (a buggy hook must never
+       * mask the API's own response). Every other failure — and a second
+       * 401 — surfaces to the caller unchanged.
+       */
+      if (
+        allowAuthRetry &&
+        sentBearer &&
+        requestOptions.auth !== 'none' &&
+        options.onUnauthorized !== undefined &&
+        error instanceof ApiError &&
+        error.statusCode === 401
+      ) {
+        let recovered: boolean;
+        try {
+          recovered = await options.onUnauthorized();
+        } catch {
+          recovered = false;
+        }
+        if (recovered === true) {
+          return request<T>(path, requestOptions, false);
+        }
+      }
+      throw error;
+    }
   }
 
   return { baseUrl, request };

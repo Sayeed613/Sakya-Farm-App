@@ -32,8 +32,9 @@ const FIELD_BG = '#FCFBF6';
  * AddressSheet — the checkout address form as a bottom sheet.
  *
  * Same architecture as VariantPickerSheet: a transparent Modal, a backdrop
- * Pressable that dismisses on tap (the sheet body stops propagation), and a
- * Reanimated slide-up. The form is the ENTIRE sheet body so it can scroll when
+ * Pressable that dismisses on tap (rendered as a SIBLING of the sheet body,
+ * never an ancestor — see the note at the backdrop), and a Reanimated
+ * slide-up. The form is the ENTIRE sheet body so it can scroll when
  * the keyboard is up, and the safe-area bottom inset is always honoured.
  *
  * Validation is local and dumb-by-design: required fields and an Indian
@@ -46,6 +47,20 @@ const PINCODE_RE = /^[1-9][0-9]{5}$/;
 
 /** Indian mobile numbers as customers type them: 10 digits starting 6-9. */
 const PHONE_RE = /^[6-9][0-9]{9}$/;
+
+/**
+ * Normalise a stored contact phone (the session carries E.164, "+91…") to the
+ * 10 local digits this field validates and maxLength allows. Without this the
+ * prefill fails PHONE_RE while also blocking typing — Save would sit disabled
+ * with a phone that LOOKS filled in.
+ */
+function toLocalPhone(value: string): string {
+  let digits = value.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+  else if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
+  else if (digits.length > 10) digits = digits.slice(-10);
+  return digits.slice(0, 10);
+}
 
 export interface AddressSheetProps {
   visible: boolean;
@@ -95,6 +110,52 @@ export function AddressSheet({
   const [form, setForm] = useState<CheckoutAddress>(EMPTY);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [alsoSave, setAlsoSave] = useState(false);
+  /** 'idle' | 'locating' | 'done' | 'failed' — Zomato-style GPS fill. */
+  const [geoStatus, setGeoStatus] = useState<'idle' | 'locating' | 'done' | 'failed'>('idle');
+
+  /**
+   * Use my location — fixes the device position, reverse-geocodes it, and
+   * PREFILLS the form fields. The customer still confirms/edits before save:
+   * GPS narrows it down, it does not guess the door number.
+   */
+  async function useMyLocation() {
+    if (geoStatus === 'locating') return;
+    setGeoStatus('locating');
+    try {
+      // Required lazily so web bundles never evaluate the native module.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const ExpoLocation = require('expo-location') as typeof import('expo-location');
+      const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setGeoStatus('failed');
+        return;
+      }
+      const position = await ExpoLocation.getCurrentPositionAsync({
+        accuracy: ExpoLocation.Accuracy.Balanced,
+      });
+      const fixtures = await ExpoLocation.reverseGeocodeAsync({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      });
+      const place = fixtures[0];
+      if (!place) {
+        setGeoStatus('failed');
+        return;
+      }
+      setForm((current) => ({
+        ...current,
+        line1: current.line1.trim() !== '' ? current.line1 : [place.street, place.streetNumber].filter(Boolean).join(' '),
+        landmark: (current.landmark ?? '').trim() !== '' ? current.landmark : (place.district ?? ''),
+        city: current.city.trim() !== '' ? current.city : (place.city ?? place.region ?? ''),
+        state: current.state.trim() !== '' ? current.state : (place.region ?? ''),
+        postalCode: current.postalCode.trim() !== '' ? current.postalCode : (place.postalCode ?? ''),
+      }));
+      setErrors({});
+      setGeoStatus('done');
+    } catch {
+      setGeoStatus('failed');
+    }
+  }
 
   // Prefill every time the sheet opens: last-used address first, then the
   // session's name/phone for a first-time customer.
@@ -106,7 +167,7 @@ export function AddressSheet({
       ...EMPTY,
       ...(initial ?? {}),
       fullName: initial?.fullName || contactDefaults?.name || '',
-      phone: initial?.phone || contactDefaults?.phone || '',
+      phone: toLocalPhone(initial?.phone || contactDefaults?.phone || ''),
     });
   }, [visible, initial, contactDefaults]);
 
@@ -172,8 +233,15 @@ export function AddressSheet({
         accessibilityRole="button"
         accessibilityLabel="Dismiss address form"
         onPress={onClose}
-        className="flex-1 justify-end bg-black/40"
-      >
+        className="absolute inset-0"
+        style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
+      />
+      {/* The backdrop is a SIBLING of the sheet, never its ancestor: wrapped
+          around the form it renders a native <button> around every field and
+          button inside (invalid HTML), and the browser then turns Space/Enter
+          typed in a field into a click on the backdrop — dismissing the sheet
+          mid-entry. box-none lets taps in the dim area fall through to it. */}
+      <View className="absolute inset-0 justify-end" pointerEvents="box-none">
         <Pressable onPress={() => undefined}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <Animated.View
@@ -187,6 +255,35 @@ export function AddressSheet({
               </View>
 
               <SheetHeader onClose={onClose} />
+
+              {/* GPS prefill — fills the fields below; the customer edits/confirms. */}
+              <Pressable
+                onPress={() => void useMyLocation()}
+                disabled={geoStatus === 'locating'}
+                accessibilityRole="button"
+                accessibilityLabel="Use my current location to fill the address"
+                accessibilityState={{ busy: geoStatus === 'locating' }}
+                className="mt-1 flex-row items-center gap-2 self-start rounded-full border px-3.5 py-2"
+                style={{ borderColor: geoStatus === 'done' ? '#2E7D4F' : BRAND }}
+              >
+                <Ionicons
+                  name={geoStatus === 'locating' ? 'sync-circle-outline' : geoStatus === 'done' ? 'checkmark-circle' : 'location'}
+                  size={14}
+                  color={geoStatus === 'failed' ? DANGER : geoStatus === 'done' ? '#2E7D4F' : BRAND}
+                />
+                <RNText
+                  className="text-[12.5px] font-bold"
+                  style={{ color: geoStatus === 'failed' ? DANGER : geoStatus === 'done' ? '#2E7D4F' : BRAND }}
+                >
+                  {geoStatus === 'locating'
+                    ? 'Locating…'
+                    : geoStatus === 'done'
+                      ? 'Location added — review below'
+                      : geoStatus === 'failed'
+                        ? 'Could not get location — enter manually'
+                        : 'Use my location'}
+                </RNText>
+              </Pressable>
 
               <ScrollView
                 keyboardShouldPersistTaps="handled"
@@ -305,7 +402,7 @@ export function AddressSheet({
             </Animated.View>
           </KeyboardAvoidingView>
         </Pressable>
-      </Pressable>
+      </View>
       </Animated.View>
     </Modal>
   );

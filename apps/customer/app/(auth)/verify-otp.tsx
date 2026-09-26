@@ -9,11 +9,13 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { ApiError } from '@sakya/api-client';
 import { StatusBar } from 'expo-status-bar';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { authApi } from '../../src/api/auth';
+import { useResponsive } from '../../src/lib/responsive';
 import { useAuthStore } from '../../src/stores/auth-store';
 
 const BRAND = '#0B594C';
@@ -22,7 +24,13 @@ const MUTED = '#8C8A80';
 const LINE = '#E7E4DA';
 const DANGER = '#B42318';
 
-const CODE_LENGTH = 4;
+/**
+ * Production issues 6-digit codes; the non-production demo issues 4. The
+ * screen sizes to whichever the API actually sent (the demo reports its code
+ * via `devCode`, so its length is authoritative there). Hardcoding 4 — as this
+ * screen used to — meant a production build could never accept a real code.
+ */
+const PRODUCTION_CODE_LENGTH = 6;
 /** Matches the API's resend cooldown. */
 const RESEND_SECONDS = 60;
 
@@ -69,6 +77,18 @@ export default function VerifyOtpScreen() {
 
   const inputRef = useRef<TextInput>(null);
 
+  // Demo responses carry the code itself, so its length is the truth there;
+  // otherwise this is a production build expecting the 6-digit code.
+  const codeLength = demoCode !== null ? demoCode.length : PRODUCTION_CODE_LENGTH;
+
+  // Six boxes must fit a 320dp phone: derive the box size from the real
+  // viewport instead of assuming 44px always fits.
+  const { contentWidth } = useResponsive();
+  const boxWidth = Math.max(
+    34,
+    Math.min(48, Math.floor((contentWidth - 48 - (codeLength - 1) * 10) / codeLength)),
+  );
+
   useEffect(() => {
     if (phone === null) {
       router.replace('/(auth)/phone');
@@ -82,7 +102,7 @@ export default function VerifyOtpScreen() {
     return () => clearTimeout(timer);
   }, [resendIn]);
 
-  const canSubmit = code.length === CODE_LENGTH && !loading && phone !== null;
+  const canSubmit = code.length === codeLength && !loading && phone !== null;
 
   const subtitle = useMemo(
     () => (phone === null ? '' : formatPhoneForDisplay(phone)),
@@ -104,7 +124,15 @@ export default function VerifyOtpScreen() {
       // NEW CUSTOMER → optional, minimal profile completion. Not a sign-up:
       // the account exists and is authenticated already.
       if (session.isNewUser && session.user.firstName === 'Customer') {
-        router.replace('/(auth)/complete-profile');
+        // Carry the intended destination across the optional profile step —
+        // without this the profile screen's `from` param was always empty and
+        // a customer caught at checkout was returned to Home instead.
+        const next = pendingRedirect;
+        router.replace(
+          next !== null
+            ? { pathname: '/(auth)/complete-profile', params: { from: next } }
+            : '/(auth)/complete-profile',
+        );
         return;
       }
 
@@ -113,7 +141,12 @@ export default function VerifyOtpScreen() {
       useAuthStore.getState().setPendingRedirect(null);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : '';
-      if (message.toLowerCase().includes('too many') || message.toLowerCase().includes('wait')) {
+      if (cause instanceof ApiError && cause.code === 'NETWORK_ERROR') {
+        // Transport-level failure (offline, DNS, timeout): telling the customer
+        // "the code did not match" here sends them retyping a perfectly good
+        // code — this reads like the screen being stuck on "Verifying…".
+        setError('Could not reach Sakya Farms. Check your connection and try again.');
+      } else if (message.toLowerCase().includes('too many') || message.toLowerCase().includes('wait')) {
         setError('Too many attempts. Please wait before trying again.');
       } else {
         // Generic on purpose: wrong code, expired code and unknown code read
@@ -131,12 +164,12 @@ export default function VerifyOtpScreen() {
   function handleChange(value: string) {
     // Digits only; a paste longer than the code is trimmed to its first
     // digits, which is also what makes SMS autofill "just work".
-    const digits = value.replace(/\D/g, '').slice(0, CODE_LENGTH);
+    const digits = value.replace(/\D/g, '').slice(0, codeLength);
     setCode(digits);
     if (error) setError(null);
 
     // Auto-verify once every box is filled — the expected mobile behaviour.
-    if (digits.length === CODE_LENGTH) {
+    if (digits.length === codeLength) {
       void handleVerify(digits);
     }
   }
@@ -191,14 +224,14 @@ export default function VerifyOtpScreen() {
             </RNText>
 
             <RNText className="text-ink-soft text-[14px] leading-5 text-center mt-2">
-              Enter the {CODE_LENGTH}-digit code sent to {subtitle}
+              Enter the {codeLength}-digit code sent to {subtitle}
             </RNText>
           </View>
 
           {/* DEMO CODE CHIP — rendered only when the API reported the code,
               i.e. non-production demo builds. Never on a production build. */}
 
-          {demoCode !== null ? (
+          {__DEV__ && demoCode !== null ? (
             <View className="self-center flex-row items-center gap-1.5 rounded-full px-3.5 py-1.5 mb-5" style={{ backgroundColor: '#EEF7ED' }}>
               <Ionicons name="information-circle-outline" size={15} color={BRAND} />
               <RNText className="text-[12px] font-bold" style={{ color: BRAND }}>
@@ -215,20 +248,21 @@ export default function VerifyOtpScreen() {
             className="items-center"
           >
             <View className="flex-row justify-center gap-2.5">
-              {Array.from({ length: CODE_LENGTH }, (_, index) => {
+              {Array.from({ length: codeLength }, (_, index) => {
                 const digit = code[index] ?? '';
                 const isActive = index === code.length && !loading;
                 return (
                   <View
                     key={index}
                     className={
-                      'h-[52px] w-[44px] items-center justify-center rounded-[12px] border bg-[#FCFBF6]' +
+                      'h-[52px] items-center justify-center rounded-[12px] border bg-[#FCFBF6]' +
                       (error
                         ? ' border-danger'
                         : isActive
                           ? ' border-brand border-2'
                           : ' border-line')
                     }
+                    style={{ width: boxWidth }}
                   >
                     <RNText className="text-[22px] font-bold" style={{ color: INK }}>
                       {digit}
@@ -248,11 +282,11 @@ export default function VerifyOtpScreen() {
             keyboardType="number-pad"
             textContentType="oneTimeCode"
             autoComplete="sms-otp"
-            maxLength={CODE_LENGTH}
+            maxLength={codeLength}
             autoFocus
             editable={!loading}
             style={{ position: 'absolute', opacity: 0, height: 1, width: 1 }}
-            accessibilityLabel={`${CODE_LENGTH}-digit verification code`}
+            accessibilityLabel={`${codeLength}-digit verification code`}
           />
 
           {/* ERROR */}

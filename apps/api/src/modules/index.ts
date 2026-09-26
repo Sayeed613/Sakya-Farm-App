@@ -11,5 +11,6 @@ export { OrdersModule } from './orders/orders.module';
 export { PaymentsModule } from './payments/payments.module';
 export { ProductsModule } from './products/products.module';
 export { ReviewsModule } from './reviews/reviews.module';
+export { CustomerJourneyModule } from './customer-journey/customer-journey.module';
 export { StoresModule } from './stores/stores.module';
 export { UsersModule } from './users/users.module';

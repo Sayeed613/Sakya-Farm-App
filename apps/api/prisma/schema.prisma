@@ -160,6 +160,16 @@ enum ReviewStatus {
   HIDDEN
 }
 
+/// Lifecycle of a customer return request. REQUESTED → APPROVED/REJECTED →
+/// REFUNDED. Only APPROVED requests reach the refund payment flow.
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  REFUNDED
+  CLOSED
+}
+
 enum NotificationChannel {
   EMAIL
   SMS
@@ -193,12 +203,12 @@ enum AddressType {
 // ---------------------------------------------------------------------------
 
 model User {
-  id     String  @id @default(uuid()) @db.Uuid
+  id           String     @id @default(uuid()) @db.Uuid
   /// Nullable: customers authenticate by phone + OTP, so email is an optional
   /// profile field. Staff/admin accounts are provisioned with an email.
-  email  String? @unique
+  email        String?    @unique
   /// The primary authentication identity for customers. E.164, unique.
-  phone  String? @unique
+  phone        String?    @unique
   /// Argon2id hash. Null for users who only authenticate via phone OTP.
   passwordHash String?    @map("password_hash")
   firstName    String     @map("first_name")
@@ -227,6 +237,20 @@ model User {
   orderStatusChanges  OrderStatusHistory[] @relation("OrderStatusActor")
   deliveryAssignments DeliveryAssignment[] @relation("DeliveryPartner")
   payments            Payment[]
+  wishlistItems       WishlistItem[]
+  returnRequests      ReturnRequest[]
+  stockAlerts         StockAlert[]
+
+  /// Customer notification preferences, e.g. { "orderUpdates": true,
+  /// "promotions": false, "pushEnabled": true }. Validated by zod at the API
+  /// boundary; Json keeps the shape evolvable without a migration per field.
+  notificationPrefs Json? @map("notification_prefs")
+
+  /// Soft-deletion for account removal. The row is anonymised in the same
+  /// transaction (see UsersService.deleteAccount): orders and payments must
+  /// survive for finance law, so the user row cannot be hard-deleted.
+  deletedAt       DateTime?        @map("deleted_at")
+  analyticsEvents AnalyticsEvent[]
 
   @@index([status])
   @@index([createdAt])
@@ -303,7 +327,10 @@ model OtpCode {
   id    String @id @default(uuid()) @db.Uuid
   phone String
 
-  tokenHash String @unique @map("token_hash")
+  // Not unique: in demo mode every phone hashes the same fixed code, and
+  // verification is always phone-scoped (`findFirst` by phone + recency), so a
+  // global hash index would only reject legitimate rows (P2002 on resend).
+  tokenHash String @map("token_hash")
 
   /// Superseded the moment a newer code is issued to the same phone.
   consumedAt DateTime? @map("consumed_at")
@@ -353,15 +380,15 @@ model Address {
   type   AddressType @default(SHIPPING)
   label  String?
 
-  recipientName String  @map("recipient_name")
+  recipientName String   @map("recipient_name")
   phone         String
   line1         String
   line2         String?
   landmark      String?
   city          String
   state         String
-  postalCode    String  @map("postal_code")
-  country       String  @default("India")
+  postalCode    String   @map("postal_code")
+  country       String   @default("India")
   latitude      Decimal? @db.Decimal(9, 6)
   longitude     Decimal? @db.Decimal(9, 6)
 
@@ -396,9 +423,9 @@ model Category {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  parent   Category?         @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children Category[]        @relation("CategoryTree")
-  products ProductCategory[]
+  parent              Category?            @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children            Category[]           @relation("CategoryTree")
+  products            ProductCategory[]
 
   @@index([parentId, position])
   @@index([isActive])
@@ -415,26 +442,27 @@ model Product {
   sourceHandle    String?        @map("source_handle")
 
   title           String
-  slug            String  @unique
+  slug            String   @unique
   description     String?
-  descriptionHtml String? @map("description_html")
+  descriptionHtml String?  @map("description_html")
   vendor          String?
-  productType     String? @map("product_type")
+  productType     String?  @map("product_type")
   tags            String[] @default([])
 
-  status     ProductStatus @default(DRAFT)
+  status      ProductStatus @default(DRAFT)
   /// Availability is independent of stock levels. See `Inventory`.
-  isAvailable Boolean      @default(false) @map("is_available")
+  isAvailable Boolean       @default(false) @map("is_available")
 
   publishedAt DateTime? @map("published_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  variants   ProductVariant[]
-  images     ProductImage[]
-  categories ProductCategory[]
-  reviews    Review[]
+  variants      ProductVariant[]
+  images        ProductImage[]
+  categories    ProductCategory[]
+  reviews       Review[]
+  wishlistItems WishlistItem[]
 
   // A given source product may appear exactly once, by id and by handle.
   @@unique([sourcePlatform, sourceProductId])
@@ -447,8 +475,8 @@ model Product {
 
 /// The actually purchasable unit. Price, SKU and weight belong here.
 model ProductVariant {
-  id        String  @id @default(uuid()) @db.Uuid
-  productId String  @map("product_id") @db.Uuid
+  id        String @id @default(uuid()) @db.Uuid
+  productId String @map("product_id") @db.Uuid
 
   sourceVariantId String? @map("source_variant_id")
   sku             String? @unique
@@ -456,15 +484,15 @@ model ProductVariant {
   title           String
 
   /// Integer paise. Never a float, never rupees.
-  priceInPaise          Int  @map("price_in_paise")
-  compareAtPriceInPaise Int? @map("compare_at_price_in_paise")
-  costInPaise           Int? @map("cost_in_paise")
+  priceInPaise          Int    @map("price_in_paise")
+  compareAtPriceInPaise Int?   @map("compare_at_price_in_paise")
+  costInPaise           Int?   @map("cost_in_paise")
   currency              String @default("INR")
 
-  weightGrams     Int?    @map("weight_grams")
+  weightGrams      Int?    @map("weight_grams")
   requiresShipping Boolean @default(true) @map("requires_shipping")
-  isAvailable     Boolean @default(false) @map("is_available")
-  position        Int     @default(0)
+  isAvailable      Boolean @default(false) @map("is_available")
+  position         Int     @default(0)
 
   /// Source option values, e.g. { "Weight": "500 g" }.
   optionValues Json? @map("option_values")
@@ -472,12 +500,13 @@ model ProductVariant {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  product             Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
-  images              ProductImage[]
-  inventory           Inventory[]
-  inventoryMovements  InventoryMovement[]
-  cartItems           CartItem[]
-  orderItems          OrderItem[]
+  product            Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  images             ProductImage[]
+  inventory          Inventory[]
+  inventoryMovements InventoryMovement[]
+  cartItems          CartItem[]
+  orderItems         OrderItem[]
+  stockAlerts        StockAlert[]
 
   @@unique([productId, position])
   @@index([productId])
@@ -541,45 +570,87 @@ model Store {
   line2      String?
   city       String?
   state      String?
-  postalCode String? @map("postal_code")
-  country    String  @default("India")
+  postalCode String?  @map("postal_code")
+  country    String   @default("India")
   latitude   Decimal? @db.Decimal(9, 6)
   longitude  Decimal? @db.Decimal(9, 6)
 
-  timezone String @default("Asia/Kolkata")
+  timezone       String @default("Asia/Kolkata")
   /// Local opening hours, e.g. { "mon": ["09:00", "21:00"] }.
-  operatingHours Json? @map("operating_hours")
+  operatingHours Json?  @map("operating_hours")
 
   isActive Boolean @default(true) @map("is_active")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  staff     StoreStaff[]
-  inventory Inventory[]
-  movements InventoryMovement[]
-  carts     Cart[]
-  cartItems CartItem[]
-  orders    Order[]
+  staff               StoreStaff[]
+  inventory           Inventory[]
+  movements           InventoryMovement[]
+  carts               Cart[]
+  cartItems           CartItem[]
+  orders              Order[]
+  serviceabilityZones ServiceabilityZone[]
 
   @@index([isActive])
   @@index([city])
   @@map("stores")
 }
 
+/// A fulfilment zone: the set of pincodes one store ships to, with the
+/// delivery promise and shipping economics for that zone. Checkout resolves
+/// the customer's pincode against these rows — the server decides whether an
+/// address is deliverable, never the client.
+model ServiceabilityZone {
+  id      String @id @default(uuid()) @db.Uuid
+  storeId String @map("store_id") @db.Uuid
+
+  /// Human label, e.g. "Hyderabad city".
+  name String
+
+  /// Deliverable pincodes, exact-match strings ("500032"). An array keeps the
+  /// common case (a few hundred pincodes) simple; ranges can come later as a
+  /// second model without breaking this one.
+  pincodes String[]
+
+  /// Inclusive delivery-window bounds in days, shown as "2–9 days".
+  minDeliveryDays Int @map("min_delivery_days")
+  maxDeliveryDays Int @map("max_delivery_days")
+
+  /// Whether this zone can receive Cash on Delivery orders.
+  codAvailable Boolean @default(true) @map("cod_available")
+
+  /// Shipping economics for this zone (0 = free shipping).
+  shippingFeeInPaise           Int  @default(0) @map("shipping_fee_in_paise")
+  /// Subtotal (after discount) at or above which shipping is free; null = never free.
+  freeShippingThresholdInPaise Int? @map("free_shipping_threshold_in_paise")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([isActive])
+  @@map("serviceability_zones")
+}
+
 /// One device's push-notification registration. A user may have several
 /// (phone + tablet); tokens are unique and upserted on re-registration. Rows
 /// live until the user deletes them or the provider reports the token dead.
 model DevicePushToken {
-  id        String @id @default(uuid()) @db.Uuid
-  userId    String @map("user_id") @db.Uuid
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
 
   /// The Expo push token, e.g. `ExponentPushToken[xxxxxxxx]`. Unique because
   /// the same device registering twice must update, not duplicate.
-  token       String @unique
-  platform    DevicePlatform
-  /** Optional human-readable device label for the user's settings screen. */
-  deviceName  String? @map("device_name")
+  token      String         @unique
+  platform   DevicePlatform
+  /**
+   * Optional human-readable device label for the user's settings screen.
+   */
+  deviceName String?        @map("device_name")
 
   /// Set when Expo's receipts report the token is no longer registered.
   deactivatedAt DateTime? @map("deactivated_at")
@@ -596,10 +667,10 @@ model DevicePushToken {
 
 /// Links an operator to a store. Store-scoped access, separate from platform roles.
 model StoreStaff {
-  id      String    @id @default(uuid()) @db.Uuid
-  storeId String    @map("store_id") @db.Uuid
-  userId  String    @map("user_id") @db.Uuid
-  role    RoleCode  @default(STORE_STAFF)
+  id       String   @id @default(uuid()) @db.Uuid
+  storeId  String   @map("store_id") @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  role     RoleCode @default(STORE_STAFF)
   isActive Boolean  @default(true) @map("is_active")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -620,9 +691,9 @@ model Inventory {
   variantId String @map("variant_id") @db.Uuid
   storeId   String @map("store_id") @db.Uuid
 
-  quantityOnHand Int @default(0) @map("quantity_on_hand")
+  quantityOnHand   Int @default(0) @map("quantity_on_hand")
   quantityReserved Int @default(0) @map("quantity_reserved")
-  reorderLevel   Int @default(0) @map("reorder_level")
+  reorderLevel     Int @default(0) @map("reorder_level")
 
   /// Denormalised running balance is not stored; it is always derivable from the
   /// ledger and kept on this row inside a transaction.
@@ -648,11 +719,11 @@ model InventoryMovement {
   variantId   String @map("variant_id") @db.Uuid
   storeId     String @map("store_id") @db.Uuid
 
-  type InventoryMovementType
+  type          InventoryMovementType
   /// Signed change in on-hand quantity, e.g. -3 for a sale of three.
-  quantityDelta Int @map("quantity_delta")
+  quantityDelta Int                   @map("quantity_delta")
   /// On-hand quantity immediately after this movement, for auditability.
-  quantityAfter Int @map("quantity_after")
+  quantityAfter Int                   @map("quantity_after")
 
   reason        String?
   /// Loose reference to the record that caused this (order, transfer, count).
@@ -681,8 +752,8 @@ model InventoryMovement {
 
 /// A cart may belong to a signed-in user or to an anonymous device.
 model Cart {
-  id     String  @id @default(uuid()) @db.Uuid
-  userId String? @map("user_id") @db.Uuid
+  id          String  @id @default(uuid()) @db.Uuid
+  userId      String? @map("user_id") @db.Uuid
   /// Opaque client identifier used before the user signs in.
   anonymousId String? @map("anonymous_id")
   storeId     String? @map("store_id") @db.Uuid
@@ -696,10 +767,10 @@ model Cart {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user  User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  store Store?     @relation(fields: [storeId], references: [id], onDelete: SetNull)
-  coupon Coupon?   @relation(fields: [couponId], references: [id], onDelete: SetNull)
-  items CartItem[]
+  user   User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store  Store?     @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  coupon Coupon?    @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  items  CartItem[]
 
   couponId String? @map("coupon_id") @db.Uuid
 
@@ -763,10 +834,10 @@ model Order {
 
   notes String?
 
-  placedAt    DateTime? @map("placed_at")
-  cancelledAt DateTime? @map("cancelled_at")
-  deliveredAt DateTime? @map("delivered_at")
-  cancelReason String?  @map("cancel_reason")
+  placedAt     DateTime? @map("placed_at")
+  cancelledAt  DateTime? @map("cancelled_at")
+  deliveredAt  DateTime? @map("delivered_at")
+  cancelReason String?   @map("cancel_reason")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -780,6 +851,7 @@ model Order {
   shipments           Shipment[]
   deliveryAssignments DeliveryAssignment[]
   couponRedemptions   CouponRedemption[]
+  returnRequests      ReturnRequest[]
 
   @@index([userId, status])
   @@index([storeId, status])
@@ -796,8 +868,8 @@ model OrderItem {
 
   variantId String? @map("variant_id") @db.Uuid
 
-  productTitle String @map("product_title")
-  variantTitle String @map("variant_title")
+  productTitle String  @map("product_title")
+  variantTitle String  @map("variant_title")
   sku          String?
 
   quantity Int
@@ -809,9 +881,10 @@ model OrderItem {
 
   createdAt DateTime @default(now()) @map("created_at")
 
-  order   Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
-  review  Review?
+  order         Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant       ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  review        Review?
+  returnRequest ReturnRequest?
 
   @@index([orderId])
   @@index([variantId])
@@ -851,9 +924,9 @@ model Payment {
   orderId String @map("order_id") @db.Uuid
   userId  String @map("user_id") @db.Uuid
 
-  provider String @default("MANUAL")
+  provider          String        @default("MANUAL")
   /// Payment id assigned by the provider, when there is one.
-  providerPaymentId String? @map("provider_payment_id")
+  providerPaymentId String?       @map("provider_payment_id")
   method            PaymentMethod @default(CASH_ON_DELIVERY)
 
   status   PaymentStatus @default(PENDING)
@@ -866,8 +939,8 @@ model Payment {
   /// within one customer, not across the platform — see `@@unique` below.
   idempotencyKey String? @map("idempotency_key")
 
-  failureReason String? @map("failure_reason")
-  providerPayload Json? @map("provider_payload")
+  failureReason   String? @map("failure_reason")
+  providerPayload Json?   @map("provider_payload")
 
   capturedAt DateTime? @map("captured_at")
   refundedAt DateTime? @map("refunded_at")
@@ -895,7 +968,7 @@ model Shipment {
 
   status ShipmentStatus @default(PENDING)
 
-  expectedAt  DateTime? @map("expected_at")
+  expectedAt   DateTime? @map("expected_at")
   dispatchedAt DateTime? @map("dispatched_at")
   deliveredAt  DateTime? @map("delivered_at")
 
@@ -911,10 +984,10 @@ model Shipment {
 }
 
 model DeliveryAssignment {
-  id               String  @id @default(uuid()) @db.Uuid
-  orderId          String  @map("order_id") @db.Uuid
-  shipmentId       String? @map("shipment_id") @db.Uuid
-  deliveryPartnerUserId String @map("delivery_partner_user_id") @db.Uuid
+  id                    String  @id @default(uuid()) @db.Uuid
+  orderId               String  @map("order_id") @db.Uuid
+  shipmentId            String? @map("shipment_id") @db.Uuid
+  deliveryPartnerUserId String  @map("delivery_partner_user_id") @db.Uuid
 
   status DeliveryAssignmentStatus @default(ASSIGNED)
 
@@ -947,7 +1020,7 @@ model Coupon {
   id   String @id @default(uuid()) @db.Uuid
   code String @unique
 
-  type CouponType
+  type  CouponType
   /// Interpretation depends on `type`:
   ///   PERCENTAGE     -> basis points (100 = 1%, 1250 = 12.5%)
   ///   FIXED_AMOUNT   -> paise
@@ -957,13 +1030,13 @@ model Coupon {
 
   description String?
 
-  minOrderInPaise   Int  @default(0) @map("min_order_in_paise")
+  minOrderInPaise    Int  @default(0) @map("min_order_in_paise")
   maxDiscountInPaise Int? @map("max_discount_in_paise")
 
   /// Total redemptions allowed across all users; null means unlimited.
-  usageLimit   Int? @map("usage_limit")
-  perUserLimit Int  @default(1) @map("per_user_limit")
-  redeemedCount Int @default(0) @map("redeemed_count")
+  usageLimit    Int? @map("usage_limit")
+  perUserLimit  Int  @default(1) @map("per_user_limit")
+  redeemedCount Int  @default(0) @map("redeemed_count")
 
   startsAt DateTime? @map("starts_at")
   endsAt   DateTime? @map("ends_at")
@@ -973,7 +1046,7 @@ model Coupon {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   orders      Order[]
-  carts        Cart[]
+  carts       Cart[]
   redemptions CouponRedemption[]
 
   @@index([isActive, startsAt, endsAt])
@@ -1000,10 +1073,107 @@ model CouponRedemption {
   @@map("coupon_redemptions")
 }
 
+model WishlistItem {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @map("user_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// One save per product per customer.
+  @@unique([userId, productId])
+  @@index([userId, createdAt])
+  @@index([productId])
+  @@map("wishlist_items")
+}
+
+/// A customer's request to send one delivered order line back.
+/// One request per order line (the unique constraint) keeps the state machine
+/// linear; a customer wanting two lines returned opens two requests.
+model ReturnRequest {
+  id          String @id @default(uuid()) @db.Uuid
+  orderId     String @map("order_id") @db.Uuid
+  orderItemId String @map("order_item_id") @db.Uuid
+  userId      String @map("user_id") @db.Uuid
+
+  status ReturnStatus @default(REQUESTED)
+
+  /// Structured reason code (see packages/validation returns schema) plus a
+  /// free-text detail the customer may add.
+  reason  String
+  comment String?
+
+  /// Money to refund for this line, snapshotted at request time from the
+  /// order item's total. Refunds never re-read the live catalog price.
+  refundInPaise Int @map("refund_in_paise")
+
+  /// Admin decision note shown to the customer on reject/accept.
+  decisionNote String? @map("decision_note")
+
+  requestedAt DateTime  @default(now()) @map("requested_at")
+  decidedAt   DateTime? @map("decided_at")
+  completedAt DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orderItemId])
+  @@index([userId, status])
+  @@index([orderId])
+  @@map("return_requests")
+}
+
+/// A customer asking to be told when a sold-out variant is back. Written by
+/// the Notify Me action; consumed (and marked notified) when stock is received.
+model StockAlert {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @map("user_id") @db.Uuid
+  variantId String @map("variant_id") @db.Uuid
+
+  /// Set when the back-in-stock push has been sent; one alert notifies once.
+  notifiedAt DateTime? @map("notified_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, variantId])
+  @@index([variantId, notifiedAt])
+  @@map("stock_alerts")
+}
+
+/// Customer-generated product analytics event (screen_view, add_to_cart, …).
+/// Written fire-and-forget by the API; never blocks or fails a user request.
+model AnalyticsEvent {
+  id     String  @id @default(uuid()) @db.Uuid
+  userId String? @map("user_id") @db.Uuid
+
+  name      String
+  props     Json?
+  /// Client session correlation id, when the app supplies one.
+  sessionId String? @map("session_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([name, createdAt])
+  @@index([userId, createdAt])
+  @@map("analytics_events")
+}
+
 model Review {
-  id        String  @id @default(uuid()) @db.Uuid
-  productId String  @map("product_id") @db.Uuid
-  userId    String  @map("user_id") @db.Uuid
+  id          String  @id @default(uuid()) @db.Uuid
+  productId   String  @map("product_id") @db.Uuid
+  userId      String  @map("user_id") @db.Uuid
   /// Set when the review can be tied to a delivered purchase.
   /// Unique so one order line can back at most one review.
   orderItemId String? @unique @map("order_item_id") @db.Uuid
@@ -1039,19 +1209,19 @@ model Notification {
   userId String? @map("user_id") @db.Uuid
 
   channel NotificationChannel
-  status  NotificationStatus @default(QUEUED)
+  status  NotificationStatus  @default(QUEUED)
 
-  template String?
-  title    String
-  body     String
+  template          String?
+  title             String
+  body              String
   /// Structured payload for the sender, e.g. an order id.
-  data     Json?
+  data              Json?
   /// Provider message id, when the message was handed to a provider.
   providerMessageId String? @map("provider_message_id")
 
-  sentAt    DateTime? @map("sent_at")
-  readAt    DateTime? @map("read_at")
-  failureReason String? @map("failure_reason")
+  sentAt        DateTime? @map("sent_at")
+  readAt        DateTime? @map("read_at")
+  failureReason String?   @map("failure_reason")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

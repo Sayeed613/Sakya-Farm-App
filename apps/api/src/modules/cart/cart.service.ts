@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { addCartItemSchema, applyCouponSchema, mergeGuestCartSchema, updateCartItemSchema } from '@sakya/validation';
 import type {
   AddCartItemRequest,
@@ -10,28 +11,10 @@ import type {
   UpdateCartItemRequest,
 } from '@sakya/types';
 import type { MergeGuestCartRequest } from '@sakya/validation';
-import { multiplyPaise, percentageOf, subtractPaise, sumPaise, toPaise } from '@sakya/utils';
+import { multiplyPaise, sumPaise, toPaise } from '@sakya/utils';
 import { PrismaService } from '../../database/prisma.service';
-
-/** Placeholder constants for tax and shipping. Documented so they are recognisable as such. */
-const TAX_RATE_PERCENT = 0;
-const SHIPPING_IN_PAISE = 0;
-const FREE_SHIPPING_THRESHOLD_IN_PAISE = Infinity;
-
-/** Coupon-type-aware interpretation of a coupon's `value` column. */
-function describeCouponValue(
-  type: string,
-  valueInPaise: number,
-): { discountDescription: string; effectiveDiscountInPaise: number } {
-  if (type === 'PERCENTAGE') {
-    return { discountDescription: 'percentage', effectiveDiscountInPaise: valueInPaise };
-  }
-  if (type === 'FIXED_AMOUNT') {
-    return { discountDescription: 'fixed amount', effectiveDiscountInPaise: valueInPaise };
-  }
-  // FREE_SHIPPING: value is ignored and must be 0 by schema convention.
-  return { discountDescription: 'free shipping', effectiveDiscountInPaise: 0 };
-}
+import type { AppConfig } from '../../config/configuration';
+import { computeTotals } from '../../common/pricing';
 
 function toCartItemResponse(item: {
   id: string;
@@ -101,7 +84,10 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
 
 @Injectable()
 export class CartService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService<AppConfig, true>,
+  ) {}
 
   // -----------------------------------------------------------------------
   // Totals: always recomputed, never stored from client input
@@ -129,30 +115,33 @@ export class CartService {
   } {
     const subtotalInPaise = sumPaise(...items.map((item) => item.lineTotalInPaise));
 
-    let discountInPaise: Paise = toPaise(0);
-    if (coupon !== null && items.length > 0) {
-      const interpreted = describeCouponValue(coupon.type, coupon.valueInPaise);
-      if (coupon.type === 'PERCENTAGE') {
-        // Coupon value is stored in basis points (100 = 1%); percentageOf expects a percent.
-        discountInPaise = percentageOf(subtotalInPaise, interpreted.effectiveDiscountInPaise / 100);
-      } else if (coupon.type === 'FIXED_AMOUNT') {
-        discountInPaise = toPaise(Math.min(interpreted.effectiveDiscountInPaise, subtotalInPaise));
-      }
-      // FREE_SHIPPING: discount is 0 here; shipping becomes 0 below.
-    }
-
-    const afterDiscount = subtractPaise(subtotalInPaise, discountInPaise);
-    const taxInPaise = percentageOf(afterDiscount, TAX_RATE_PERCENT);
-    const shippingInPaise: Paise =
-      afterDiscount >= FREE_SHIPPING_THRESHOLD_IN_PAISE ? toPaise(0) : toPaise(SHIPPING_IN_PAISE);
-
-    return {
-      subtotalInPaise,
-      discountInPaise,
-      taxInPaise,
-      shippingInPaise,
-      totalInPaise: subtractPaise(sumPaise(subtotalInPaise, taxInPaise, shippingInPaise), discountInPaise),
-    };
+    /*
+     * Shared pricing module — the SAME function the order snapshot uses, so
+     * the approved checkout total is bit-for-bit the stored order total.
+     * GST is charged on the discounted subtotal; shipping uses the configured
+     * flat fee + free-shipping threshold.
+     */
+    const commerce = this.config.get('commerce', { infer: true })!;
+    return computeTotals(
+      {
+        subtotalInPaise,
+        coupon:
+          coupon === null
+            ? null
+            : {
+                type: coupon.type as 'PERCENTAGE' | 'FIXED_AMOUNT' | 'FREE_SHIPPING',
+                valueInPaise: coupon.valueInPaise,
+                minOrderInPaise: coupon.minOrderInPaise,
+                maxDiscountInPaise: coupon.maxDiscountInPaise,
+              },
+      },
+      {
+        taxRatePercent: commerce.taxRatePercent,
+        shippingFeeInPaise: commerce.shippingFeeInPaise,
+        freeShippingThresholdInPaise: commerce.freeShippingThresholdInPaise,
+        codFeeInPaise: commerce.codFeeInPaise,
+      },
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -170,6 +159,8 @@ export class CartService {
             code: record.coupon.code,
             type: record.coupon.type,
             valueInPaise: record.coupon.value,
+            minOrderInPaise: record.coupon.minOrderInPaise,
+            maxDiscountInPaise: record.coupon.maxDiscountInPaise,
           } as AppliedCouponResponse);
 
     const totals = this.recomputeTotals(items, coupon);
@@ -194,12 +185,52 @@ export class CartService {
     const parsed = addCartItemSchema.parse(body);
 
     const cart = await this.ensureUserCart(userId);
-    const store = await this.ensureCartStore(cart.id, parsed.storeId);
+
+    /*
+     * Fulfillment store: the caller's explicit store when provided, else the
+     * cart's already-scoped store, else the first active store — clients
+     * cannot choose a store (no public store endpoint exists to resolve one),
+     * so the server owns this decision exactly as in mergeGuestCart.
+     */
+    const resolvedStoreId =
+      parsed.storeId ??
+      cart.storeId ??
+      (
+        await this.prisma.store.findFirst({
+          where: { isActive: true },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true },
+        })
+      )?.id;
+
+    if (resolvedStoreId === undefined) {
+      throw new ConflictException('No store is available to fulfil this cart');
+    }
+
+    const store = await this.ensureCartStore(cart.id, resolvedStoreId);
     const variant = await this.assertVariantAvailable(parsed.variantId, store.id);
 
-    const existing = await this.prisma.cartItem.findFirst({
+    // Cart caps: per-line quantity and distinct line count. Guarding here (the
+    // server) rather than only in the UI keeps the limits true for every client.
+    const commerce = this.config.get('commerce', { infer: true })!;
+    const existingForCap = await this.prisma.cartItem.findFirst({
       where: { cartId: cart.id, variantId: parsed.variantId, storeId: store.id },
     });
+    if (existingForCap !== null && existingForCap.quantity + parsed.quantity > commerce.maxQuantityPerLine) {
+      throw new BadRequestException(
+        `You can order up to ${commerce.maxQuantityPerLine} units of this item`,
+      );
+    }
+    if (existingForCap === null) {
+      const lineCount = await this.prisma.cartItem.count({ where: { cartId: cart.id } });
+      if (lineCount >= commerce.maxCartLines) {
+        throw new BadRequestException(
+          `Your cart can hold up to ${commerce.maxCartLines} different items`,
+        );
+      }
+    }
+
+    const existing = existingForCap;
 
     if (existing !== null) {
       await this.prisma.cartItem.update({
@@ -228,6 +259,13 @@ export class CartService {
   ): Promise<CartResponse> {
     const parsed = updateCartItemSchema.parse(body);
     await this.assertCartItemBelongsToUser(userId, itemId);
+    // The same per-line cap applies when setting a quantity directly.
+    const commerce = this.config.get('commerce', { infer: true })!;
+    if (parsed.quantity > commerce.maxQuantityPerLine) {
+      throw new BadRequestException(
+        `You can order up to ${commerce.maxQuantityPerLine} units of this item`,
+      );
+    }
     await this.prisma.cartItem.update({
       where: { id: itemId },
       data: { quantity: parsed.quantity },

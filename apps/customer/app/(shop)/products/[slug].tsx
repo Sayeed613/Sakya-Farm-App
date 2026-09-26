@@ -1,16 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { Image } from 'expo-image';
+import { useCallback, useMemo, useState } from 'react';
 import {
-  Dimensions,
   FlatList,
   Pressable,
   Share,
   Text as RNText,
   View,
-  type ViewToken,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -23,107 +20,86 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { catalogApi } from '../../../src/api/catalog';
+import { journeyApi } from '../../../src/api/journey';
+import { useAuthStore } from '../../../src/stores/auth-store';
 import { ErrorState } from '../../../src/components/ErrorState';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
 import { ProductDetailsSheet } from '../../../src/components/commerce/ProductDetailsSheet';
 import { ProductVariantSelector } from '../../../src/components/commerce/ProductVariantSelector';
 import { RelatedProductCard } from '../../../src/components/commerce/RelatedProductCard';
+import { ReviewsSection } from '../../../src/components/commerce/ReviewsSection';
+import { ProductMediaCard } from '../../../src/components/commerce/ProductMediaCard';
 import { QuantityStepper } from '../../../src/components/commerce/QuantityStepper';
 import { formatMoney } from '../../../src/lib/format';
-import { describeProduct } from '../../../src/lib/product-description';
+import { goBackOrHome } from '../../../src/lib/navigation';
+import { cardShadow } from '../../../src/lib/shadows';
 import { deriveBadges } from '../../../src/lib/product-badges';
-import { defaultVariantOfDetail, useProductAdd } from '../../../src/lib/use-product-add';
+import {
+  defaultVariantOfDetail,
+} from '../../../src/lib/use-product-add';
 import { variantSelectorLabelOf } from '../../../src/lib/variant-units';
 import { useGuestCartStore } from '../../../src/stores/guest-cart-store';
-import type { ProductDetail, ProductListItem } from '@sakya/types';
+import type { ProductDetail, ProductListItem, WishlistResponse } from '@sakya/types';
 
 const BRAND = '#0B594C';
 const INK = '#171A18';
 const MUTED = '#8C8A80';
 const LINE = '#E4DED2';
 const CANVAS = '#FAF7F0';
-const SLIDE_H = 340;
-const W = Dimensions.get('window').width;
 
-// TRUE MORPH: the hero gallery is rendered ONCE, absolutely positioned above
-// the ScrollView, and as the page scrolls it flies from full-bleed into a
-// 34x34 rounded chip in the header slot — top/left/size/borderRadius driven
-// by scrollY and clamped over this range (px).
-const MORPH_RANGE: [number, number] = [0, 260];
-// While the chip flies, the scroll must still feel like ONE page: content
-// keeps scrolling normally beneath the floating hero (the spacer holds the
-// hero's place in the flow).
-const MORPH_CHIP = 34;
-const MORPH_CHIP_RADIUS = 9;
-// Header slot geometry: back button + gap → chip lands at left ~64,
-// vertically centred in the header row → top = insets.top + ~19.
-const HEADER_SLOT_LEFT = 64;
-// Chip geometry: 56px header row + 12px horizontal padding (px-3).
 const HEADER_ROW_HEIGHT = 56;
-// Header slot top = insets.top + ~19 (chip sits inside the header bar).
-const HEADER_SLOT_TOP_OFFSET = 19;
 
-/**
- * Premium product detail (references 2 + 4).
- *
- * Hero gallery with dots, unit-aware variant selection (the backend's variant
- * titles are rendered verbatim and drive the selector heading), premium
- * treatment ONLY from real tags, related products from cached catalog data,
- * and a sticky bar that adds the EXACT selected variant. The View Details
- * sheet layers over this page without losing the selection.
- *
- * Gesture: a TRUE MORPH — the hero gallery is rendered once, absolutely
- * positioned above the ScrollView (never part of the scrolling content),
- * and as the page scrolls that ONE element flies from full-bleed into a
- * 34×34 rounded chip inside the header. An invisible spacer of the hero's
- * height keeps the content flowing beneath it, and the header title fades
- * in beside the landed chip.
- */
+const CART_BAR_HEIGHT = 92;
+
+/** Page gutter — cards breathe inside this. */
+const GUTTER = 16;
+
 export default function ProductDetailScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
 
-  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
-  const [imageIndex, setImageIndex] = useState(0);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(
+    null,
+  );
+
   const [sheetOpen, setSheetOpen] = useState(false);
-  const viewabilityRef = useRef({ viewAreaCoveragePercentThreshold: 60 });
 
   const scrollY = useSharedValue(0);
+
   const scrollHandler = useAnimatedScrollHandler({
     onScroll: (event) => {
       scrollY.value = event.contentOffset.y;
     },
   });
 
-  // THE MORPH — one element, five animated properties, clamped. It starts
-  // exactly on top of the (removed) in-flow hero position and lands in the
-  // header slot next to the back button.
-  const morphStyle = useAnimatedStyle(
-    () => ({
-      top: interpolate(scrollY.value, MORPH_RANGE, [0, insets.top + HEADER_SLOT_TOP_OFFSET], Extrapolation.CLAMP),
-      left: interpolate(scrollY.value, MORPH_RANGE, [0, HEADER_SLOT_LEFT], Extrapolation.CLAMP),
-      width: interpolate(scrollY.value, MORPH_RANGE, [W, MORPH_CHIP], Extrapolation.CLAMP),
-      height: interpolate(scrollY.value, MORPH_RANGE, [SLIDE_H, MORPH_CHIP], Extrapolation.CLAMP),
-      borderRadius: interpolate(scrollY.value, MORPH_RANGE, [0, MORPH_CHIP_RADIUS], Extrapolation.CLAMP),
-    }),
-    [insets.top],
-  );
+  /*
+   * Header fade-in. The white header surface and its title appear as the
+   * media card scrolls beneath it — replaces the old morphing hero.
+   */
+  const HEADER_FADE_RANGE: [number, number] = [120, 220];
 
-  // Header chrome: the white bar fades in under the flying chip, the title
-  // fades in beside it, and the gallery dots fade out early in the morph.
   const headerBgStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(scrollY.value, MORPH_RANGE, [0, 1], Extrapolation.CLAMP),
+    opacity: interpolate(
+      scrollY.value,
+      HEADER_FADE_RANGE,
+      [0, 1],
+      Extrapolation.CLAMP,
+    ),
   }));
 
   const headerTitleStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(scrollY.value, MORPH_RANGE, [0, 1], Extrapolation.CLAMP),
+    opacity: interpolate(
+      scrollY.value,
+      HEADER_FADE_RANGE,
+      [0, 1],
+      Extrapolation.CLAMP,
+    ),
   }));
 
-  const heroDotsStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(scrollY.value, [0, 60], [1, 0], Extrapolation.CLAMP),
-  }));
-
+  /*
+   * Product request.
+   */
   const detail = useQuery({
     queryKey: ['catalog', 'product', slug],
     queryFn: () => catalogApi.getProduct(slug),
@@ -132,108 +108,256 @@ export default function ProductDetailScreen() {
   });
 
   const detailData: ProductDetail | null = detail.data ?? null;
+
   const variants = detailData?.variants ?? [];
+
   const selected =
     variants.find((variant) => variant.id === selectedVariantId) ??
     (detailData ? defaultVariantOfDetail(detailData) : null);
 
-  // Stepper bridge: shows the quantity of whichever variant of this product is
-  // already in the cart, so a picker-chosen pack keeps its count visible.
-  const bridgeProduct = useMemo<ProductListItem | null>(() => {
-    if (!detailData) return null;
-    return {
-      id: detailData.id,
-      slug: detailData.slug,
-      title: detailData.title,
-      vendor: detailData.vendor,
-      productType: detailData.productType,
-      isAvailable: detailData.isAvailable,
-      primaryImageUrl: detailData.primaryImageUrl,
-      imageUrls: detailData.imageUrls,
-      price: detailData.price,
-      compareAtMaxInPaise: detailData.compareAtMaxInPaise,
-      variantCount: detailData.variantCount,
-      availableVariantCount: detailData.availableVariantCount,
-      variantTitles: detailData.variantTitles,
-      categories: detailData.categories,
-      publishedAt: detailData.publishedAt,
-    };
-  }, [detailData]);
-
-  const stepper = useProductAdd(
-    bridgeProduct ?? {
-      id: '',
-      slug: '',
-      title: '',
-      vendor: null,
-      productType: null,
-      isAvailable: false,
-      primaryImageUrl: null,
-      imageUrls: [],
-      price: null,
-      compareAtMaxInPaise: null,
-      variantCount: 0,
-      availableVariantCount: 0,
-      variantTitles: [],
-      categories: [],
-      publishedAt: null,
-    },
-  );
-
+  /*
+   * Bridge product for existing cart/quantity logic.
+   */
+  /*
+   * Add selected variant to cart.
+   */
   const onAddPress = useCallback(() => {
     if (!selected || !detailData) return;
-    const store = useGuestCartStore.getState();
-    store.rememberPrice(selected.id, selected.priceInPaise);
-    store.rememberLastAdded(detailData.slug, detailData.primaryImageUrl);
-    store.addLine(selected.id, 1, {
-      productTitle: detailData.title,
-      variantTitle: selected.title,
-      imageUrl: detailData.primaryImageUrl,
-      slug: detailData.slug,
-    });
-  }, [selected, detailData, stepper]);
 
-  // Small local helpers so the stepper always operates on the SELECTED variant.
+    const store = useGuestCartStore.getState();
+
+    store.rememberPrice(
+      selected.id,
+      selected.priceInPaise,
+    );
+
+    store.rememberLastAdded(
+      detailData.slug,
+      detailData.primaryImageUrl,
+    );
+
+    store.addLine(
+      selected.id,
+      1,
+      {
+        productTitle: detailData.title,
+        variantTitle: selected.title,
+        imageUrl: detailData.primaryImageUrl,
+        slug: detailData.slug,
+      },
+    );
+  }, [selected, detailData]);
+
+  /*
+   * Quantity helpers.
+   */
   const stepperIncrement = useCallback(
     (variantId: string) => {
       const store = useGuestCartStore.getState();
-      const current = store.lines.find((line) => line.variantId === variantId)?.quantity ?? 0;
-      store.setQuantity(variantId, current + 1);
+
+      const current =
+        store.lines.find(
+          (line) => line.variantId === variantId,
+        )?.quantity ?? 0;
+
+      store.setQuantity(
+        variantId,
+        current + 1,
+      );
     },
     [],
   );
 
   const stepperDecrement = useCallback(() => {
     if (!selected) return;
+
     const store = useGuestCartStore.getState();
-    const current = store.lines.find((line) => line.variantId === selected.id)?.quantity ?? 0;
-    store.setQuantity(selected.id, current - 1);
+
+    const current =
+      store.lines.find(
+        (line) => line.variantId === selected.id,
+      )?.quantity ?? 0;
+
+    store.setQuantity(
+      selected.id,
+      current - 1,
+    );
   }, [selected]);
 
-  // Related products: ONLY from the already-fetched catalog cache (no request).
+  /*
+   * Related products.
+   */
   const relatedProducts = useMemo<ProductListItem[]>(() => {
-    const cached = queryClient.getQueryData<{ items: ProductListItem[] }>([
-      'catalog',
-      'products',
-      'home-all',
-    ]);
-    return (cached?.items ?? []).filter((item) => item.slug !== slug).slice(0, 10);
+    const cached =
+      queryClient.getQueryData<{
+        items: ProductListItem[];
+      }>([
+        'catalog',
+        'products',
+        'home-all',
+      ]);
+
+    return (cached?.items ?? [])
+      .filter((item) => item.slug !== slug)
+      .slice(0, 10);
   }, [queryClient, slug]);
 
   const selectedQuantity =
     selected != null
-      ? (useGuestCartStore.getState().lines.find((line) => line.variantId === selected.id)?.quantity ?? 0)
+      ? (
+          useGuestCartStore
+            .getState()
+            .lines.find(
+              (line) => line.variantId === selected.id,
+            )?.quantity ?? 0
+        )
       : 0;
 
   const handleShare = useCallback(() => {
     if (!detailData) return;
-    void Share.share({ message: `${detailData.title} — Sakya Farms` });
+
+    void Share.share({
+      message: `${detailData.title} — Sakya Farms`,
+    });
   }, [detailData]);
 
+  /*
+   * Wishlist: the heart reflects the SERVER wishlist (['wishlist'] cache).
+   * Toggling calls the API optimistically; the server response replaces the
+   * cache so every surface reading it stays in sync. Failures roll back and
+   * surface as a brief note.
+   */
+  const queryClientForWishlist = useQueryClient();
+  const session = useAuthStore((state) => state.session);
+  const wishlistQuery = useQuery({
+    queryKey: ['wishlist'],
+    queryFn: journeyApi.listWishlist,
+    enabled: session !== null,
+    staleTime: 30_000,
+  });
+  const isWishlisted =
+    session !== null && detailData
+      ? (wishlistQuery.data?.items.some((item) => item.productSlug === detailData.slug) ?? false)
+      : false;
+
+  const [wishlistError, setWishlistError] = useState(false);
+
+  const toggleWishlist = useCallback(async () => {
+    if (!detailData || session === null) return;
+    setWishlistError(false);
+    const slug = detailData.slug;
+    // Optimistic flip for an instant heart.
+    const previous = queryClientForWishlist.getQueryData<WishlistResponse>(['wishlist']);
+    if (previous !== undefined) {
+      queryClientForWishlist.setQueryData<WishlistResponse>(['wishlist'], {
+        items: previous.items.some((item) => item.productSlug === slug)
+          ? previous.items.filter((item) => item.productSlug !== slug)
+          : [
+              {
+                id: `optimistic-${slug}`,
+                productSlug: slug,
+                productTitle: detailData.title,
+                imageUrl: detailData.primaryImageUrl,
+                priceInPaise: null,
+                compareAtPriceInPaise: null,
+                isAvailable: true,
+                defaultVariantId: null,
+                addedAt: new Date().toISOString(),
+              },
+              ...previous.items,
+            ],
+      });
+    }
+    try {
+      await journeyApi.addWishlistItem(slug);
+    } catch {
+      try {
+        // Adding may fail because it is ALREADY saved — then remove instead.
+        await journeyApi.removeWishlistItem(slug);
+      } catch {
+        setWishlistError(true);
+      }
+      queryClientForWishlist.setQueryData(['wishlist'], previous);
+    }
+  }, [detailData, session, queryClientForWishlist]);
+
+  /*
+   * Product feature cards.
+   *
+   * Only use real information already available on ProductDetail.
+   * No fake values are inserted.
+   *
+   * NOTE: this must stay with the other hooks, ABOVE the loading early
+   * return — a hook after a conditional return changes the hook order
+   * between renders and crashes with "Rendered more hooks".
+   */
+  const quickViewFeatures = useMemo(() => {
+    const features: Array<{
+      key: string;
+      title: string;
+      value: string;
+      icon: keyof typeof Ionicons.glyphMap;
+    }> = [];
+
+    if (detailData) {
+      if (
+        detailData.productType &&
+        detailData.productType.trim().length > 0
+      ) {
+        features.push({
+          key: 'type',
+          title: 'Type',
+          value: detailData.productType,
+          icon: 'restaurant-outline',
+        });
+      }
+
+      const primaryCategory = detailData.categories?.[0];
+      if (primaryCategory) {
+        features.push({
+          key: 'category',
+          title: 'Category',
+          value: primaryCategory.name,
+          icon: 'grid-outline',
+        });
+      }
+
+      if (detailData.tags?.length > 0 && detailData.tags[0]) {
+        const firstUsefulTag =
+          detailData.tags.find(
+            (tag) =>
+              tag.trim().length > 0 &&
+              tag.toLowerCase() !==
+                primaryCategory?.name.toLowerCase(),
+          ) ?? detailData.tags[0];
+
+        if (firstUsefulTag) {
+          features.push({
+            key: 'tag',
+            title: 'Product',
+            value: firstUsefulTag,
+            icon: 'pricetag-outline',
+          });
+        }
+      }
+    }
+
+    return features.slice(0, 3);
+  }, [detailData]);
+
+  /*
+   * Loading / error.
+   */
   if (detail.isPending || !detailData) {
     if (detail.isError) {
       return (
-        <View className="flex-1" style={{ backgroundColor: CANVAS, paddingTop: insets.top }}>
+        <View
+          className="flex-1"
+          style={{
+            backgroundColor: CANVAS,
+            paddingTop: insets.top,
+          }}
+        >
           <ErrorState
             title="Could not load this product"
             message="We could not reach the product just now. Check your connection and try again."
@@ -242,8 +366,15 @@ export default function ProductDetailScreen() {
         </View>
       );
     }
+
     return (
-      <View className="flex-1" style={{ backgroundColor: CANVAS, paddingTop: insets.top }}>
+      <View
+        className="flex-1"
+        style={{
+          backgroundColor: CANVAS,
+          paddingTop: insets.top,
+        }}
+      >
         <View className="gap-3 px-4 pt-4">
           <SkeletonBlock className="h-72 w-full rounded-2xl" />
           <SkeletonBlock className="h-5 w-2/3" />
@@ -254,143 +385,726 @@ export default function ProductDetailScreen() {
     );
   }
 
-  const images =
-    detailData.images.length > 0
-      ? detailData.images
-      : detailData.primaryImageUrl
-        ? [{ url: detailData.primaryImageUrl, altText: null, position: 0 }]
-        : [];
+  /*
+   * Images.
+   */
+  /*
+   * Image URLs, position-sorted. Feeds ProductMediaCard:
+   * one URL renders the full uncropped photo; several render the
+   * gap-spaced tile grid.
+   */
+  const imageUrls = detailData.images
+    .slice()
+    .sort((a, b) => a.position - b.position)
+    .map((image) => image.url)
+    .filter((url): url is string => Boolean(url));
 
   const badges = deriveBadges(detailData);
-  const premiumTags = new Set(['premium', 'imported', 'organic', 'speciality', 'specialty']);
-  const premiumTag = detailData.tags.find((tag) => premiumTags.has(tag.toLowerCase()));
-  const selectorLabel = variantSelectorLabelOf(variants);
+
+  const selectorLabel =
+    variantSelectorLabelOf(variants);
 
   return (
-    <View className="flex-1" style={{ backgroundColor: CANVAS }}>
+    <View
+      className="flex-1"
+      style={{
+        backgroundColor: CANVAS,
+      }}
+    >
+      {/* ============================================================
+          SCROLLING PRODUCT CONTENT
+          ============================================================ */}
+
       <Animated.ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 130 }}
+        contentContainerStyle={{
+          paddingBottom:
+            CART_BAR_HEIGHT +
+            Math.max(insets.bottom, 12) +
+            18,
+        }}
         onScroll={scrollHandler}
         scrollEventThrottle={16}
       >
-        {/* ── Hero spacer ────────────────────────────────────────────────
-            The real gallery is the morphing element ABOVE the ScrollView;
-            this invisible spacer of the same height keeps every section
-            below flowing exactly as before while the hero floats over it. */}
-        <View style={{ height: SLIDE_H }} />
+        {/* ========================================================
+            MEDIA CARD
+            Single image -> full uncropped photo. Multiple images ->
+            gap-spaced rounded tile grid, inside one white shadowed card.
+            ======================================================== */}
 
-        {/* ── Product information ──────────────────────────────────────── */}
-        <View className="gap-1.5 px-4 pt-4">
-          {premiumTag ? (
-            <View className="mb-1 self-start rounded-full bg-brand/10 px-2.5 py-1">
+        <View
+          style={{
+            paddingHorizontal: GUTTER,
+            paddingTop:
+              insets.top +
+              HEADER_ROW_HEIGHT +
+              8,
+          }}
+        >
+          <ProductMediaCard
+            urls={imageUrls}
+            accessibilityLabel={`${detailData.title} photos`}
+            onPress={() => setSheetOpen(true)}
+          />
+        </View>
+
+        {wishlistError ? (
+          <RNText
+            className="mt-2 text-center text-[12px] font-semibold"
+            style={{ color: '#B3453E' }}
+          >
+            Could not sync your wishlist — check your connection and try again.
+          </RNText>
+        ) : null}
+
+
+        {/* ========================================================
+            MAIN PRODUCT CARD
+            ======================================================== */}
+
+        <View
+          style={[
+            {
+              marginHorizontal: 16,
+              marginTop: 10,
+              paddingHorizontal: 22,
+              paddingTop: 18,
+              paddingBottom: 20,
+              borderRadius: 24,
+              backgroundColor: '#FFFFFF',
+            },
+            cardShadow,
+          ]}
+        >
+          {/* Delivery + rating */}
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              marginBottom: 14,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <Ionicons
+                name="time-outline"
+                size={17}
+                color={MUTED}
+              />
+
               <RNText
-                className="text-[10.5px] font-bold uppercase tracking-wide"
-                style={{ color: BRAND }}
+                style={{
+                  color: INK,
+                  fontSize: 13,
+                  fontWeight: '600',
+                }}
               >
-                {premiumTag}
+                {detailData.isAvailable
+                  ? 'Available'
+                  : 'Unavailable'}
+              </RNText>
+            </View>
+
+            <View
+              style={{
+                flex: 1,
+                alignItems: 'flex-end',
+              }}
+            >
+              {detailData.isAvailable ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                >
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={16}
+                    color={BRAND}
+                  />
+
+                  <RNText
+                    style={{
+                      color: BRAND,
+                      fontSize: 12,
+                      fontWeight: '700',
+                    }}
+                  >
+                    In stock
+                  </RNText>
+                </View>
+              ) : null}
+            </View>
+          </View>
+
+          {/* Product title */}
+          <RNText
+            style={{
+              color: INK,
+              fontSize: 22,
+              lineHeight: 28,
+              fontWeight: '800',
+            }}
+          >
+            {detailData.title}
+          </RNText>
+
+          {/* Selected variant */}
+          {selected ? (
+            <RNText
+              style={{
+                marginTop: 5,
+                color: MUTED,
+                fontSize: 13,
+              }}
+            >
+              {selected.title}
+            </RNText>
+          ) : null}
+
+          {/* Price */}
+          {selected ? (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginTop: 8,
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <RNText
+                style={{
+                  color: INK,
+                  fontSize: 21,
+                  fontWeight: '800',
+                }}
+              >
+                {formatMoney(
+                  selected.priceInPaise,
+                )}
+              </RNText>
+
+              {selected.compareAtPriceInPaise != null &&
+              selected.compareAtPriceInPaise >
+                selected.priceInPaise ? (
+                <>
+                  <RNText
+                    style={{
+                      color: MUTED,
+                      fontSize: 12,
+                    }}
+                  >
+                    MRP
+                  </RNText>
+
+                  <RNText
+                    style={{
+                      color: MUTED,
+                      fontSize: 13,
+                      textDecorationLine:
+                        'line-through',
+                    }}
+                  >
+                    {formatMoney(
+                      selected.compareAtPriceInPaise,
+                    )}
+                  </RNText>
+                </>
+              ) : null}
+
+              {badges.discountPercent != null ? (
+                <View
+                  style={{
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    borderRadius: 999,
+                    backgroundColor: '#EAF7E8',
+                  }}
+                >
+                  <RNText
+                    style={{
+                      color: BRAND,
+                      fontSize: 11,
+                      fontWeight: '800',
+                    }}
+                  >
+                    {badges.discountPercent}% OFF
+                  </RNText>
+                </View>
+              ) : null}
+            </View>
+          ) : (
+            <RNText
+              style={{
+                marginTop: 8,
+                color: MUTED,
+                fontSize: 14,
+              }}
+            >
+              Currently unavailable
+            </RNText>
+          )}
+
+          {/* Availability */}
+          {detailData.isAvailable ? (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginTop: 14,
+                gap: 6,
+              }}
+            >
+              <Ionicons
+                name="cube-outline"
+                size={18}
+                color={MUTED}
+              />
+
+              <RNText
+                style={{
+                  color: MUTED,
+                  fontSize: 13,
+                }}
+              >
+                Available
               </RNText>
             </View>
           ) : null}
 
-          <RNText className="text-[21px] font-bold leading-7" style={{ color: INK }}>
-            {detailData.title}
-          </RNText>
-          <RNText className="text-[13px]" style={{ color: MUTED }}>
-            {selected?.title ?? 'Currently unavailable'}
-          </RNText>
-          <View className="mt-1 flex-row items-baseline gap-2">
-            {selected ? (
-              <>
-                <RNText className="text-[22px] font-bold" style={{ color: INK }}>
-                  {formatMoney(selected.priceInPaise)}
-                </RNText>
-                {selected.compareAtPriceInPaise != null &&
-                selected.compareAtPriceInPaise > selected.priceInPaise ? (
-                  <View className="flex-row items-baseline gap-1">
-                    <RNText className="text-[11.5px]" style={{ color: MUTED }}>MRP</RNText>
-                    <RNText className="text-[13px] line-through" style={{ color: MUTED }}>
-                      {formatMoney(selected.compareAtPriceInPaise)}
-                    </RNText>
-                  </View>
-                ) : null}
-                {badges.discountPercent != null ? (
-                  <View className="rounded-full bg-brand/10 px-2 py-0.5">
-                    <RNText className="text-[10.5px] font-bold" style={{ color: BRAND }}>
-                      {badges.discountPercent}% OFF
-                    </RNText>
-                  </View>
-                ) : null}
-              </>
-            ) : (
-              <RNText className="text-[14px]" style={{ color: MUTED }}>
-                Currently unavailable
+          {/* Select unit */}
+          {variants.length > 0 ? (
+            <View
+              style={{
+                marginTop: 22,
+              }}
+            >
+              <RNText
+                style={{
+                  color: INK,
+                  fontSize: 17,
+                  fontWeight: '700',
+                  marginBottom: 10,
+                }}
+              >
+                Select Unit
               </RNText>
-            )}
-          </View>
+
+              <ProductVariantSelector
+                variants={variants}
+                selected={selected}
+                onSelect={(variant) =>
+                  setSelectedVariantId(
+                    variant.id,
+                  )
+                }
+                showPrices
+                size="large"
+              />
+
+              {selectorLabel ? (
+                <RNText
+                  style={{
+                    marginTop: 6,
+                    color: MUTED,
+                    fontSize: 11,
+                  }}
+                >
+                  Prices update with the selected{' '}
+                  {selectorLabel
+                    .replace(
+                      'Select ',
+                      '',
+                    )
+                    .toLowerCase()}
+                </RNText>
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
-        {/* ── Unit-aware variant selector ──────────────────────────────── */}
-        {variants.length > 0 ? (
-          <View className="mt-5 px-4">
-            <ProductVariantSelector
-              variants={variants}
-              selected={selected}
-              onSelect={(variant) => setSelectedVariantId(variant.id)}
-              showPrices
-              size="large"
-            />
-            {selectorLabel == null ? null : (
-              <RNText className="mt-1 text-[11px]" style={{ color: MUTED }}>
-                Prices update with the selected {selectorLabel.replace('Select ', '').toLowerCase()}
-              </RNText>
+        {/* ========================================================
+            FEATURE CARDS
+            ======================================================== */}
+
+        <View
+          style={{
+            marginTop: 10,
+            paddingHorizontal: 16,
+          }}
+        >
+          <FlatList
+            horizontal
+            data={quickViewFeatures}
+            keyExtractor={(item) => item.key}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{
+              gap: 8,
+              paddingRight: 8,
+            }}
+            renderItem={({ item }) => (
+              <View
+                style={{
+                  width: 150,
+                  minHeight: 88,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  borderRadius: 14,
+                  backgroundColor: '#FFFFFF',
+                  borderWidth: 1,
+                  borderColor: '#ECE8E0',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  <Ionicons
+                    name={item.icon}
+                    size={15}
+                    color={MUTED}
+                  />
+
+                  <RNText
+                    numberOfLines={1}
+                    style={{
+                      flex: 1,
+                      color: MUTED,
+                      fontSize: 12.5,
+                      fontWeight: '500',
+                    }}
+                  >
+                    {item.title}
+                  </RNText>
+                </View>
+
+                <RNText
+                  numberOfLines={2}
+                  style={{
+                    color: INK,
+                    fontSize: 15,
+                    fontWeight: '700',
+                    lineHeight: 19,
+                  }}
+                >
+                  {item.value}
+                </RNText>
+              </View>
             )}
-          </View>
+          />
+
+          {/* View details card */}
+          <Pressable
+            onPress={() => setSheetOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Open all product details"
+            style={{
+              marginTop: 8,
+              height: 58,
+              borderRadius: 14,
+              backgroundColor: '#EFF9EC',
+              borderWidth: 1,
+              borderColor: '#9ED594',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexDirection: 'row',
+              gap: 7,
+            }}
+          >
+            <Ionicons
+              name="information-circle-outline"
+              size={18}
+              color={BRAND}
+            />
+
+            <RNText
+              style={{
+                color: BRAND,
+                fontSize: 13,
+                fontWeight: '800',
+              }}
+            >
+              View details
+            </RNText>
+          </Pressable>
+        </View>
+
+
+        {/* ========================================================
+            BRAND CARD
+            ======================================================== */}
+
+        {detailData.vendor ? (
+          <Pressable
+            accessibilityRole="button"
+            style={[
+              {
+                marginHorizontal: 16,
+                marginTop: 10,
+                minHeight: 88,
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                borderRadius: 22,
+                backgroundColor: '#FFFFFF',
+                flexDirection: 'row',
+                alignItems: 'center',
+              },
+              cardShadow,
+            ]}
+          >
+            <View
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: 16,
+                backgroundColor: '#F5F5F2',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: '#ECE8E0',
+              }}
+            >
+              <Ionicons
+                name="storefront-outline"
+                size={24}
+                color={BRAND}
+              />
+            </View>
+
+            <View
+              style={{
+                flex: 1,
+                marginLeft: 13,
+              }}
+            >
+              <RNText
+                numberOfLines={1}
+                style={{
+                  color: INK,
+                  fontSize: 17,
+                  fontWeight: '800',
+                }}
+              >
+                {String(detailData.vendor)}
+              </RNText>
+
+              <RNText
+                style={{
+                  marginTop: 3,
+                  color: MUTED,
+                  fontSize: 13,
+                }}
+              >
+                Explore all products
+              </RNText>
+            </View>
+
+            <Ionicons
+              name="chevron-forward"
+              size={21}
+              color={MUTED}
+            />
+          </Pressable>
         ) : null}
 
-        {/* ── Description ─────────────────────────────────────────────── */}
-        <View className="mt-5 px-4">
-          <RNText className="text-[15px] font-bold" style={{ color: INK }}>
-            About this product
-          </RNText>
-          <RNText className="mt-1 text-[13px] leading-5" style={{ color: MUTED }}>
-            {describeProduct(detailData)}
-          </RNText>
+        {/* ========================================================
+            DELIVERY / SERVICE CARD
+            ======================================================== */}
+
+        <View
+          style={[
+            {
+              marginHorizontal: 16,
+              marginTop: 10,
+              minHeight: 76,
+              paddingHorizontal: 16,
+              borderRadius: 22,
+              backgroundColor: '#FFFFFF',
+              flexDirection: 'row',
+              alignItems: 'center',
+            },
+            cardShadow,
+          ]}
+        >
+          <View
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 15,
+              backgroundColor: '#F5F5F2',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons
+              name="cube-outline"
+              size={23}
+              color={BRAND}
+            />
+          </View>
+
+          <View
+            style={{
+              flex: 1,
+              marginLeft: 12,
+            }}
+          >
+            <RNText
+              style={{
+                color: INK,
+                fontSize: 14,
+                fontWeight: '700',
+              }}
+            >
+              Delivery & service
+            </RNText>
+
+            <RNText
+              style={{
+                marginTop: 2,
+                color: MUTED,
+                fontSize: 12,
+              }}
+            >
+              Available for this product
+            </RNText>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color={MUTED}
+          />
         </View>
 
-        {/* ── View details entry to the information sheet ──────────────── */}
+        {/* ========================================================
+            VIEW DETAILS
+            ======================================================== */}
+
         <Pressable
           onPress={() => setSheetOpen(true)}
           accessibilityRole="button"
           accessibilityLabel="Open all product details"
-          className="mx-4 mt-4 flex-row items-center justify-between rounded-2xl border bg-white px-3.5 py-3"
-          style={{ borderColor: LINE }}
+          style={[
+            {
+              marginHorizontal: 16,
+              marginTop: 10,
+              minHeight: 54,
+              paddingHorizontal: 16,
+              borderRadius: 18,
+              backgroundColor: '#FFFFFF',
+              borderWidth: 1,
+              borderColor: LINE,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            },
+            cardShadow,
+          ]}
         >
-          <View className="flex-row items-center gap-2.5">
-            <Ionicons name="information-circle-outline" size={17} color={BRAND} />
-            <RNText className="text-[13px] font-semibold" style={{ color: INK }}>
-              View details
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 9,
+            }}
+          >
+            <Ionicons
+              name="information-circle-outline"
+              size={19}
+              color={BRAND}
+            />
+
+            <RNText
+              style={{
+                color: INK,
+                fontSize: 14,
+                fontWeight: '700',
+              }}
+            >
+              View all details
             </RNText>
           </View>
-          <Ionicons name="chevron-forward" size={15} color={MUTED} />
+
+          <Ionicons
+            name="chevron-forward"
+            size={17}
+            color={MUTED}
+          />
         </Pressable>
 
-        {/* ── Related products (cache-only) ────────────────────────────── */}
+        {/* ========================================================
+            REVIEWS — published reviews + the eligible write form
+            ======================================================== */}
+
+        <View
+          style={[
+            {
+              marginHorizontal: 16,
+              marginTop: 14,
+              paddingVertical: 18,
+              paddingHorizontal: 22,
+              backgroundColor: '#FFFFFF',
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: '#E4DED2',
+            },
+          ]}
+        >
+          <ReviewsSection productId={detailData.id} />
+        </View>
+
+        {/* ========================================================
+            RELATED PRODUCTS
+            ======================================================== */}
+
         {relatedProducts.length > 0 ? (
-          <View className="mt-6 gap-2.5">
-            <RNText className="px-4 text-[16px] font-bold" style={{ color: INK }}>
+          <View
+            style={{
+              marginTop: 18,
+            }}
+          >
+            <RNText
+              style={{
+                paddingHorizontal: 16,
+                color: INK,
+                fontSize: 17,
+                fontWeight: '800',
+                marginBottom: 9,
+              }}
+            >
               People also bought
             </RNText>
+
             <FlatList
               horizontal
               showsHorizontalScrollIndicator={false}
               data={relatedProducts}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
+              contentContainerStyle={{
+                paddingHorizontal: 16,
+                gap: 10,
+              }}
               renderItem={({ item }) => (
                 <RelatedProductCard
                   item={item}
-                  onOpen={(nextSlug) => router.push(`/(shop)/products/${nextSlug}`)}
+                  onOpen={(nextSlug) =>
+                    router.push(
+                      `/(shop)/products/${nextSlug}`,
+                    )
+                  }
                 />
               )}
             />
@@ -398,16 +1112,10 @@ export default function ProductDetailScreen() {
         ) : null}
       </Animated.ScrollView>
 
-      {/* ── Collapsing header + morphing hero ──────────────────────────────
-          Three layers, bottom → top:
-          1) the white bar background, fading in as the hero scrolls under it
-          2) THE MORPH: the one hero gallery — absolutely positioned, never
-             part of the scroll content — flying from full-bleed into the
-             34×34 rounded chip in the header slot (top/left/size/radius,
-             all clamped, driven by scrollY)
-          3) the header controls: back/share always reachable, the product
-             title fading in beside the landed chip
-          The chip is the hero itself — no second image is ever rendered. */}
+      {/* ============================================================
+          HEADER BACKGROUND
+          ============================================================ */}
+
       <Animated.View
         pointerEvents="none"
         style={[
@@ -416,8 +1124,10 @@ export default function ProductDetailScreen() {
             left: 0,
             right: 0,
             top: 0,
-            height: insets.top + HEADER_ROW_HEIGHT,
-            backgroundColor: '#fff',
+            height:
+              insets.top +
+              HEADER_ROW_HEIGHT,
+            backgroundColor: '#FFFFFF',
             borderBottomWidth: 1,
             borderBottomColor: LINE,
           },
@@ -425,160 +1135,311 @@ export default function ProductDetailScreen() {
         ]}
       />
 
-      <Animated.View
-        style={[{ position: 'absolute', overflow: 'hidden' }, morphStyle]}
-        className="bg-surface-muted"
-      >
-        <FlatList
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          data={images}
-          keyExtractor={(image, index) => `${image.url}-${index}`}
-          viewabilityConfig={viewabilityRef.current}
-          onViewableItemsChanged={useCallback(
-            ({ viewableItems }: { viewableItems: ViewToken[] }) => {
-              const first = viewableItems[0]?.index;
-              if (first != null) setImageIndex(first);
-            },
-            [],
-          )}
-          renderItem={({ item }) => (
-            <Image
-              source={{ uri: item.url }}
-              style={{ width: W, height: SLIDE_H }}
-              contentFit="cover"
-              cachePolicy="disk"
-              recyclingKey={item.url}
-              transition={180}
-              accessibilityLabel={item.altText ?? `${detailData.title} image`}
-            />
-          )}
-        />
-        {images.length > 1 ? (
-          <Animated.View
-            pointerEvents="none"
-            style={heroDotsStyle}
-            className="absolute bottom-2.5 left-0 right-0 flex-row items-center justify-center gap-1.5"
-          >
-            {images.map((image, index) => (
-              <View
-                key={`${image.url}-${index}`}
-                className="h-1.5 rounded-full"
-                style={{
-                  width: index === imageIndex ? 18 : 6,
-                  backgroundColor: index === imageIndex ? BRAND : 'rgba(255,255,255,0.85)',
-                }}
-              />
-            ))}
-          </Animated.View>
-        ) : null}
-      </Animated.View>
+      {/* ============================================================
+          TOP CONTROLS
+          ============================================================ */}
 
       <Animated.View
         pointerEvents="box-none"
         className="absolute left-0 right-0 top-0"
-        style={{ paddingTop: insets.top }}
+        style={{
+          paddingTop: insets.top,
+        }}
       >
         <View
           style={{
             height: HEADER_ROW_HEIGHT,
             flexDirection: 'row',
             alignItems: 'center',
+            justifyContent: 'space-between',
             paddingHorizontal: 12,
           }}
         >
-          <CircleButton onPress={() => router.back()} icon="chevron-back" label="Go back" />
+          {/* Back */}
+          <CircleButton
+            onPress={goBackOrHome}
+            icon="chevron-back"
+            label="Go back"
+          />
 
-          {/* Landing slot (34×34) for the morphing chip + the title that
-              fades in beside it — the chip itself is the morph element. */}
+          {/* Header title */}
           <Animated.View
             pointerEvents="none"
             style={[
-              { flex: 1, flexDirection: 'row', alignItems: 'center', marginHorizontal: 10 },
+              {
+                flex: 1,
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginHorizontal: 10,
+              },
               headerTitleStyle,
             ]}
           >
-            <View style={{ width: MORPH_CHIP, height: MORPH_CHIP }} />
+
             <RNText
               numberOfLines={1}
               className="ml-2.5 flex-1 text-[13.5px] font-bold"
-              style={{ color: INK }}
+              style={{
+                color: INK,
+              }}
             >
               {detailData.title}
             </RNText>
           </Animated.View>
 
-          <CircleButton onPress={handleShare} icon="share-social-outline" label="Share this product" />
+          {/* Wishlist — server-backed; a failed sync shows a note */}
+          <CircleButton
+            onPress={() => void toggleWishlist()}
+            icon={isWishlisted ? 'heart' : 'heart-outline'}
+            label={
+              isWishlisted
+                ? 'Remove from wishlist'
+                : 'Add to wishlist'
+            }
+          />
+
+          <View style={{ width: 8 }} />
+
+          {/* Search */}
+          <CircleButton
+            onPress={() => router.push('/search')}
+            icon="search-outline"
+            label="Search"
+          />
+
+          <View style={{ width: 8 }} />
+
+          {/* Share */}
+          <CircleButton
+            onPress={handleShare}
+            icon="share-social-outline"
+            label="Share this product"
+          />
         </View>
       </Animated.View>
 
-      {/* ── Sticky add-to-cart bar — the EXACT selected variant ────────── */}
+      {/* ============================================================
+          STICKY ADD TO CART
+          ============================================================ */}
+
       <View
-        className="absolute left-0 right-0 bottom-0 flex-row items-center justify-between border-t bg-white px-4 pt-2.5"
-        style={{ borderColor: LINE, paddingBottom: Math.max(insets.bottom, 12) + 2 }}
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          minHeight: CART_BAR_HEIGHT,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingHorizontal: 20,
+          paddingTop: 12,
+          paddingBottom:
+            Math.max(insets.bottom, 10) +
+            10,
+          backgroundColor:
+            'rgba(255,255,255,0.97)',
+          borderTopWidth: 1,
+          borderTopColor: '#E9E5DC',
+          borderTopLeftRadius: 30,
+          borderTopRightRadius: 30,
+          shadowColor: '#000',
+          shadowOpacity: 0.08,
+          shadowRadius: 18,
+          shadowOffset: {
+            width: 0,
+            height: -5,
+          },
+          elevation: 12,
+        }}
       >
-        <View>
+        {/* Price */}
+        <View
+          style={{
+            flex: 1,
+            paddingRight: 12,
+          }}
+        >
           {selected ? (
-            <View className="flex-row items-baseline gap-1.5">
-              <RNText className="text-[12.5px] font-semibold" style={{ color: MUTED }}>
+            <>
+              <RNText
+                numberOfLines={1}
+                style={{
+                  color: INK,
+                  fontSize: 13,
+                  fontWeight: '700',
+                }}
+              >
                 {selected.title}
               </RNText>
-              <RNText className="text-[17px] font-bold" style={{ color: INK }}>
-                {formatMoney(selected.priceInPaise)}
-              </RNText>
-            </View>
+
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'baseline',
+                  gap: 6,
+                  marginTop: 2,
+                }}
+              >
+                <RNText
+                  style={{
+                    color: INK,
+                    fontSize: 18,
+                    fontWeight: '800',
+                  }}
+                >
+                  {formatMoney(
+                    selected.priceInPaise,
+                  )}
+                </RNText>
+
+                {selected.compareAtPriceInPaise !=
+                  null &&
+                selected.compareAtPriceInPaise >
+                  selected.priceInPaise ? (
+                  <>
+                    <RNText
+                      style={{
+                        color: MUTED,
+                        fontSize: 11,
+                      }}
+                    >
+                      MRP
+                    </RNText>
+
+                    <RNText
+                      style={{
+                        color: MUTED,
+                        fontSize: 12,
+                        textDecorationLine:
+                          'line-through',
+                      }}
+                    >
+                      {formatMoney(
+                        selected.compareAtPriceInPaise,
+                      )}
+                    </RNText>
+                  </>
+                ) : null}
+              </View>
+            </>
           ) : (
-            <RNText className="text-[12px]" style={{ color: MUTED }}>
+            <RNText
+              style={{
+                color: MUTED,
+                fontSize: 12,
+              }}
+            >
               Currently unavailable
             </RNText>
           )}
-          <RNText className="text-[10px]" style={{ color: MUTED }}>
+
+          <RNText
+            style={{
+              color: MUTED,
+              fontSize: 10,
+              marginTop: 2,
+            }}
+          >
             Inclusive of all taxes
           </RNText>
         </View>
-        <View className="flex-row items-center gap-2">
+
+        {/* Cart controls */}
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
           {selectedQuantity > 0 ? (
             <QuantityStepper
               quantity={selectedQuantity}
               disabled={false}
               onAdd={onAddPress}
               onIncrement={() => {
-                if (selected) stepperIncrement(selected.id);
+                if (selected) {
+                  stepperIncrement(
+                    selected.id,
+                  );
+                }
               }}
-              onDecrement={stepperDecrement}
+              onDecrement={
+                stepperDecrement
+              }
             />
           ) : null}
+
           <Pressable
             onPress={onAddPress}
             disabled={selected == null}
             accessibilityRole="button"
             accessibilityLabel="Add to cart"
-            accessibilityState={{ disabled: selected == null }}
-            className={
-              'rounded-full px-6 py-3 ' + (selected == null ? 'opacity-40' : 'active:opacity-85')
-            }
-            style={{ backgroundColor: BRAND }}
+            accessibilityState={{
+              disabled: selected == null,
+            }}
+            style={{
+              minWidth: 150,
+              height: 52,
+              paddingHorizontal: 24,
+              borderRadius: 16,
+              backgroundColor: BRAND,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity:
+                selected == null
+                  ? 0.4
+                  : 1,
+            }}
           >
-            <RNText className="text-[13.5px] font-bold text-white">Add to Cart</RNText>
+            <RNText
+              style={{
+                color: '#FFFFFF',
+                fontSize: 15,
+                fontWeight: '800',
+              }}
+            >
+              Add to cart
+            </RNText>
           </Pressable>
         </View>
       </View>
 
-      {/* ── View details sheet — layered over this page ────────────────── */}
+      {/* ============================================================
+          PRODUCT DETAILS SHEET
+          ============================================================ */}
+
       <ProductDetailsSheet
-        detail={sheetOpen ? detailData : null}
-        selectedTitle={selected?.title ?? null}
-        selectedPriceInPaise={selected?.priceInPaise ?? null}
-        selectedCompareAtInPaise={selected?.compareAtPriceInPaise ?? null}
+        detail={
+          sheetOpen
+            ? detailData
+            : null
+        }
+        selectedTitle={
+          selected?.title ?? null
+        }
+        selectedPriceInPaise={
+          selected?.priceInPaise ??
+          null
+        }
+        selectedCompareAtInPaise={
+          selected?.compareAtPriceInPaise ??
+          null
+        }
         onAdd={onAddPress}
-        onClose={() => setSheetOpen(false)}
+        onClose={() =>
+          setSheetOpen(false)
+        }
       />
     </View>
   );
 }
 
-/** Circular floating control over the hero image. */
+/* ================================================================
+   CIRCULAR HERO BUTTON
+   ================================================================ */
+
 function CircleButton({
   onPress,
   icon,
@@ -593,9 +1454,21 @@ function CircleButton({
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
-      className="h-9 w-9 items-center justify-center rounded-full bg-white/95"
+      style={{
+        width: 56,
+        height: 56,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 28,
+        backgroundColor:
+          'rgba(255,255,255,0.92)',
+      }}
     >
-      <Ionicons name={icon} size={18} color={INK} />
+      <Ionicons
+        name={icon}
+        size={24}
+        color={INK}
+      />
     </Pressable>
   );
 }

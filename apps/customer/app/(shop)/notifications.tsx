@@ -8,6 +8,7 @@ import { notificationsApi } from '../../src/api/notifications-api';
 import { AuthGate } from '../../src/components/AuthGate';
 import { ErrorState } from '../../src/components/ErrorState';
 import { SkeletonBlock } from '../../src/components/LoadingSkeleton';
+import { SubScreenHeader } from '../../src/components/navigation/SubScreenHeader';
 import { useAuthStore } from '../../src/stores/auth-store';
 import type { NotificationView } from '@sakya/types';
 
@@ -15,7 +16,6 @@ const BRAND = '#0B594C';
 const INK = '#171A18';
 const MUTED = '#8C8A80';
 const LINE = '#E4DED2';
-const CANVAS = '#FAF7F0';
 
 /**
  * Notification inbox — the caller's persisted Notification rows.
@@ -31,21 +31,8 @@ export default function NotificationsScreen() {
   const restoring = useAuthStore((state) => state.restoring);
 
   return (
-    <View className="flex-1" style={{ backgroundColor: CANVAS, paddingTop: insets.top }}>
-      <View className="flex-row items-center gap-1 px-3 pb-1 pt-2">
-        <Pressable
-          onPress={() => router.back()}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          hitSlop={8}
-          className="h-9 w-9 items-center justify-center"
-        >
-          <Ionicons name="chevron-back" size={22} color={INK} />
-        </Pressable>
-        <RNText className="flex-1 text-[17px] font-bold" style={{ color: INK }}>
-          Notifications
-        </RNText>
-      </View>
+    <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
+      <SubScreenHeader title="Notifications" />
 
       {restoring ? (
         <View className="gap-3 px-4 pt-4">

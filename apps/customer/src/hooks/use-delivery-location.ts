@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import * as ExpoLocation from 'expo-location';
 
 /**
@@ -35,6 +36,14 @@ export function useDeliveryLocation(): DeliveryLocation {
         const position = await ExpoLocation.getCurrentPositionAsync({
           accuracy: ExpoLocation.Accuracy.Balanced,
         });
+
+        // Web: expo-location's reverse geocoder (Google Geocoding API) was
+        // removed from the SDK — skip it and keep the neutral label instead
+        // of logging an API error on every load.
+        if (Platform.OS === 'web') {
+          if (!cancelled) setState({ label: 'India', status: 'ready' });
+          return;
+        }
 
         const fixtures = await ExpoLocation.reverseGeocodeAsync({
           latitude: position.coords.latitude,

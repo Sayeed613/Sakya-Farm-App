@@ -32,9 +32,12 @@ export interface AppConfig {
     mockWebhookSecret: string | undefined;
   };
   sms: {
-    /** Vonage credentials; both null means SMS delivery is not configured. */
-    apiKey: string | null;
-    apiSecret: string | null;
+    /**
+     * MSG91 credentials; authKey + template together mean SMS delivery is
+     * configured. Either one missing falls back to dev-log delivery.
+     */
+    authKey: string | null;
+    otpTemplateId: string | null;
     from: string;
     /**
      * Demo OTP mode: every phone verifies with the same fixed 4-digit code.
@@ -60,6 +63,25 @@ export interface AppConfig {
   throttle: {
     ttlSeconds: number;
     limit: number;
+  };
+  /** Commerce rules that need ops tuning, not code changes. */
+  commerce: {
+    /** GST rate applied to the discounted subtotal, e.g. 5 means 5%. */
+    taxRatePercent: number;
+    /** Flat shipping fee in paise when below the free threshold. */
+    shippingFeeInPaise: number;
+    /** Subtotal (after discount) at or above which shipping is free; null = never free. */
+    freeShippingThresholdInPaise: number | null;
+    /** Extra fee for Cash on Delivery, in paise. 0 disables it. */
+    codFeeInPaise: number;
+    /** Max units of one variant in a cart — a stock-abuse and UX guard. */
+    maxQuantityPerLine: number;
+    /** Max distinct lines per cart. */
+    maxCartLines: number;
+    /** Days after delivery within which a return may be requested. */
+    returnWindowDays: number;
+    /** Minutes a PENDING_PAYMENT order may hold its reservation before expiry. */
+    pendingOrderExpiryMinutes: number;
   };
   logging: {
     level: string;
@@ -89,9 +111,9 @@ export default function configuration(): AppConfig {
       mockWebhookSecret: env.PAYMENTS_MOCK_WEBHOOK_SECRET,
     },
     sms: {
-      apiKey: env.VONAGE_API_KEY ?? null,
-      apiSecret: env.VONAGE_API_SECRET ?? null,
-      from: env.VONAGE_SMS_FROM,
+      authKey: env.MSG91_AUTH_KEY ?? null,
+      otpTemplateId: env.MSG91_OTP_TEMPLATE_ID ?? null,
+      from: env.MSG91_SMS_FROM,
       // Demo mode is opt-in via env and can never activate in production:
       // this guard is duplicated inside OtpService so relying on it is safe.
       demoMode: !isProduction && env.OTP_DEMO_MODE === 'true',
@@ -113,6 +135,16 @@ export default function configuration(): AppConfig {
     throttle: {
       ttlSeconds: env.THROTTLE_TTL_SECONDS,
       limit: env.THROTTLE_LIMIT,
+    },
+    commerce: {
+      taxRatePercent: env.TAX_RATE_PERCENT,
+      shippingFeeInPaise: env.SHIPPING_FEE_IN_PAISE,
+      freeShippingThresholdInPaise: env.FREE_SHIPPING_THRESHOLD_IN_PAISE ?? null,
+      codFeeInPaise: env.COD_FEE_IN_PAISE,
+      maxQuantityPerLine: env.MAX_QUANTITY_PER_LINE,
+      maxCartLines: env.MAX_CART_LINES,
+      returnWindowDays: env.RETURN_WINDOW_DAYS,
+      pendingOrderExpiryMinutes: env.PENDING_ORDER_EXPIRY_MINUTES,
     },
     logging: {
       level: env.LOG_LEVEL,

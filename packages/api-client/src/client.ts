@@ -10,6 +10,7 @@ import {
 } from './resources/auth';
 import { createCartResource, type CartResource } from './resources/cart';
 import { createCatalogResource, type CatalogResource } from './resources/catalog';
+import { createCustomerJourneyResource, type CustomerJourneyResource } from './resources/customer-journey';
 import { createAuthApiResource, type AuthApiResource } from './resources/auth-api';
 import { createOtpAuthApiResource, type OtpAuthApiResource } from './resources/otp-auth-api';
 import { createOrdersResource, type OrdersResource } from './resources/orders';
@@ -32,6 +33,19 @@ export interface SakyaApiClientOptions {
    * rotated token is picked up without rebuilding the client.
    */
   readonly getAccessToken?: AccessTokenProvider;
+
+  /**
+   * Session recovery on 401, invoked once per request before a single retry.
+   * Typically refreshes the access token; MUST be single-flight (see
+   * HttpClientOptions.onUnauthorized) because refresh endpoints rotate tokens.
+   */
+  readonly onUnauthorized?: () => Promise<boolean> | boolean;
+
+  /**
+   * Optional connectivity gate (see HttpClientOptions.isOnline). Provide it
+   * from the platform shell so requests fail fast while offline.
+   */
+  readonly isOnline?: () => boolean;
 
   /** Injectable for tests. Defaults to the runtime's global `fetch`. */
   readonly fetchImpl?: FetchLike;
@@ -67,6 +81,8 @@ export interface SakyaApiClient {
    * never call this — the server 404s the route there.
    */
   readonly paymentsDemo: PaymentsDemoResource;
+  /** Wishlist, returns, stock alerts, settings, reorder, invoice, reviews. */
+  readonly journey: CustomerJourneyResource;
 }
 
 /**
@@ -79,6 +95,8 @@ export function createSakyaApiClient(options: SakyaApiClientOptions): SakyaApiCl
   const http = createHttpClient({
     baseUrl: options.baseUrl,
     ...(options.getAccessToken === undefined ? {} : { getAccessToken: options.getAccessToken }),
+    ...(options.onUnauthorized === undefined ? {} : { onUnauthorized: options.onUnauthorized }),
+    ...(options.isOnline === undefined ? {} : { isOnline: options.isOnline }),
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.defaultHeaders === undefined ? {} : { defaultHeaders: options.defaultHeaders }),
@@ -94,6 +112,7 @@ export function createSakyaApiClient(options: SakyaApiClientOptions): SakyaApiCl
     orders: createOrdersResource(http),
     payments: createPaymentsResource(http),
     paymentsDemo: createPaymentsDemoResource(http),
+    journey: createCustomerJourneyResource(http),
     auth: options.auth ?? createUnavailableAuthPort(),
   };
 }

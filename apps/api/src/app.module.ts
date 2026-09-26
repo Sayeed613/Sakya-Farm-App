@@ -19,6 +19,7 @@ import {
   CartModule,
   CategoriesModule,
   CouponsModule,
+  CustomerJourneyModule,
   DeliveryModule,
   HealthModule,
   InventoryModule,
@@ -146,6 +147,7 @@ const appRoot = join(__dirname, '..');
     CouponsModule,
     ReviewsModule,
     NotificationsModule,
+    CustomerJourneyModule,
     AdminModule,
   ],
   providers: [
