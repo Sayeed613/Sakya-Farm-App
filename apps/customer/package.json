@@ -26,6 +26,7 @@
     "@sakya/types": "workspace:*",
     "@sakya/utils": "workspace:*",
     "@sakya/validation": "workspace:*",
+    "@sentry/react-native": "~8.28.0",
     "@tanstack/react-query": "5.102.8",
     "babel-preset-expo": "~57.0.11",
     "expo": "57.0.24",

@@ -64,6 +64,10 @@ export interface AppConfig {
     ttlSeconds: number;
     limit: number;
   };
+  catalog: {
+    /** Seconds a public catalogue read stays cached in-process; 0 disables. */
+    cacheTtlSeconds: number;
+  };
   /** Commerce rules that need ops tuning, not code changes. */
   commerce: {
     /** GST rate applied to the discounted subtotal, e.g. 5 means 5%. */
@@ -86,6 +90,10 @@ export interface AppConfig {
   logging: {
     level: string;
     pretty: boolean;
+  };
+  observability: {
+    /** Sentry DSN; null disables error tracking entirely. */
+    sentryDsn: string | null;
   };
 }
 
@@ -136,6 +144,9 @@ export default function configuration(): AppConfig {
       ttlSeconds: env.THROTTLE_TTL_SECONDS,
       limit: env.THROTTLE_LIMIT,
     },
+    catalog: {
+      cacheTtlSeconds: env.CATALOG_CACHE_TTL_SECONDS,
+    },
     commerce: {
       taxRatePercent: env.TAX_RATE_PERCENT,
       shippingFeeInPaise: env.SHIPPING_FEE_IN_PAISE,
@@ -150,6 +161,11 @@ export default function configuration(): AppConfig {
       level: env.LOG_LEVEL,
       // Pretty output is a development convenience; production emits JSON.
       pretty: env.LOG_PRETTY === undefined ? !isProduction : env.LOG_PRETTY === 'true',
+    },
+    observability: {
+      // A blank line in `.env` means "unset", not "track errors into a
+      // broken DSN" — normalise it to null here.
+      sentryDsn: env.SENTRY_DSN !== undefined && env.SENTRY_DSN.length > 0 ? env.SENTRY_DSN : null,
     },
   };
 }

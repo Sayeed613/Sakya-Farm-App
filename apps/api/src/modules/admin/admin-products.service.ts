@@ -20,6 +20,7 @@ import { buildPaginationMeta, toSkipTake, type PageRequest } from '@sakya/utils'
 import { uniqueSlug } from '@sakya/utils';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { CatalogCacheService } from '../../cache/catalog-cache.service';
 
 /**
  * Admin catalog operations.
@@ -85,7 +86,10 @@ function toLikePattern(term: string): string {
 
 @Injectable()
 export class AdminProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CatalogCacheService,
+  ) {}
 
   /** One page of the full catalogue, newest first by default. */
   async list(query: AdminProductListQuery): Promise<Paginated<AdminProductSummary>> {
@@ -298,6 +302,7 @@ export class AdminProductsService {
       return created;
     });
 
+    this.cache.invalidateAll(`product created (${slug})`);
     return this.getById(product.id);
   }
 
@@ -365,6 +370,7 @@ export class AdminProductsService {
       }
     });
 
+    this.cache.invalidateAll(`product updated (${id})`);
     return this.getById(id);
   }
 
@@ -380,6 +386,7 @@ export class AdminProductsService {
       data: { status: 'ARCHIVED', isAvailable: false },
     });
 
+    this.cache.invalidateAll(`product archived (${id})`);
     return this.getById(id);
   }
 
@@ -408,6 +415,7 @@ export class AdminProductsService {
       },
     });
 
+    this.cache.invalidateAll(`variant added to product (${productId})`);
     return this.getById(productId);
   }
 
@@ -440,6 +448,7 @@ export class AdminProductsService {
       },
     });
 
+    this.cache.invalidateAll(`variant updated on product (${productId})`);
     return this.getById(productId);
   }
 

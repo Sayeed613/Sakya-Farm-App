@@ -63,7 +63,18 @@ export const environmentSchema = z
      * Prisma cannot create its own shadow database for `migrate dev`.
      */
     SHADOW_DATABASE_URL: z.string().optional(),
-    DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+    /**
+     * pg pool size for this process (Prisma 7 driver adapter owns pooling).
+     *
+     * Sizing against PostgreSQL: the live database this project targets runs
+     * `max_connections = 60` with `superuser_reserved_connections = 3`, so only
+     * ~57 slots are usable. Keep (API instances × this pool) + migrations,
+     * monitoring and psql sessions under that number — a good rule is to leave
+     * at least 30% of max_connections free. One instance with the default of 20
+     * leaves ~2/3 of the server for everything else; if you run N instances
+     * behind a process manager, scale the default down to ~57/N.
+     */
+    DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
 
     // --- Auth ---------------------------------------------------------------
     JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
@@ -81,6 +92,16 @@ export const environmentSchema = z
     // --- Rate limiting ------------------------------------------------------
     THROTTLE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
     THROTTLE_LIMIT: z.coerce.number().int().min(1).default(100),
+
+    // --- Catalogue cache ----------------------------------------------------
+    /**
+     * Seconds a public catalogue read (products, categories) stays cached
+     * in-process. Admin writes invalidate immediately; this TTL only bounds
+     * staleness that cannot be signalled in-process — catalogue import scripts
+     * writing behind the API's back, and other instances under a process
+     * manager. 0 disables caching entirely.
+     */
+    CATALOG_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3600).default(30),
 
     // --- Commerce rules -----------------------------------------------------
     /** GST percent applied to the discounted subtotal. 0 keeps the old behaviour. */
@@ -138,6 +159,14 @@ export const environmentSchema = z
       .default('info'),
     /** Human-readable logs for local development. Always JSON in production. */
     LOG_PRETTY: z.string().optional(),
+    /**
+     * Sentry DSN for error tracking. Optional by design: when absent (or an
+     * empty string) the SDK is never initialised and the process behaves
+     * exactly as it did before Sentry existed in this codebase. Validated only
+     * as a trimmed string — a malformed DSN disables itself inside the SDK
+     * instead of failing the boot, so env validation is not the last word.
+     */
+    SENTRY_DSN: z.string().trim().optional(),
 
     // --- Seeding (optional, only read by prisma/seed.ts) --------------------
     SEED_ADMIN_EMAIL: z.string().email().optional(),

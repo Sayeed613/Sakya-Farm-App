@@ -11,6 +11,7 @@ import { buildPaginationMeta, toSkipTake, type PageRequest } from '@sakya/utils'
 import { uniqueSlug } from '@sakya/utils';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { CatalogCacheService } from '../../cache/catalog-cache.service';
 
 /**
  * Admin category management.
@@ -58,7 +59,10 @@ function toAdminCategorySummary(row: AdminCategoryRow): AdminCategorySummary {
 
 @Injectable()
 export class AdminCategoriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CatalogCacheService,
+  ) {}
 
   /** One page of categories, newest first by default. */
   async list(query: AdminCategoryListQuery): Promise<Paginated<AdminCategorySummary>> {
@@ -199,6 +203,7 @@ export class AdminCategoriesService {
       },
     });
 
+    this.cache.invalidateAll(`category created (${category.slug})`);
     return this.toDetail(category);
   }
 
@@ -251,6 +256,7 @@ export class AdminCategoriesService {
       },
     });
 
+    this.cache.invalidateAll(`category updated (${id})`);
     return this.toDetail(updated);
   }
 
@@ -279,6 +285,7 @@ export class AdminCategoriesService {
       },
     });
 
+    this.cache.invalidateAll(`category deactivated (${id})`);
     return this.toDetail(updated);
   }
 

@@ -23,13 +23,20 @@
     "db:logs": "docker compose logs -f postgres",
     "db:migrate": "pnpm --filter @sakya/api db:migrate",
     "db:seed": "pnpm --filter @sakya/api db:seed",
-    "catalog:import": "pnpm --filter @sakya/api catalog:import"
+    "catalog:import": "pnpm --filter @sakya/api catalog:import",
+    "pm2:start": "pnpm --filter @sakya/api build && pm2 start ecosystem.config.js",
+    "pm2:restart": "pm2 restart sakya-api --update-env",
+    "pm2:reload": "pm2 reload sakya-api --update-env",
+    "pm2:stop": "pm2 stop sakya-api",
+    "pm2:delete": "pm2 delete sakya-api",
+    "pm2:logs": "pm2 logs sakya-api"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.10.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.12.0",
+    "pm2": "7.0.4",
     "prettier": "^3.9.6",
     "turbo": "^2.10.12",
     "typescript": "^6.0.3",

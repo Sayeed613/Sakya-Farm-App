@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../src/database/prisma.service';
 import type { ProductListRow } from '../src/modules/products/product.mapper';
 import { ProductsService } from '../src/modules/products/products.service';
+import { CatalogCacheService } from '../src/cache/catalog-cache.service';
 
 /** Prisma's tagged-template object, as `$queryRaw` receives it. */
 interface SqlQuery {
@@ -23,7 +24,9 @@ function createPrismaStub() {
 type Stub = ReturnType<typeof createPrismaStub>;
 
 function createService(stub: Stub): ProductsService {
-  return new ProductsService(stub as unknown as PrismaService);
+  // A per-service cache with a long TTL: each test builds a fresh service, so
+  // tests stay isolated while still exercising the cached code path.
+  return new ProductsService(stub as unknown as PrismaService, new CatalogCacheService(60));
 }
 
 const baseQuery: ProductListQuery = {

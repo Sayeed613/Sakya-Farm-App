@@ -7,6 +7,7 @@ import { Platform, ActivityIndicator, StyleSheet, useWindowDimensions, View } fr
 
 import '../global.css';
 import { MAX_APP_WIDTH } from '../src/lib/responsive';
+import { initSentryIfConfigured } from '../src/lib/sentry';
 
 import { colors } from '../src/theme';
 import { useAuthStore } from '../src/stores/auth-store';
@@ -27,6 +28,11 @@ function loadPushModule(): Promise<PushModule | null> {
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 });
+
+// Error tracking initialises before any screen mounts, so even a crash during
+// the first render is captured. No-op unless EXPO_PUBLIC_SENTRY_DSN was set at
+// bundle time — without it the SDK is never switched on at all.
+initSentryIfConfigured();
 
 /**
  * The icon font must be loaded before any screen that renders an icon mounts,

@@ -4,6 +4,7 @@ import { buildPaginationMeta, toSkipTake, type PageRequest } from '@sakya/utils'
 import type { ProductListQuery, ProductSortOption } from '@sakya/validation';
 
 import { PrismaService } from '../../database/prisma.service';
+import { CatalogCacheService } from '../../cache/catalog-cache.service';
 import { Prisma } from '../../generated/prisma/client';
 import {
   toCatalogVariant,
@@ -30,6 +31,9 @@ import {
  *   flag and is independent of stock; this module never consults inventory.
  * - **Clients cannot influence price.** No response value is computed from
  *   request input; prices are read from the database and passed through.
+ * - **Reads go through the shared catalogue cache** (`CatalogCacheService`):
+ *   TTL-bounded, single-flight per key, invalidated by admin writes. Only
+ *   successful loads are stored, so a 404 always re-checks the database.
  */
 
 /** Products earlier in the catalogue than this are not publicly listed. */
@@ -141,7 +145,10 @@ function toLikePattern(term: string): string {
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CatalogCacheService,
+  ) {}
 
   /**
    * Filter predicates, shared by the page query and the count query.
@@ -184,6 +191,13 @@ export class ProductsService {
 
   /** One page of the catalogue, newest first by default. */
   async list(query: ProductListQuery): Promise<Paginated<ProductListItem>> {
+    // The parsed query object has a fixed shape, so stringify is a stable key.
+    return this.cache.getOrLoad(`products:list:${JSON.stringify(query)}`, () =>
+      this.loadList(query),
+    );
+  }
+
+  private async loadList(query: ProductListQuery): Promise<Paginated<ProductListItem>> {
     const pageRequest: PageRequest = { page: query.page, perPage: query.limit };
     const { skip, take } = toSkipTake(pageRequest);
     const filter = this.buildPublicFilter(query);
@@ -223,6 +237,10 @@ export class ProductsService {
 
   /** A single product by its public slug, with variants and images. */
   async getBySlug(slug: string): Promise<ProductDetail> {
+    return this.cache.getOrLoad(`product:slug:${slug}`, () => this.loadBySlug(slug));
+  }
+
+  private async loadBySlug(slug: string): Promise<ProductDetail> {
     const row: ProductDetailRow | null = await this.prisma.product.findFirst({
       where: { slug, status: PUBLIC_STATUS },
       select: DETAIL_SELECT,
@@ -237,6 +255,12 @@ export class ProductsService {
 
   /** Every variant of a product, ordered for display. */
   async listVariants(productId: string): Promise<CatalogVariant[]> {
+    return this.cache.getOrLoad(`product:variants:${productId}`, () =>
+      this.loadVariants(productId),
+    );
+  }
+
+  private async loadVariants(productId: string): Promise<CatalogVariant[]> {
     const product = await this.prisma.product.findFirst({
       where: { id: productId, status: PUBLIC_STATUS },
       select: { id: true },

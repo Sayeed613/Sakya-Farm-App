@@ -11,6 +11,7 @@ import type { Response } from 'express';
 
 import { mapPrismaError } from './prisma-error.mapper';
 import type { AuthenticatedRequest } from '../types/authenticated-user';
+import { captureRequestError } from '../../observability/sentry';
 
 /**
  * The single place every failed request is turned into a response body.
@@ -52,6 +53,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
         `${summary} (${context_})`,
         exception instanceof Error ? exception.stack : String(exception),
       );
+      // 5xx means a bug or an outage, not a client mistake: report it to
+      // error tracking (no-op unless Sentry is initialised), tagged with the
+      // same requestId the log line carries. 4xx stays out — they are normal
+      // traffic and would drown the signal.
+      captureRequestError(exception, {
+        method: request.method,
+        url: request.url,
+        requestId: request.requestId ?? null,
+        statusCode: body.statusCode,
+      });
     } else {
       this.logger.debug(`${summary} (${context_}) ${body.message}`);
     }

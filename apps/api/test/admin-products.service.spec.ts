@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { PrismaService } from '../src/database/prisma.service';
 import { AdminProductsService } from '../src/modules/admin/admin-products.service';
+import { CatalogCacheService } from '../src/cache/catalog-cache.service';
 
 function createPrismaStub() {
   return {
@@ -29,7 +30,10 @@ function createPrismaStub() {
 type Stub = ReturnType<typeof createPrismaStub>;
 
 function createService(stub: Stub): AdminProductsService {
-  return new AdminProductsService(stub as unknown as PrismaService);
+  return new AdminProductsService(
+    stub as unknown as PrismaService,
+    new CatalogCacheService(60),
+  );
 }
 
 describe('AdminProductsService.getById', () => {

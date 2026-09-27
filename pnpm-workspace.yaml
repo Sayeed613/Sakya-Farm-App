@@ -28,6 +28,7 @@ allowBuilds:
   prisma: true
   esbuild: true
   unrs-resolver: true
+  '@sentry/cli': true
 
 # zod 4.6.2 is deliberately pinned and was published inside the default
 # minimum-release-age window; approving it here keeps the pin reproducible.

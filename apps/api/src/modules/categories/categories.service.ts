@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import type { CategorySummary } from '@sakya/types';
 
+import { CatalogCacheService } from '../../cache/catalog-cache.service';
 import { PrismaService } from '../../database/prisma.service';
 
 /**
@@ -34,7 +35,10 @@ function toCategorySummary(row: CategoryRow): CategorySummary {
 
 @Injectable()
 export class CategoriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CatalogCacheService,
+  ) {}
 
   /**
    * Every active category, in display order.
@@ -43,6 +47,10 @@ export class CategoriesService {
    * collide, which keeps the response cacheable.
    */
   async list(): Promise<CategorySummary[]> {
+    return this.cache.getOrLoad('categories:list', () => this.loadList());
+  }
+
+  private async loadList(): Promise<CategorySummary[]> {
     const rows: CategoryRow[] = await this.prisma.category.findMany({
       where: { isActive: true },
       orderBy: [{ position: 'asc' }, { name: 'asc' }],

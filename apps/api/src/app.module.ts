@@ -3,14 +3,16 @@ import { join } from 'node:path';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { UserAwareThrottlerGuard } from './common/guards/user-aware-throttler.guard';
 import { resolveRequestId } from './common/middleware/request-id.middleware';
+import { CatalogCacheModule } from './cache/catalog-cache.module';
 import configuration from './config/configuration';
 import { PrismaModule } from './database/prisma.module';
 import {
@@ -112,7 +114,9 @@ const appRoot = join(__dirname, '..');
     /**
      * Rate limiting is enabled globally; individual routes can tighten it with
      * `@Throttle()`. Storage is in-memory, so limits are per process — a shared
-     * store (Redis) is required once more than one instance runs.
+     * store (Redis) is required once more than one instance runs. Buckets are
+     * keyed per user id when the caller presents a valid access token, per IP
+     * otherwise; see UserAwareThrottlerGuard registered below.
      */
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
@@ -130,6 +134,7 @@ const appRoot = join(__dirname, '..');
     }),
 
     PrismaModule,
+    CatalogCacheModule,
     AuthModule,
     HealthModule,
 
@@ -152,7 +157,11 @@ const appRoot = join(__dirname, '..');
   ],
   providers: [
     // Order matters: reject floods before doing any token or database work.
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // UserAwareThrottlerGuard keeps that promise — it verifies the bearer
+    // token inline (one HMAC check, no I/O) purely to pick the bucket key:
+    // per-user for valid access tokens (carrier-grade NAT shares one IP across
+    // many real customers), per-IP for everything else.
+    { provide: APP_GUARD, useClass: UserAwareThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
