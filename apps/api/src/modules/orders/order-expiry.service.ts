@@ -9,9 +9,10 @@ import { releaseOrderReservations } from '../inventory/order-reservations';
 /**
  * Pending-order expiry.
  *
- * A PENDING_PAYMENT order holds a stock reservation. If the customer never
- * completes payment (or the demo sheet is abandoned), the reservation would
- * hold stock forever. Every few minutes this job:
+ * A PENDING_PAYMENT online order holds a stock reservation. If the customer
+ * never completes payment (or the demo sheet is abandoned), the reservation
+ * would hold stock forever. COD orders are excluded because they have no online
+ * payment window. Every few minutes this job:
  *
  *  1. finds PENDING_PAYMENT orders older than the configured window
  *  2. cancels them (state machine: PENDING_PAYMENT → CANCELLED)
@@ -43,7 +44,11 @@ export class OrderExpiryService implements OnModuleInit {
     const cutoff = new Date(Date.now() - this.expiryMinutes * 60 * 1000);
 
     const stale = await this.prisma.order.findMany({
-      where: { status: 'PENDING_PAYMENT', createdAt: { lt: cutoff } },
+      where: {
+        status: 'PENDING_PAYMENT',
+        createdAt: { lt: cutoff },
+        payments: { none: { method: 'CASH_ON_DELIVERY' } },
+      },
       select: { id: true, orderNumber: true, userId: true },
       take: 50,
     });
