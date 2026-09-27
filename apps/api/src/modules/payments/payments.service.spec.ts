@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PaymentsService, type PaymentRowView } from './payments.service';
 import { ManualProvider } from './providers/manual.provider';
 import { MockProvider } from './providers/mock.provider';
+import { RazorpayProvider } from './providers/razorpay.provider';
+import type { PaymentProvider } from './providers/payment-provider.interface';
 
 function row(overrides: Partial<PaymentRowView> = {}): PaymentRowView {
   const now = new Date('2026-01-01T00:00:00.000Z');
@@ -26,7 +28,7 @@ function row(overrides: Partial<PaymentRowView> = {}): PaymentRowView {
   };
 }
 
-function setup() {
+function setup(withRazorpay = false) {
   const orderFindFirst = vi.fn();
   const orderFindUnique = vi.fn();
   const orderUpdate = vi.fn();
@@ -58,10 +60,12 @@ function setup() {
   };
 
   const configService = { getOrThrow: vi.fn((): string => 'test'), get: vi.fn((): string => 'secret-1') };
-  const providers = new Map<string, ManualProvider | MockProvider>([
+  const razorpay = new RazorpayProvider('rzp_test_key', 'key-secret', 'webhook-secret');
+  const providers = new Map<string, PaymentProvider>([
     ['MANUAL', new ManualProvider()],
     ['MOCK', new MockProvider('secret-for-tests-1234567890')],
   ]);
+  if (withRazorpay) providers.set('RAZORPAY', razorpay);
 
   const service = new PaymentsService(
     prisma as never,
@@ -81,6 +85,7 @@ function setup() {
     paymentCreate,
     paymentUpdate,
     paymentFindUniqueOrThrow,
+    razorpay,
   };
 }
 
@@ -111,6 +116,44 @@ describe('PaymentsService.createIntent', () => {
     expect(data.currency).toBe('INR');
     expect(result.payment.amountInPaise).toBe(49900);
     expect(result.payment.provider).toBe('MOCK');
+  });
+
+  it('creates a Razorpay order using server totals and persists its gateway id', async () => {
+    ctx = setup(true);
+    ctx.orderFindFirst.mockResolvedValue(ORDER);
+    ctx.paymentFindUnique.mockResolvedValue(null);
+    ctx.paymentFindFirst.mockResolvedValue(null);
+    ctx.paymentCreate.mockImplementation(async (args: { data: Record<string, unknown> }) =>
+      row({ id: 'new-payment', orderId: ORDER.id, ...(args.data as object) }),
+    );
+    vi.spyOn(ctx.razorpay, 'createOrder').mockResolvedValue({
+      providerOrderId: 'order_gateway_1',
+      providerPayload: { id: 'order_gateway_1' },
+    });
+    ctx.paymentUpdate.mockImplementation(async (args: { data: Record<string, unknown> }) =>
+      row({ id: 'new-payment', orderId: ORDER.id, provider: 'RAZORPAY', ...(args.data as object) }),
+    );
+
+    const result = await ctx.service.createIntent('user-id', {
+      orderId: ORDER.id,
+      method: 'UPI',
+      idempotencyKey: 'key-razorpay',
+    });
+
+    expect(ctx.razorpay.createOrder).toHaveBeenCalledWith({
+      paymentId: 'new-payment',
+      orderId: ORDER.id,
+      amountInPaise: ORDER.totalInPaise,
+      currency: ORDER.currency,
+    });
+    expect(ctx.paymentUpdate).toHaveBeenCalledWith({
+      where: { id: 'new-payment' },
+      data: {
+        providerOrderId: 'order_gateway_1',
+        providerPayload: { id: 'order_gateway_1' },
+      },
+    });
+    expect(result.intent).toMatchObject({ provider: 'RAZORPAY', order_id: 'order_gateway_1' });
   });
 
   it('rejects orders owned by another user', async () => {
@@ -206,6 +249,85 @@ describe('PaymentsService webhooks', () => {
       rawPayload: { type: 'captured' },
     });
     expect(result.status).toBe('CAPTURED');
+    expect(ctx3.orderStatusHistoryCreate).toHaveBeenCalledOnce();
+  });
+
+  it('matches Razorpay captures to the pending payment by gateway order id', async () => {
+    ctx3.paymentFindFirst.mockResolvedValue(
+      row({ provider: 'RAZORPAY', providerOrderId: 'order_test_1', method: 'UPI' }) as never,
+    );
+    ctx3.paymentUpdate.mockImplementation(async () =>
+      row({
+        provider: 'RAZORPAY',
+        providerOrderId: 'order_test_1',
+        providerPaymentId: 'pay_test_1',
+        method: 'UPI',
+        status: 'CAPTURED',
+      }),
+    );
+    ctx3.orderFindUnique.mockResolvedValue({ id: 'order-id', status: 'PENDING_PAYMENT' });
+
+    const result = await ctx3.service.processWebhookEvent('razorpay', {
+      type: 'captured',
+      providerPaymentId: 'pay_test_1',
+      providerOrderId: 'order_test_1',
+      amountInPaise: 49900,
+      currency: 'INR',
+      rawPayload: { event: 'payment.captured' },
+    });
+
+    expect(ctx3.paymentFindFirst).toHaveBeenCalledWith({
+      where: { provider: 'RAZORPAY', providerOrderId: 'order_test_1' },
+    });
+    expect(ctx3.orderStatusHistoryCreate).toHaveBeenCalledOnce();
+    expect(result.status).toBe('CAPTURED');
+  });
+
+  it('keeps a failed Razorpay attempt retryable until a later capture', async () => {
+    ctx3.paymentFindFirst.mockResolvedValue(
+      row({ provider: 'RAZORPAY', providerOrderId: 'order_test_1', method: 'CARD' }) as never,
+    );
+    ctx3.paymentUpdate
+      .mockImplementationOnce(async () =>
+        row({
+          provider: 'RAZORPAY',
+          providerOrderId: 'order_test_1',
+          providerPaymentId: 'pay_failed',
+          method: 'CARD',
+          failureReason: 'Card declined',
+          status: 'PENDING',
+        }),
+      )
+      .mockImplementationOnce(async () =>
+        row({
+          provider: 'RAZORPAY',
+          providerOrderId: 'order_test_1',
+          providerPaymentId: 'pay_captured',
+          method: 'CARD',
+          status: 'CAPTURED',
+        }),
+      );
+    ctx3.orderFindUnique.mockResolvedValue({ id: 'order-id', status: 'PENDING_PAYMENT' });
+
+    const failed = await ctx3.service.processWebhookEvent('razorpay', {
+      type: 'failed',
+      providerPaymentId: 'pay_failed',
+      providerOrderId: 'order_test_1',
+      retryableFailure: true,
+      failureReason: 'Card declined',
+      rawPayload: { event: 'payment.failed' },
+    });
+    const captured = await ctx3.service.processWebhookEvent('razorpay', {
+      type: 'captured',
+      providerPaymentId: 'pay_captured',
+      providerOrderId: 'order_test_1',
+      amountInPaise: 49900,
+      currency: 'INR',
+      rawPayload: { event: 'payment.captured' },
+    });
+
+    expect(failed.status).toBe('PENDING');
+    expect(captured.status).toBe('CAPTURED');
     expect(ctx3.orderStatusHistoryCreate).toHaveBeenCalledOnce();
   });
 

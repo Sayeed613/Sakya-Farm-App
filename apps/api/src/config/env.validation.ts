@@ -128,6 +128,9 @@ export const environmentSchema = z
      * real gateway secret here — gateway adapters own their own credentials.
      */
     PAYMENTS_MOCK_WEBHOOK_SECRET: z.string().min(16).optional(),
+    RAZORPAY_KEY_ID: z.string().trim().min(1).optional(),
+    RAZORPAY_KEY_SECRET: z.string().trim().min(1).optional(),
+    RAZORPAY_WEBHOOK_SECRET: z.string().trim().min(1).optional(),
 
     // --- SMS (OTP delivery) -------------------------------------------------
     /**
@@ -175,6 +178,15 @@ export const environmentSchema = z
     SEED_ADMIN_LAST_NAME: z.string().min(1).optional(),
   })
   .superRefine((env, ctx) => {
+    const razorpayValues = [env.RAZORPAY_KEY_ID, env.RAZORPAY_KEY_SECRET, env.RAZORPAY_WEBHOOK_SECRET];
+    if (razorpayValues.some((value) => value !== undefined) && razorpayValues.some((value) => value === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RAZORPAY_KEY_ID'],
+        message: 'RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET must be provided together',
+      });
+    }
+
     if (env.NODE_ENV !== 'production') return;
 
     const placeholders: [keyof typeof env, string][] = [
@@ -212,6 +224,7 @@ export const environmentSchema = z
         message: 'MSG91_AUTH_KEY and MSG91_OTP_TEMPLATE_ID must be provided together',
       });
     }
+
   });
 
 export type Environment = z.infer<typeof environmentSchema>;

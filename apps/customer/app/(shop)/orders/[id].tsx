@@ -2,12 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, Text as RNText, View } from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ordersApi } from '../../../src/api/orders-api';
 import { orderActionsApi } from '../../../src/api/order-actions';
-import { checkoutApi } from '../../../src/api/checkout';
+import { checkoutApi, newIdempotencyKey } from '../../../src/api/checkout';
 import { journeyApi } from '../../../src/api/journey';
 import { AuthGate } from '../../../src/components/AuthGate';
 import { ErrorState } from '../../../src/components/ErrorState';
@@ -57,6 +57,8 @@ export default function OrderDetailScreen() {
   const [returnSubmitting, setReturnSubmitting] = useState(false);
   const [returnError, setReturnError] = useState<string | null>(null);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [paymentRetrying, setPaymentRetrying] = useState(false);
+  const [paymentRetryError, setPaymentRetryError] = useState<string | null>(null);
   const [reorderState, setReorderState] = useState<'idle' | 'busy' | 'done' | 'partial'>('idle');
   const [reorderNote, setReorderNote] = useState<string | null>(null);
 
@@ -96,6 +98,62 @@ export default function OrderDetailScreen() {
       setCancelError(error instanceof Error ? error.message : 'Could not cancel this order. Try again.');
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const retryOnlinePayment = async () => {
+    if (order.data === undefined || paymentRetrying) return;
+    const payment = order.data.payments.find(
+      (attempt) => attempt.provider === 'RAZORPAY' && attempt.status !== 'CAPTURED',
+    );
+    if (
+      payment === undefined ||
+      (payment.method !== 'UPI' && payment.method !== 'CARD' && payment.method !== 'NET_BANKING')
+    ) {
+      return;
+    }
+
+    setPaymentRetrying(true);
+    setPaymentRetryError(null);
+    try {
+      const response = await checkoutApi.createPaymentIntent({
+        orderId: order.data.id,
+        method: payment.method,
+        idempotencyKey: newIdempotencyKey(),
+      });
+      const intent = response.intent;
+      if (
+        response.payment.provider !== 'RAZORPAY' ||
+        typeof intent.key !== 'string' ||
+        typeof intent.order_id !== 'string' ||
+        typeof intent.amount !== 'number' ||
+        typeof intent.currency !== 'string'
+      ) {
+        throw new Error('The payment service returned an invalid checkout order.');
+      }
+
+      const { default: RazorpayCheckout } = await import('react-native-razorpay');
+      await RazorpayCheckout.open({
+        key: intent.key,
+        order_id: intent.order_id,
+        amount: String(intent.amount),
+        currency: intent.currency,
+        name: 'Sakya Farms',
+        description: `Payment for order ${order.data.orderNumber}`,
+        prefill: {
+          contact: session?.user.phone ?? '',
+          name: [session?.user.firstName, session?.user.lastName].filter(Boolean).join(' '),
+        },
+        theme: { color: BRAND },
+      });
+      await order.refetch();
+    } catch (error) {
+      setPaymentRetryError(
+        error instanceof Error ? error.message : 'Payment was not completed. You can try again.',
+      );
+      Alert.alert('Payment not completed', 'Your order is saved. Retry payment when you are ready.');
+    } finally {
+      setPaymentRetrying(false);
     }
   };
 
@@ -216,6 +274,9 @@ export default function OrderDetailScreen() {
           {isFresh ? <PlacedBanner order={order.data} /> : null}
           <OrderBody
             order={order.data}
+            onPayPress={() => void retryOnlinePayment()}
+            payBusy={paymentRetrying}
+            payError={paymentRetryError}
             onCancelPress={() => setCancelSheetOpen(true)}
             onReturnPress={() => setReturnSheetOpen(true)}
             onReorderPress={() => void submitReorder()}
@@ -278,6 +339,9 @@ function returnableItems(order: OrderResponse | undefined): ReturnableItem[] {
 
 function OrderBody({
   order,
+  onPayPress,
+  payBusy,
+  payError,
   onCancelPress,
   onReturnPress,
   onReorderPress,
@@ -286,6 +350,9 @@ function OrderBody({
   onInvoicePress,
 }: {
   order: OrderResponse;
+  onPayPress: () => void;
+  payBusy: boolean;
+  payError: string | null;
   onCancelPress: () => void;
   onReturnPress: () => void;
   onReorderPress: () => void;
@@ -322,6 +389,30 @@ function OrderBody({
           Placed {date} · Payment: {order.paymentStatus}
         </RNText>
       </View>
+
+        {order.status === 'PENDING_PAYMENT' &&
+        order.paymentStatus !== 'CAPTURED' &&
+        order.payments.some((payment) => payment.provider === 'RAZORPAY' && payment.status !== 'CAPTURED') ? (
+          <View className="gap-2">
+            {payError !== null ? (
+              <RNText className="px-1 text-[12px]" style={{ color: '#B3453E' }}>
+                {payError}
+              </RNText>
+            ) : null}
+            <Pressable
+              onPress={onPayPress}
+              disabled={payBusy}
+              accessibilityRole="button"
+              accessibilityLabel={`Retry payment for order ${order.orderNumber}`}
+              className="h-11 items-center justify-center rounded-full"
+              style={{ backgroundColor: BRAND, opacity: payBusy ? 0.6 : 1 }}
+            >
+              <RNText className="text-[13px] font-bold text-white">
+                {payBusy ? 'Opening secure checkout…' : 'Complete payment'}
+              </RNText>
+            </Pressable>
+          </View>
+        ) : null}
 
       {/* Cancelled state — backend reason when the operator recorded one */}
       {cancelBanner ? (

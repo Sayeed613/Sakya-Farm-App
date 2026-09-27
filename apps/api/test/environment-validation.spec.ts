@@ -107,4 +107,24 @@ describe('validateEnvironment', () => {
       }),
     ).toThrow(/must differ/);
   });
+
+  it('requires all Razorpay credentials when any one is configured', () => {
+    expect(() =>
+      validateEnvironment({
+        ...validEnvironment,
+        RAZORPAY_KEY_ID: 'rzp_test_key',
+      }),
+    ).toThrow(/RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET/);
+  });
+
+  it('accepts a complete Razorpay credential set', () => {
+    const env = validateEnvironment({
+      ...validEnvironment,
+      RAZORPAY_KEY_ID: 'rzp_test_key',
+      RAZORPAY_KEY_SECRET: 'test-key-secret',
+      RAZORPAY_WEBHOOK_SECRET: 'test-webhook-secret',
+    });
+
+    expect(env.RAZORPAY_KEY_ID).toBe('rzp_test_key');
+  });
 });

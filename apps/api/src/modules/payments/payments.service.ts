@@ -37,6 +37,7 @@ export interface PaymentRowView {
   orderId: string;
   provider: string;
   providerPaymentId: string | null;
+  providerOrderId?: string | null;
   method: string;
   status: string;
   currency: string;
@@ -105,8 +106,16 @@ export class PaymentsService {
       if (existingByKey.orderId !== order.id) {
         throw new ConflictException('This idempotency key was already used for a different order');
       }
+      if (existingByKey.provider !== providerName || existingByKey.method !== method) {
+        throw new ConflictException('This idempotency key was already used for a different payment method');
+      }
       this.logger.debug(`Intent idempotent replay for order ${order.id}`);
-      return this.toIntentResponse(existingByKey as PaymentRowView, provider);
+      const withProviderOrder = await this.ensureProviderOrder(
+        existingByKey as PaymentRowView,
+        order.id,
+        provider,
+      );
+      return this.toIntentResponse(withProviderOrder, provider);
     }
 
     // Reuse the checkout-created PENDING row when it matches provider+method.
@@ -115,7 +124,8 @@ export class PaymentsService {
       orderBy: { createdAt: 'asc' },
     });
     if (reusable !== null) {
-      return this.toIntentResponse(reusable as PaymentRowView, provider);
+      const withProviderOrder = await this.ensureProviderOrder(reusable as PaymentRowView, order.id, provider);
+      return this.toIntentResponse(withProviderOrder, provider);
     }
 
     try {
@@ -131,7 +141,8 @@ export class PaymentsService {
           idempotencyKey: body.idempotencyKey,
         },
       });
-      return this.toIntentResponse(created as PaymentRowView, provider);
+      const withProviderOrder = await this.ensureProviderOrder(created as PaymentRowView, order.id, provider);
+      return this.toIntentResponse(withProviderOrder, provider);
     } catch (error) {
       // Lost a race with an identical concurrent request: read back the winner.
       if (this.isUniqueViolation(error)) {
@@ -308,9 +319,14 @@ export class PaymentsService {
   /** Apply a verified provider event. Retries converge; mismatches change nothing. */
   async processWebhookEvent(providerName: string, event: ProviderWebhookEvent): Promise<PaymentDetail> {
     const provider = providerName.toUpperCase();
-    const existing = await this.prisma.payment.findUnique({
-      where: { provider_providerPaymentId: { provider, providerPaymentId: event.providerPaymentId } },
-    });
+    const existing =
+      event.providerOrderId === undefined
+        ? await this.prisma.payment.findUnique({
+            where: { provider_providerPaymentId: { provider, providerPaymentId: event.providerPaymentId } },
+          })
+        : await this.prisma.payment.findFirst({
+            where: { provider, providerOrderId: event.providerOrderId },
+          });
     if (existing === null) {
       this.logger.warn(`Webhook for unknown ${provider} payment ${event.providerPaymentId}`);
       throw new NotFoundException('No payment matches this provider event');
@@ -320,6 +336,20 @@ export class PaymentsService {
     }
     if (event.currency !== undefined && event.currency !== existing.currency) {
       throw new BadRequestException('Provider currency does not match payment currency');
+    }
+    if (event.retryableFailure) {
+      if (existing.status === 'CAPTURED' || existing.status === 'REFUNDED') {
+        return toPaymentDetail(existing as PaymentRowView);
+      }
+      const updated = await this.prisma.payment.update({
+        where: { id: existing.id },
+        data: {
+          providerPaymentId: event.providerPaymentId,
+          failureReason: event.failureReason ?? existing.failureReason,
+          providerPayload: event.rawPayload as never,
+        },
+      });
+      return toPaymentDetail(updated as PaymentRowView);
     }
     const target = this.targetStatusForEvent(existing as PaymentRowView, event);
     if (this.isReplay(existing.status as PaymentStatus, target, existing.refundedInPaise, event)) {
@@ -371,7 +401,10 @@ export class PaymentsService {
     event: ProviderWebhookEvent,
     target: PaymentStatus,
   ): Record<string, unknown> {
-    const base: Record<string, unknown> = { providerPayload: event.rawPayload as never };
+    const base: Record<string, unknown> = {
+      providerPayload: event.rawPayload as never,
+      providerPaymentId: event.providerPaymentId,
+    };
     if (event.type === 'failed' || event.type === 'cancelled') {
       return { ...base, status: target, failureReason: event.failureReason ?? row.failureReason };
     }
@@ -476,6 +509,7 @@ export class PaymentsService {
       paymentId: row.id,
       provider: row.provider,
       providerPaymentId: row.providerPaymentId,
+      providerOrderId: row.providerOrderId ?? null,
       amountInPaise: row.amountInPaise,
       currency: row.currency,
       method: row.method,
@@ -483,8 +517,31 @@ export class PaymentsService {
     return { payment: toPaymentDetail(row), intent: provider.buildIntentResponse(view) };
   }
 
+  private async ensureProviderOrder(
+    row: PaymentRowView,
+    orderId: string,
+    provider: PaymentProvider,
+  ): Promise<PaymentRowView> {
+    if (provider.createOrder === undefined || row.providerOrderId != null) return row;
+    const remote = await provider.createOrder({
+      paymentId: row.id,
+      orderId,
+      amountInPaise: row.amountInPaise,
+      currency: row.currency,
+    });
+    const updated = await this.prisma.payment.update({
+      where: { id: row.id },
+      data: {
+        providerOrderId: remote.providerOrderId,
+        providerPayload: remote.providerPayload as never,
+      },
+    });
+    return updated as PaymentRowView;
+  }
+
   private providerForMethod(method: string): string {
     void method;
+    if (this.providers.has('RAZORPAY')) return 'RAZORPAY';
     if (this.configService.getOrThrow<string>('app.env') === 'production') {
       throw new BadRequestException('Online payments are not enabled yet: no provider configured for production');
     }

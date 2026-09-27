@@ -11,7 +11,7 @@ import type { PaymentMethod, PaymentStatus } from './statuses';
  */
 
 /** Provider names the API recognises. Adding a gateway = adding a name + adapter. */
-export const PAYMENT_PROVIDER_NAMES = ['MANUAL', 'MOCK'] as const;
+export const PAYMENT_PROVIDER_NAMES = ['MANUAL', 'MOCK', 'RAZORPAY'] as const;
 export type PaymentProviderName = (typeof PAYMENT_PROVIDER_NAMES)[number];
 
 /** Online payment methods a new intent may request. COD already exists from checkout. */

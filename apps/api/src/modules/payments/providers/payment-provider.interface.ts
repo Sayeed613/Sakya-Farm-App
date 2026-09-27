@@ -24,6 +24,10 @@ export interface ProviderWebhookEvent {
   type: ProviderWebhookOutcome;
   /** Provider-side payment identifier. Idempotency anchor with `provider`. */
   providerPaymentId: string;
+  /** Gateway order id used to associate the first webhook with a pending attempt. */
+  providerOrderId?: string;
+  /** A gateway payment attempt failed, but its order can still be retried. */
+  retryableFailure?: boolean;
   /** Amount claimed by the provider, in paise. Must equal the stored amount. */
   amountInPaise?: number;
   /** Currency claimed by the provider. Must equal the stored currency. */
@@ -43,6 +47,7 @@ export interface IntentView {
   paymentId: string;
   provider: string;
   providerPaymentId: string | null;
+  providerOrderId?: string | null;
   amountInPaise: number;
   currency: string;
   method: string;
@@ -72,4 +77,12 @@ export interface PaymentProvider {
 
   /** Build the client-facing portion of an intent response. */
   buildIntentResponse(view: IntentView): IntentClientData;
+
+  /** Create the remote gateway order for a locally persisted payment. */
+  createOrder?(input: {
+    paymentId: string;
+    orderId: string;
+    amountInPaise: number;
+    currency: string;
+  }): Promise<{ providerOrderId: string; providerPayload: Record<string, unknown> }>;
 }

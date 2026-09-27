@@ -1,6 +1,13 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, Text as RNText, View } from 'react-native';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import {
+  FlatList,
+  Pressable,
+  RefreshControl,
+  Text as RNText,
+  View,
+  type ListRenderItemInfo,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BANNER_H, BANNER_W, PEEK } from '../../../src/components/home/HeroCarousel';
@@ -12,7 +19,10 @@ import { ErrorState } from '../../../src/components/ErrorState';
 import { HomeSkeleton } from '../../../src/components/LoadingSkeleton';
 import { StickyCartBar, useCartSummary } from '../../../src/components/commerce/StickyCartBar';
 import { ProductQuickView } from '../../../src/components/commerce/ProductQuickView';
-import { VariantPickerSheet, type VariantPickerState } from '../../../src/components/commerce/VariantPickerSheet';
+import {
+  VariantPickerSheet,
+  type VariantPickerState,
+} from '../../../src/components/commerce/VariantPickerSheet';
 import { DiscoveryGrid } from '../../../src/components/home/DiscoveryGrid';
 import { HeroCarousel } from '../../../src/components/home/HeroCarousel';
 import { CategoryIconStrip } from '../../../src/components/home/CategoryIconStrip';
@@ -21,20 +31,13 @@ import { HomeHeader } from '../../../src/components/home/HomeHeader';
 import { ProductSection } from '../../../src/components/home/ProductSection';
 import { SakyaPromoBanner } from '../../../src/components/home/SakyaPromoBanner';
 import { SectionHeader } from '../../../src/components/home/SectionHeader';
-import {
-  BRAND_PHILOSOPHY,
-  HERO_SLIDES,
-  PROMO_BANNERS,
-} from '../../../src/config/home-content';
+import { BRAND_PHILOSOPHY, HERO_SLIDES, PROMO_BANNERS } from '../../../src/config/home-content';
 import { useHomeCatalog } from '../../../src/hooks/use-home-catalog';
 import { useHomeDiscovery, type DiscoveryTile } from '../../../src/hooks/use-home-discovery';
 import { useFreshToday } from '../../../src/hooks/use-fresh-today';
 import { DeliveryProgressBar } from '../../../src/components/home/DeliveryProgressBar';
 import { navBarVisibility, navVisibleFromScroll } from '../../../src/lib/nav-visibility';
-import {
-  headerCollapse,
-  headerCollapsedFromScroll,
-} from '../../../src/lib/header-collapse';
+import { headerCollapse, headerCollapsedFromScroll } from '../../../src/lib/header-collapse';
 
 const BOTTOM_NAV_CLEARANCE = 120;
 
@@ -82,6 +85,12 @@ export default function ShopHome() {
   const discovery = useHomeDiscovery();
   const [quickViewSlug, setQuickViewSlug] = useState<string | null>(null);
   const [variantPick, setVariantPick] = useState<VariantPickerState | null>(null);
+  const showQuickView = useCallback((product: import('@sakya/types').ProductListItem) => {
+    setQuickViewSlug(product.slug);
+  }, []);
+  const showVariantPicker = useCallback((product: import('@sakya/types').ProductListItem) => {
+    setVariantPick({ product });
+  }, []);
 
   const openProduct = useCallback((slug: string) => router.push(`/(shop)/products/${slug}`), []);
   const openCategory = useCallback((slug: string) => router.push(`/(shop)/categories/${slug}`), []);
@@ -138,13 +147,10 @@ export default function ShopHome() {
         home={home}
         discovery={discovery}
         isLoading={home.isLoading || discovery.isLoading}
-        onQuickView={(product) => setQuickViewSlug(product.slug)}
-        onPickVariant={(product) => setVariantPick({ product })}
+        onQuickView={showQuickView}
+        onPickVariant={showVariantPicker}
       />
-      <StickyCartBar
-        itemCount={itemCount}
-        onPress={() => router.push('/(shop)/cart')}
-      />
+      <StickyCartBar itemCount={itemCount} onPress={() => router.push('/(shop)/cart')} />
       <ProductQuickView
         slug={quickViewSlug}
         onClose={() => setQuickViewSlug(null)}
@@ -176,7 +182,7 @@ interface HomeListProps {
   onPickVariant: (product: import('@sakya/types').ProductListItem) => void;
 }
 
-function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: HomeListProps) {
+function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant }: HomeListProps) {
   const [refreshing, setRefreshing] = useState(false);
   const { subtotalInPaise, itemCount } = useCartSummary();
   const freshToday = useFreshToday();
@@ -204,19 +210,19 @@ function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: Ho
   // user scrolls past the hero banner, then collapses and STAYS collapsed
   // until they scroll back up past the banner — no open/close toggling).
   const lastOffset = useRef(0);
-  const onScroll = useCallback(
-    (event: { nativeEvent: { contentOffset: { y: number } } }) => {
-      const y = event.nativeEvent.contentOffset.y;
-      navBarVisibility.set(
-        navVisibleFromScroll(y, lastOffset.current, navBarVisibility.get()),
-      );
-      headerCollapse.set(
-        headerCollapsedFromScroll(y, lastOffset.current, headerCollapse.get(), collapseThreshold.current),
-      );
-      lastOffset.current = y;
-    },
-    [],
-  );
+  const onScroll = useCallback((event: { nativeEvent: { contentOffset: { y: number } } }) => {
+    const y = event.nativeEvent.contentOffset.y;
+    navBarVisibility.set(navVisibleFromScroll(y, lastOffset.current, navBarVisibility.get()));
+    headerCollapse.set(
+      headerCollapsedFromScroll(
+        y,
+        lastOffset.current,
+        headerCollapse.get(),
+        collapseThreshold.current,
+      ),
+    );
+    lastOffset.current = y;
+  }, []);
 
   // Collapse threshold = measured header height + one hero-banner height,
   // so the full band is guaranteed to stay open while the banner is on
@@ -228,9 +234,14 @@ function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: Ho
   const openCategories = useCallback(() => router.push('/(shop)/categories'), []);
   const openSearch = useCallback(() => router.push('/search'), []);
 
-  const openTile = useCallback(
-    (tile: DiscoveryTile) => openCategory(tile.handle),
+  const openTile = useCallback((tile: DiscoveryTile) => openCategory(tile.handle), [openCategory]);
+  const onPressCategory = useCallback(
+    (category: import('@sakya/types').CategorySummary) => openCategory(category.slug),
     [openCategory],
+  );
+  const onPressProduct = useCallback(
+    (product: import('@sakya/types').ProductListItem) => openProduct(product.slug),
+    [openProduct],
   );
 
   const heroSlides = useMemo(
@@ -260,6 +271,11 @@ function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: Ho
     }
     return list;
   }, [home.sections]);
+
+  const seeAllByRailId = useMemo(
+    () => new Map(railRows.map((rail) => [rail.railId, () => openCategory(rail.handle)])),
+    [railRows, openCategory],
+  );
 
   const discoveryById = useMemo(() => {
     const map = new Map<string, DiscoveryTile[]>();
@@ -299,8 +315,8 @@ function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: Ho
           products.push(product);
         }
       }
-    return { ...def, products, hideSeeAll: def.id === 'premium-produce' };
-  }).filter((rail) => rail.products.length > 0);
+      return { ...def, products, hideSeeAll: def.id === 'premium-produce' };
+    }).filter((rail) => rail.products.length > 0);
   }, [discovery.productsByHandle]);
 
   const rows = useMemo(() => {
@@ -359,15 +375,158 @@ function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: Ho
     list.push({ key: 'footer', type: 'footer' });
 
     return list;
-  }, [isLoading, discoveryById, pantryTiles, editorialRails, railRows]);
+  }, [isLoading, freshToday.products.length, discoveryById, pantryTiles, editorialRails, railRows]);
+
+  const listRows = useMemo(() => rows.filter((row): row is Row => row.type !== 'skeleton'), [rows]);
+
+  const onHeaderHeightChange = useCallback(
+    (height: number) => {
+      setHeaderHeight(height);
+      collapseThreshold.current =
+        height + Math.round(((contentWidth - screenPadding * 2 - PEEK) * BANNER_H) / BANNER_W) + 44;
+    },
+    [contentWidth, screenPadding],
+  );
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    home.refetch();
+    discovery.refetch();
+    setRefreshing(false);
+  }, [home.refetch, discovery.refetch]);
+  const contentContainerStyle = useMemo(
+    () => ({ paddingTop: headerHeight, paddingBottom: BOTTOM_NAV_CLEARANCE }),
+    [headerHeight],
+  );
+  const emptyListComponent = useMemo(
+    () => (
+      <View className="items-center gap-2 px-4 py-16">
+        <RNText className="text-[16px] font-semibold text-ink">The shelves are empty</RNText>
+        <RNText className="text-center text-[13.5px] leading-5 text-ink-soft">
+          Our farmers are preparing the next harvest. Please check back soon.
+        </RNText>
+      </View>
+    ),
+    [],
+  );
+  const refreshControl = useMemo(
+    () => (
+      <RefreshControl
+        refreshing={refreshing && isLoading}
+        onRefresh={onRefresh}
+        tintColor="#0B594C"
+        colors={['#0B594C']}
+      />
+    ),
+    [refreshing, isLoading, onRefresh],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: ListRenderItemInfo<Row>) => {
+      switch (item.type) {
+        case 'progress':
+          return <DeliveryProgressBar subtotalInPaise={subtotalInPaise} />;
+        case 'welcome':
+          return (
+            <View className="mt-4">
+              <WelcomeBanner slides={heroSlides} />
+            </View>
+          );
+        case 'fresh-today':
+          return (
+            <View className="mt-7">
+              <ProductSection
+                title="Fresh today"
+                subtitle="Picked from today's harvest"
+                products={freshToday.products}
+                onPressProduct={onPressProduct}
+                onQuickView={onQuickView}
+                onPickVariant={onPickVariant}
+              />
+            </View>
+          );
+        case 'collection': {
+          const tiles =
+            item.sectionId === 'pantry' ? pantryTiles : (discoveryById.get(item.sectionId) ?? []);
+          if (tiles.length === 0) return null;
+          const title =
+            item.sectionId === 'pantry'
+              ? 'The Farm Pantry'
+              : (COLLECTION_TITLES[item.sectionId] ?? item.sectionId);
+          return (
+            <View className="mt-10 gap-3">
+              <SectionHeader title={title} />
+              <DiscoveryGrid tiles={tiles} onPressTile={openTile} />
+            </View>
+          );
+        }
+        case 'editorial': {
+          const rail = editorialRails.find((candidate) => candidate.id === item.railId);
+          if (!rail) return null;
+          return (
+            <View className="mt-7">
+              <ProductDuoRail
+                title={rail.title}
+                subtitle={rail.subtitle}
+                products={rail.products}
+                onPressProduct={onPressProduct}
+                onQuickView={onQuickView}
+                onPickVariant={onPickVariant}
+                hideSeeAll={rail.hideSeeAll}
+              />
+            </View>
+          );
+        }
+        case 'promo': {
+          const banner = PROMO_BANNERS.find((candidate) => candidate.key === item.bannerId);
+          if (!banner) return null;
+          return (
+            <View className="mt-7">
+              <SakyaPromoBanner banner={banner} onPress={openCategory} />
+            </View>
+          );
+        }
+        case 'rail':
+          return (
+            <View className="mt-7">
+              <ProductSection
+                title={item.rail.title}
+                products={item.rail.products}
+                onPressProduct={onPressProduct}
+                onSeeAll={item.rail.seeAll ? seeAllByRailId.get(item.rail.railId) : undefined}
+                onQuickView={onQuickView}
+                onPickVariant={onPickVariant}
+              />
+            </View>
+          );
+        case 'philosophy':
+          return <BrandPhilosophy />;
+        case 'footer':
+          return <HomeFooter />;
+        default:
+          return null;
+      }
+    },
+    [
+      subtotalInPaise,
+      heroSlides,
+      freshToday.products,
+      onPressProduct,
+      onQuickView,
+      onPickVariant,
+      pantryTiles,
+      discoveryById,
+      openTile,
+      editorialRails,
+      openCategory,
+      seeAllByRailId,
+    ],
+  );
 
   if (rows[0]?.type === 'skeleton') {
     return <HomeSkeleton />;
   }
 
-  const listRows: Row[] = rows.filter(
-    (row): row is Row => (row as Row).type !== 'skeleton',
-  );  return (
+  return (
     <View className="flex-1">
       {/* Glass OVERLAY header — the list runs edge-to-edge BENEATH it, so the
           blur actually frosts real scrolling pixels (bottom-navbar effect).
@@ -376,17 +535,12 @@ function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: Ho
       <HomeHeader
         onSearchPress={openSearch}
         cartCount={itemCount}
-        onHeightChange={(height) => {
-          setHeaderHeight(height);
-          // Keep the collapse threshold honest: header + hero (+ margins).
-          collapseThreshold.current =
-            height + Math.round(((contentWidth - screenPadding * 2 - PEEK) * BANNER_H) / BANNER_W) + 44;
-        }}
+        onHeightChange={onHeaderHeightChange}
       >
         {home.stripCategories.length > 0 ? (
           <CategoryIconStrip
             categories={home.stripCategories}
-            onPress={(category) => openCategory(category.slug)}
+            onPress={onPressCategory}
             onPressAll={openCategories}
             rows={1}
             onGlass
@@ -395,130 +549,26 @@ function HomeList({ home, discovery, isLoading, onQuickView, onPickVariant }: Ho
       </HomeHeader>
       <FlatList
         data={listRows}
-        keyExtractor={(row) => row.key}
+        keyExtractor={keyExtractor}
         showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing && isLoading}
-          onRefresh={() => {
-            setRefreshing(true);
-            home.refetch();
-            discovery.refetch();
-            setRefreshing(false);
-          }}
-          tintColor="#0B594C"
-          colors={['#0B594C']}
-        />
-      }
-      contentContainerStyle={{
-        // Top spacer = the band's measured height, so the hero sits flush
-        // under the glass at rest and slides beneath it as you scroll.
-        paddingTop: headerHeight,
-        paddingBottom: BOTTOM_NAV_CLEARANCE,
-      }}
-      onScroll={onScroll}
-      scrollEventThrottle={16}
-      ListEmptyComponent={
-        <View className="items-center gap-2 px-4 py-16">
-          <RNText className="text-[16px] font-semibold text-ink">The shelves are empty</RNText>
-          <RNText className="text-center text-[13.5px] leading-5 text-ink-soft">
-            Our farmers are preparing the next harvest. Please check back soon.
-          </RNText>
-        </View>
-      }
-      renderItem={({ item }) => {
-        switch (item.type) {
-          case 'progress':
-            return <DeliveryProgressBar subtotalInPaise={subtotalInPaise} />;
-          case 'welcome':
-            return (
-              <View className="mt-4">
-                <WelcomeBanner slides={heroSlides} />
-              </View>
-            );
-          case 'fresh-today':
-            return (
-              <View className="mt-7">
-                <ProductSection
-                  title="Fresh today"
-                  subtitle="Picked from today's harvest"
-                  products={freshToday.products}
-                  onPressProduct={(product) => openProduct(product.slug)}
-                  onQuickView={onQuickView}
-                  onPickVariant={onPickVariant}
-                />
-              </View>
-            );
-          case 'collection': {
-            const tiles =
-              item.sectionId === 'pantry'
-                ? pantryTiles
-                : discoveryById.get(item.sectionId) ?? [];
-            if (tiles.length === 0) return null;
-            const title =
-              item.sectionId === 'pantry'
-                ? 'The Farm Pantry'
-                : COLLECTION_TITLES[item.sectionId] ?? item.sectionId;
-            return (
-              <View className="mt-10 gap-3">
-                <SectionHeader title={title} />
-                <DiscoveryGrid tiles={tiles} onPressTile={openTile} />
-              </View>
-            );
-          }
-          case 'editorial': {
-            const rail = editorialRails.find((candidate) => candidate.id === item.railId);
-            if (!rail) return null;
-            return (
-              <View className="mt-7">
-                <ProductDuoRail
-                  title={rail.title}
-                  subtitle={rail.subtitle}
-                  products={rail.products}
-                  onPressProduct={(product) => openProduct(product.slug)}
-                  onQuickView={onQuickView}
-                  onPickVariant={onPickVariant}
-                  hideSeeAll={rail.hideSeeAll}
-                />
-              </View>
-            );
-          }
-          case 'promo': {
-            const banner = PROMO_BANNERS.find((candidate) => candidate.key === item.bannerId);
-            if (!banner) return null;
-            return (
-              <View className="mt-7">
-                <SakyaPromoBanner banner={banner} onPress={openCategory} />
-              </View>
-            );
-          }
-          case 'rail':
-            return (
-              <View className="mt-7">
-                <ProductSection
-                  title={item.rail.title}
-                  products={item.rail.products}
-                  onPressProduct={(product) => openProduct(product.slug)}
-                  onSeeAll={
-                    item.rail.seeAll ? () => openCategory(item.rail.handle) : undefined
-                  }
-                  onQuickView={onQuickView}
-                  onPickVariant={onPickVariant}
-                />
-              </View>
-            );
-          case 'philosophy':
-            return <BrandPhilosophy />;
-          case 'footer':
-            return <HomeFooter />;
-          default:
-            return null;
-        }
-      }}
+        initialNumToRender={3}
+        maxToRenderPerBatch={3}
+        windowSize={7}
+        removeClippedSubviews={false}
+        refreshControl={refreshControl}
+        contentContainerStyle={contentContainerStyle}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        ListEmptyComponent={emptyListComponent}
+        renderItem={renderItem}
       />
     </View>
   );
 }
+
+const HomeList = memo(HomeListInner);
+
+const keyExtractor = (row: Row): string => row.key;
 
 /**
  * Editorial composition for everything after "Fresh today".
@@ -557,7 +607,12 @@ const EDITORIAL_RAILS: Array<{
     id: 'premium-produce',
     title: 'Premium Produce',
     subtitle: 'Exotic vegetables & finest fruits, picked at prime',
-    handles: ['gourds-local-vegetables-copy', 'premium-vegetables-copy', 'country-special-copy', 'leafy-greens-copy'],
+    handles: [
+      'gourds-local-vegetables-copy',
+      'premium-vegetables-copy',
+      'country-special-copy',
+      'leafy-greens-copy',
+    ],
     // No banner of its own — it sits right after the Sakya Fresh banner.
   },
   {
@@ -632,7 +687,9 @@ function HomeFooter() {
       </View>
 
       <View className="mt-6 items-center gap-1">
-        <RNText className="text-[11px] text-ink-soft">Farm-direct · Packed at source · Delivered fresh</RNText>
+        <RNText className="text-[11px] text-ink-soft">
+          Farm-direct · Packed at source · Delivered fresh
+        </RNText>
         <RNText className="text-[10px] tracking-wide text-ink-soft/70">
           © {new Date().getFullYear()} Sakya Farms. All rights reserved.
         </RNText>

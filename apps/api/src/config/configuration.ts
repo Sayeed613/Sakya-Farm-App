@@ -30,6 +30,9 @@ export interface AppConfig {
   payments: {
     /** HMAC secret for the non-production MOCK webhook adapter. */
     mockWebhookSecret: string | undefined;
+    razorpayKeyId: string | null;
+    razorpayKeySecret: string | null;
+    razorpayWebhookSecret: string | null;
   };
   sms: {
     /**
@@ -117,6 +120,9 @@ export default function configuration(): AppConfig {
     },
     payments: {
       mockWebhookSecret: env.PAYMENTS_MOCK_WEBHOOK_SECRET,
+      razorpayKeyId: env.RAZORPAY_KEY_ID ?? null,
+      razorpayKeySecret: env.RAZORPAY_KEY_SECRET ?? null,
+      razorpayWebhookSecret: env.RAZORPAY_WEBHOOK_SECRET ?? null,
     },
     sms: {
       authKey: env.MSG91_AUTH_KEY ?? null,

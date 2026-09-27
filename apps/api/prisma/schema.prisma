@@ -927,6 +927,8 @@ model Payment {
   provider          String        @default("MANUAL")
   /// Payment id assigned by the provider, when there is one.
   providerPaymentId String?       @map("provider_payment_id")
+  /// Gateway order id, used to correlate webhooks before a payment id is known.
+  providerOrderId   String?       @map("provider_order_id")
   method            PaymentMethod @default(CASH_ON_DELIVERY)
 
   status   PaymentStatus @default(PENDING)
@@ -953,6 +955,7 @@ model Payment {
 
   @@unique([userId, idempotencyKey])
   @@unique([provider, providerPaymentId])
+  @@unique([provider, providerOrderId])
   @@index([userId])
   @@index([orderId, status])
   @@map("payments")

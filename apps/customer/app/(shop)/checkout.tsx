@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, useRouter } from 'expo-router';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
+import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cartApi } from '../../src/api/cart';
@@ -51,12 +51,13 @@ const PAGE = '#FFFFFF';
 const CARD_BORDER = '#EDE7DC';
 
 /**
- * The mock UPI/Card simulator is offered ONLY in explicit internal demo builds
- * (`EXPO_PUBLIC_PAYMENTS_DEMO=true`). A customer-facing build must never show a
- * fake payment method, and the server refuses online intents in production
- * anyway — so the honest default is Cash on Delivery, with no dead options.
+ * Demo UPI/card is opt-in; live Razorpay checkout is enabled only in a native
+ * build whose backend has the matching Razorpay credentials configured.
  */
 const PAYMENTS_DEMO_ENABLED = process.env.EXPO_PUBLIC_PAYMENTS_DEMO === 'true';
+const RAZORPAY_ENABLED =
+  process.env.EXPO_PUBLIC_RAZORPAY_ENABLED === 'true' && Platform.OS !== 'web';
+const ONLINE_PAYMENTS_ENABLED = PAYMENTS_DEMO_ENABLED || RAZORPAY_ENABLED;
 
 /**
  * Checkout — address + payment, over server-authoritative totals.
@@ -66,11 +67,8 @@ const PAYMENTS_DEMO_ENABLED = process.env.EXPO_PUBLIC_PAYMENTS_DEMO === 'true';
  * Delivery or an online method, and places the order.
  *
  * Online payment honesty: placing the order creates the order + a PENDING
- * payment. Choosing an online method then creates a payment INTENT. The app
- * polls the order's payments afterwards — capture happens via the provider's
- * webhook, and the UI never claims "paid" on its own say-so. In this build the
- * only configured provider is the dev MOCK adapter, so the intent flow works
- * end-to-end against the real webhook path in non-production.
+ * payment. Razorpay captures through its hosted native SDK; only a verified
+ * provider webhook advances the order to confirmed.
  */
 export default function CheckoutScreen() {
   const insets = useSafeAreaInsets();
@@ -257,29 +255,59 @@ export default function CheckoutScreen() {
 
       /*
        * COD is anchored by checkout itself (a PENDING MANUAL payment exists).
-       * Online methods: create the intent, then hand the PENDING payment to
-       * the demo sheet, which drives the provider outcome and navigates on
-       * the POLLED server state. A failed intent still lands on the order —
-       * payment can be retried from the order screen.
+       * Online methods create a server-owned gateway intent. Demo builds use
+       * the simulator; native release builds open Razorpay Checkout. Payment
+       * status still comes only from the signed webhook.
        */
       if (method !== 'COD') {
         try {
-          const { payment } = await checkoutApi.createPaymentIntent({
+          const response = await checkoutApi.createPaymentIntent({
             orderId: order.id,
             method,
             idempotencyKey: newIdempotencyKey(),
           });
-          setPendingPayment(payment);
-          // Checkout ends here; the demo sheet owns the rest of the journey.
-          return;
-        } catch {
-          // The order exists either way — land on it; retry lives there.
-          router.replace({
-            pathname: '/(shop)/orders/[id]',
-            params: { id: order.id, justPlaced: '1' },
+          if (response.payment.provider === 'MOCK' && PAYMENTS_DEMO_ENABLED) {
+            setPendingPayment(response.payment);
+            return;
+          }
+          if (response.payment.provider !== 'RAZORPAY' || !RAZORPAY_ENABLED) {
+            throw new Error('Online payments are not enabled for this app build.');
+          }
+
+          const { default: RazorpayCheckout } = await import('react-native-razorpay');
+          const intent = response.intent;
+          if (
+            typeof intent.key !== 'string' ||
+            typeof intent.order_id !== 'string' ||
+            typeof intent.amount !== 'number' ||
+            typeof intent.currency !== 'string'
+          ) {
+            throw new Error('The payment service returned an invalid checkout order.');
+          }
+          await RazorpayCheckout.open({
+            key: intent.key,
+            order_id: intent.order_id,
+            amount: String(intent.amount),
+            currency: intent.currency,
+            name: 'Sakya Farms',
+            description: `Payment for order ${order.orderNumber}`,
+            prefill: {
+              contact: contactDefaults?.phone ?? '',
+              name: contactDefaults?.name ?? '',
+            },
+            theme: { color: BRAND },
           });
-          return;
+          // The SDK callback is not authoritative; the order page polls the
+          // server until the verified Razorpay webhook arrives.
+          clearCartAfterOrder();
+        } catch {
+          // The order is saved either way; its detail screen offers a retry.
         }
+        router.replace({
+          pathname: '/(shop)/orders/[id]',
+          params: { id: order.id, justPlaced: '1' },
+        });
+        return;
       }
 
       // The cart is not auto-cleared by checkout (intentional, server-side);
@@ -315,7 +343,7 @@ export default function CheckoutScreen() {
       {/* Header strip: the farm photo bleeds out from under it, so the
           progress row and hero copy sit ON the artwork. */}
       <View className="relative">
-        <CheckoutBackdrop />
+        <CheckoutBackdrop topOffset={insets.top} />
         <CheckoutHeaderBar />
       </View>
 
@@ -508,7 +536,7 @@ export default function CheckoutScreen() {
                     title="Cash on Delivery"
                     subtitle="Pay when your order arrives"
                   />
-                  {PAYMENTS_DEMO_ENABLED ? (
+                  {ONLINE_PAYMENTS_ENABLED ? (
                     <>
                       <View className="h-px" style={{ backgroundColor: LINE }} />
                       <MethodRow
@@ -516,13 +544,15 @@ export default function CheckoutScreen() {
                         onSelect={() => setMethod('UPI')}
                         icon="phone-portrait-outline"
                         title="UPI"
-                        subtitle="Pay with any UPI app"
+                        subtitle={PAYMENTS_DEMO_ENABLED ? 'Pay with any UPI app' : 'Pay securely with UPI'}
                         trailing={
-                          <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
-                            <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
-                              DEMO
-                            </RNText>
-                          </View>
+                          PAYMENTS_DEMO_ENABLED ? (
+                            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
+                              <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
+                                DEMO
+                              </RNText>
+                            </View>
+                          ) : null
                         }
                       />
                       <View className="h-px" style={{ backgroundColor: LINE }} />
@@ -531,13 +561,15 @@ export default function CheckoutScreen() {
                         onSelect={() => setMethod('CARD')}
                         icon="card-outline"
                         title="Card"
-                        subtitle="Credit or debit card"
+                        subtitle={PAYMENTS_DEMO_ENABLED ? 'Credit or debit card' : 'Pay securely by card'}
                         trailing={
-                          <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
-                            <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
-                              DEMO
-                            </RNText>
-                          </View>
+                          PAYMENTS_DEMO_ENABLED ? (
+                            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
+                              <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
+                                DEMO
+                              </RNText>
+                            </View>
+                          ) : null
                         }
                       />
                     </>
@@ -1076,9 +1108,13 @@ function DemoPaymentSheet({
    holds contrast under the serif hero copy.
    =========================================================================== */
 
-function CheckoutBackdrop() {
+function CheckoutBackdrop({ topOffset }: { topOffset: number }) {
   return (
-    <View pointerEvents="none" className="absolute left-0 right-0 top-0 h-[250px]">
+    <View
+      pointerEvents="none"
+      className="absolute left-0 right-0 h-[250px]"
+      style={{ top: -topOffset }}
+    >
       <ExpoImage
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         source={require('../../src/images/checkout-header.png')}

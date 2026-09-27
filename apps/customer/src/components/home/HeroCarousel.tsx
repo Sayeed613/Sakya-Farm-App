@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, View, type ViewToken } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
@@ -39,7 +39,7 @@ export interface HeroCarouselProps {
  * and product storytelling live in the creative — no overlay text, no
  * double messaging.
  */
-export function HeroCarousel({ slides }: HeroCarouselProps) {
+function HeroCarouselInner({ slides }: HeroCarouselProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const viewabilityRef = useRef({ viewAreaCoveragePercentThreshold: 60 });
   // Live viewport, NOT Dimensions at module load (froze first device width —
@@ -131,6 +131,8 @@ export function HeroCarousel({ slides }: HeroCarouselProps) {
     </Animated.View>
   );
 }
+
+export const HeroCarousel = memo(HeroCarouselInner);
 
 function HeroSlide({
   slide,
