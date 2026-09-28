@@ -237,6 +237,51 @@ export class PaymentsService {
     return adapter;
   }
 
+  /**
+   * Ask the gateway for the authoritative state of a stored gateway order and,
+   * if money has arrived, feed the event through the SAME real state machine
+   * the webhook uses — transitions, order mirroring, notifications. The
+   * gateway's answer is the only authority; nothing is invented locally.
+   *
+   * Callers: the pending-order expiry sweep, which must never cancel an order
+   * whose capture was still in flight when it ran. Returns the event that was
+   * applied (so callers can see whether money arrived), or null when the
+   * gateway reports no decisive outcome or the gateway itself is unreachable
+   * (reachability is logged; sweeping continues).
+   */
+  async reconcilePayment(row: PaymentRowView): Promise<ProviderWebhookEvent | null> {
+    if (
+      row.providerOrderId === null ||
+      row.providerOrderId === undefined ||
+      row.providerOrderId === ''
+    ) {
+      return null;
+    }
+
+    const provider = this.getAdapter(row.provider);
+    if (provider.fetchPaymentStatus === undefined) return null;
+
+    let event: ProviderWebhookEvent | null;
+    try {
+    event = await provider.fetchPaymentStatus(row.providerOrderId);
+    } catch (error) {
+      this.logger.warn(
+        `Reconciliation could not reach ${row.provider} for order ${row.providerOrderId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+
+    if (event === null) return null;
+
+    // The gateway says money moved; funnel the event through the identical
+    // path a webhook would take (amount/currency cross-check, replay
+    // handling, transition guard, order mirroring, notifications).
+    await this.processWebhookEvent(row.provider, event);
+    return event;
+  }
+
   /** Cancel a still-open payment. Captured money is refunded, never cancelled. */
   async cancelPayment(userId: string, paymentId: string, reason?: string): Promise<PaymentDetail> {
     const payment = await this.getOwnedPaymentOrThrow(userId, paymentId);

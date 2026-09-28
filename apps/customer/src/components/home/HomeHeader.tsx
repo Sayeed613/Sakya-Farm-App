@@ -116,7 +116,7 @@ export function HomeHeader({
 
   const contactDefaults = useMemo(
     () =>
-      session
+      session && session.user
         ? {
             name: [session.user.firstName, session.user.lastName].filter(Boolean).join(' '),
             phone: session.user.phone ?? '',
@@ -292,7 +292,11 @@ export function HomeHeader({
                     style={{ color: INK }}
                     numberOfLines={1}
                   >
-                    {location.status === 'locating' ? 'Locating…' : location.label}
+                    {lastAddress !== null
+                      ? shortAddressLabel(lastAddress)
+                      : location.status === 'locating'
+                        ? 'Locating…'
+                        : location.label}
                   </RNText>
                   <Ionicons name="chevron-down" size={13} color={BRAND} />
                 </View>
@@ -384,6 +388,28 @@ export function HomeHeader({
       />
     </View>
   );
+}
+
+/**
+ * "Home · #233 1st Cross" — the tag plus the first few words of the street,
+ * for the header's Delivery-to row. Falls back through line2/landmark so a
+ * sparse address still shows something meaningful.
+ */
+function shortAddressLabel(address: {
+  line1: string;
+  line2?: string;
+  landmark?: string;
+}): string {
+  const street = [address.line1, address.line2 ?? '', address.landmark ?? '']
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  const short = (street[0] ?? '').split(/\s+/).slice(0, 4).join(' ');
+  const tag = /office|work/i.test(short)
+    ? 'Office'
+    : /flat|apt|apartment/i.test(short)
+      ? 'Flat'
+      : 'Home';
+  return short !== '' ? `${tag} · ${short}` : tag;
 }
 
 const styles = StyleSheet.create({

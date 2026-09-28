@@ -67,7 +67,7 @@ export function CartAddressHeader() {
 
   const contactDefaults = useMemo(
     () =>
-      session
+      session && session.user
         ? {
             name: [session.user.firstName, session.user.lastName].filter(Boolean).join(' '),
             phone: session.user.phone ?? '',

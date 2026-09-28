@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery } from '@tanstack/react-query';
@@ -26,6 +27,13 @@ const GREEN_PALE = '#F0F6EC';
 const RED = '#B42318';
 const RED_SOFT = '#FDECEC';
 
+/** Avatar URL → absolute URI the image component can fetch. */
+function resolveAvatarUri(avatarUrl: string): string {
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) return avatarUrl;
+  const base = process.env.EXPO_PUBLIC_API_URL ?? '';
+  return `${base.replace(/\/$/, '')}${avatarUrl}`;
+}
+
 /*
  * Styling is NativeWind (Tailwind) classes. Named palette classes (text-ink,
  * text-brand, text-brand-dark, text-danger) mirror src/theme tokens; exact
@@ -47,7 +55,7 @@ export default function ProfileScreen() {
 
   if (session === null) {
     return (
-      <View className="flex-1 bg-[#F7F3E9]" style={{ paddingTop: insets.top }}>
+      <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
         <AuthGate
           icon="person-outline"
           title="Verify your number to manage your account"
@@ -79,7 +87,7 @@ export default function ProfileScreen() {
   }
 
   return (
-    <View className="flex-1 bg-[#F7F3E9]" style={{ paddingTop: insets.top }}>
+    <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
       {/* Single leafy hero backdrop */}
       <View pointerEvents="none" className="absolute left-0 right-0 top-0 h-[280px]">
         <Image
@@ -89,6 +97,13 @@ export default function ProfileScreen() {
           contentFit="cover"
           cachePolicy="memory-disk"
           accessibilityIgnoresInvertColors
+        />
+        {/* Light frost under the Account title bar — texture without noise. */}
+        <BlurView
+          pointerEvents="none"
+          intensity={26}
+          tint="light"
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 64 }}
         />
         <LinearGradient
           start={{ x: 0.5, y: 0 }}
@@ -124,8 +139,18 @@ export default function ProfileScreen() {
           style={{ boxShadow: '0px 4px 10px rgba(58,53,43,0.055)', elevation: 2 }}
         >
           <View className="min-h-[78px] flex-row items-center bg-white/[0.64] px-3">
-            <View className="h-[52px] w-[52px] items-center justify-center rounded-full border border-[#F0EEE7] bg-white">
-              <Ionicons name="person" size={26} color={BRAND} />
+            <View className="h-[52px] w-[52px] items-center justify-center overflow-hidden rounded-full border border-[#F0EEE7] bg-white">
+              {user.avatarUrl !== null && user.avatarUrl !== undefined ? (
+                <Image
+                  source={{ uri: resolveAvatarUri(user.avatarUrl) }}
+                  style={{ width: 50, height: 50 }}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  recyclingKey={user.avatarUrl}
+                />
+              ) : (
+                <Ionicons name="person" size={26} color={BRAND} />
+              )}
             </View>
 
             <View className="ml-3 min-w-0 flex-1">

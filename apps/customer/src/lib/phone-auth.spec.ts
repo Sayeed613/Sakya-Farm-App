@@ -99,7 +99,7 @@ import type { AuthSessionResponse } from '@sakya/types';
 
 function fakeSession(overrides: Partial<AuthSessionResponse> = {}): AuthSessionResponse {
   return {
-    user: { id: 'u1', email: null, phone: '+919876543210', firstName: 'Customer', lastName: null },
+    user: { id: 'u1', email: null, phone: '+919876543210', firstName: 'Customer', lastName: null, avatarUrl: null },
     accessToken: 'at',
     refreshToken: 'rt',
     accessTokenExpiresIn: '15m',
@@ -172,7 +172,7 @@ describe('OTP verify session contract', () => {
 
     expect(decideDestination(fakeSession(), '/(shop)/cart')).toBe('/(auth)/complete-profile');
     expect(
-      decideDestination(fakeSession({ isNewUser: true, user: { id: 'u1', email: null, phone: '+919876543210', firstName: 'Ananya', lastName: null } }), null),
+      decideDestination(fakeSession({ isNewUser: true, user: { id: 'u1', email: null, phone: '+919876543210', firstName: 'Ananya', lastName: null, avatarUrl: null } }), null),
     ).toBe('/(shop)');
     expect(decideDestination(fakeSession({ isNewUser: false }), '/(shop)/orders')).toBe('/(shop)/orders');
     expect(decideDestination(fakeSession({ isNewUser: false }), null)).toBe('/(shop)');

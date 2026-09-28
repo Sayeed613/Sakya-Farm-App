@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -17,6 +18,7 @@ import { cartApi } from '../../src/api/cart';
 import { CouponBox } from '../../src/components/cart/CouponBox';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LoadingState } from '../../src/components/LoadingState';
+import { PromoCards } from '../../src/components/commerce/PromoCards';
 import { formatMoney } from '../../src/lib/format';
 import { goBackOrHome } from '../../src/lib/navigation';
 import { useAuthStore } from '../../src/stores/auth-store';
@@ -67,7 +69,7 @@ function GuestCartScreen() {
 
   if (lines.length === 0) {
     return (
-      <View className="flex-1 bg-[#F7F3E9]" style={{ paddingTop: insets.top }}>
+      <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
         <CartBackdrop />
         <CartHeaderBar count={0} />
         <View className="flex-1 items-center justify-center pb-16">
@@ -85,7 +87,7 @@ function GuestCartScreen() {
   }
 
   return (
-    <View className="flex-1 bg-[#F7F3E9]" style={{ paddingTop: insets.top }}>
+    <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
       <CartBackdrop />
       <CartHeaderBar count={itemCount} />
 
@@ -228,6 +230,8 @@ export default function CartScreen() {
   const insets = useSafeAreaInsets();
   const session = useAuthStore((state) => state.session);
   const queryClient = useQueryClient();
+  /** The coupon row can be forced open by the promo cards (apply / qualify). */
+  const [couponOpen, setCouponOpen] = useState(false);
 
   const cart = useQuery({
     queryKey: ['cart'],
@@ -257,6 +261,15 @@ export default function CartScreen() {
 
     onSuccess: (data) => {
       queryClient.setQueryData(['cart'], data);
+    },
+  });
+
+  /** Promo card 2 applies SAKYA100 straight through the server cart. */
+  const applyPromo = useMutation({
+    mutationFn: () => cartApi.applyCoupon('SAKYA100'),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['cart'], data);
+      setCouponOpen(true);
     },
   });
 
@@ -299,7 +312,7 @@ export default function CartScreen() {
    * -------------------------------------------------------------------------- */
 
   return (
-    <View className="flex-1 bg-[#F7F3E9]" style={{ paddingTop: insets.top }}>
+    <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
       <CartBackdrop />
 
       <CartHeaderBar count={items.length} />
@@ -386,9 +399,19 @@ export default function CartScreen() {
               <Ionicons name="chevron-forward" size={18} color={SUBTLE} />
             </Pressable>
 
+            {/* ---------------- OFFERS ---------------- */}
+
+            <PromoCards
+              subtotalInPaise={data?.subtotalInPaise ?? 0}
+              shippingInPaise={data?.shippingInPaise ?? 0}
+              couponCode={data?.coupon?.code ?? null}
+              onPickCoupon={() => setCouponOpen(true)}
+              applyCoupon={() => applyPromo.mutate()}
+            />
+
             {/* ---------------- APPLY COUPON ---------------- */}
 
-            <ApplyCouponCard coupon={data?.coupon ?? null} />
+            <ApplyCouponCard coupon={data?.coupon ?? null} forceOpen={couponOpen} />
 
             {/* ---------------- PRICE DETAILS ---------------- */}
 
@@ -523,6 +546,15 @@ function CartBackdrop() {
         contentFit="cover"
         cachePolicy="memory-disk"
         accessibilityIgnoresInvertColors
+      />
+
+      {/* Light frost under the fixed chrome — keeps the photo textured while
+          the header row stays readable. */}
+      <BlurView
+        pointerEvents="none"
+        intensity={28}
+        tint="light"
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 72 }}
       />
 
       {/* Vertical: light header strip → photo → parchment feather. */}
@@ -731,8 +763,11 @@ function CartItemCard({
 
 function ApplyCouponCard({
   coupon,
+  forceOpen = false,
 }: {
   coupon: AppliedCouponResponse | null;
+  /** Lets the promo cards open the row (apply / qualify) from outside. */
+  forceOpen?: boolean;
 }) {
   /*
    * Collapsed by default — the reference shows a one-line row, not an open
@@ -740,7 +775,7 @@ function ApplyCouponCard({
    * is reachable without another tap.
    */
   const [expanded, setExpanded] = useState(false);
-  const open = expanded || coupon !== null;
+  const open = expanded || coupon !== null || forceOpen;
 
   return (
     <View className="mt-3 overflow-hidden rounded-[16px] bg-white">

@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { CartModule } from '../cart/cart.module';
 import { DeliveryModule } from '../delivery/delivery.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PaymentsModule } from '../payments/payments.module';
 import { OrderExpiryService } from './order-expiry.service';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
@@ -31,7 +32,9 @@ import { OrdersService } from './orders.service';
  * the same placement and transition logic.
  */
 @Module({
-  imports: [CartModule, DeliveryModule, NotificationsModule, ScheduleModule.forRoot()],
+  // PaymentsModule provides PaymentsService to OrderExpiryService: the sweep
+  // reconciles gateway state before cancelling (never cancel paid money).
+  imports: [CartModule, DeliveryModule, NotificationsModule, PaymentsModule, ScheduleModule.forRoot()],
   controllers: [OrdersController],
   providers: [OrdersService, OrderExpiryService],
   exports: [OrdersService],

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -22,6 +23,7 @@ import { AddressPickerSheet } from '../../src/components/checkout/AddressPickerS
 import { EmptyState } from '../../src/components/EmptyState';
 import { ErrorState } from '../../src/components/ErrorState';
 import { SkeletonBlock } from '../../src/components/LoadingSkeleton';
+import { PromoCards } from '../../src/components/commerce/PromoCards';
 import { formatMoney } from '../../src/lib/format';
 import { goBackOrHome } from '../../src/lib/navigation';
 import { addressesApi } from '../../src/api/notifications-api';
@@ -52,11 +54,15 @@ const CARD_BORDER = '#EDE7DC';
 
 /**
  * Demo UPI/card is opt-in; live Razorpay checkout is enabled only in a native
- * build whose backend has the matching Razorpay credentials configured.
+ * build whose backend has the matching Razorpay credentials configured. On WEB
+ * (and inside Expo Go, where the native SDK cannot load) the Razorpay flow
+ * opens the same gateway in a browser sheet instead — the order, the intent
+ * and the webhook state machine are identical, only the checkout surface
+ * differs.
  */
 const PAYMENTS_DEMO_ENABLED = process.env.EXPO_PUBLIC_PAYMENTS_DEMO === 'true';
 const RAZORPAY_ENABLED =
-  process.env.EXPO_PUBLIC_RAZORPAY_ENABLED === 'true' && Platform.OS !== 'web';
+  process.env.EXPO_PUBLIC_RAZORPAY_ENABLED === 'true' && process.env.EXPO_PUBLIC_RAZORPAY_KEY_ID !== undefined;
 const ONLINE_PAYMENTS_ENABLED = PAYMENTS_DEMO_ENABLED || RAZORPAY_ENABLED;
 
 /**
@@ -80,8 +86,9 @@ export default function CheckoutScreen() {
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  /** The Payment Method row is collapsed until the customer taps it. */
-  const [paymentOpen, setPaymentOpen] = useState(false);
+  /** The Payment Method options render expanded so UPI/Card/COD are
+   * immediately visible without an extra tap. */
+  const [paymentOpen, setPaymentOpen] = useState(true);
   const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>('COD');
   const [placing, setPlacing] = useState(false);
   /**
@@ -205,7 +212,9 @@ export default function CheckoutScreen() {
   const recheckDelivery = useMutation({ mutationFn: () => journeyApi.checkServiceability(pincode) });
 
   const contactDefaults = useMemo(() => {
-    if (session === null) return null;
+    // session.user is guarded: a malformed persisted session (partial JSON,
+    // older shape) must not crash the whole checkout — prefill just degrades.
+    if (session === null || session.user === undefined || session.user === null) return null;
     return {
       name: [session.user.firstName, session.user.lastName].filter(Boolean).join(' ').trim(),
       phone: session.user.phone ?? '',
@@ -274,7 +283,6 @@ export default function CheckoutScreen() {
             throw new Error('Online payments are not enabled for this app build.');
           }
 
-          const { default: RazorpayCheckout } = await import('react-native-razorpay');
           const intent = response.intent;
           if (
             typeof intent.key !== 'string' ||
@@ -284,7 +292,7 @@ export default function CheckoutScreen() {
           ) {
             throw new Error('The payment service returned an invalid checkout order.');
           }
-          await RazorpayCheckout.open({
+          const checkoutOptions = {
             key: intent.key,
             order_id: intent.order_id,
             amount: String(intent.amount),
@@ -296,7 +304,19 @@ export default function CheckoutScreen() {
               name: contactDefaults?.name ?? '',
             },
             theme: { color: BRAND },
-          });
+          };
+
+          if (Platform.OS === 'web') {
+            // WEB FALLBACK — the native SDK cannot load in a browser. Open
+            // Razorpay Checkout in a popup window over the checkout page.
+            // The handler posts the outcome back to this window; the order
+            // screen still polls the server, so the webhook stays the only
+            // authority for what actually happened.
+            await openRazorpayWebCheckout(checkoutOptions);
+          } else {
+            const { default: RazorpayCheckout } = await import('react-native-razorpay');
+            await RazorpayCheckout.open(checkoutOptions);
+          }
           // The SDK callback is not authoritative; the order page polls the
           // server until the verified Razorpay webhook arrives.
           clearCartAfterOrder();
@@ -400,117 +420,101 @@ export default function CheckoutScreen() {
               </RNText>
             </View>
 
-            {/* Where it goes — one tap back into the address book. */}
-            {address === null ? (
-              <Pressable
-                onPress={() => setPickerOpen(true)}
-                accessibilityRole="button"
-                accessibilityLabel="Add delivery address"
-                className="mx-3 mt-2 flex-row items-center gap-3 rounded-[14px] border border-dashed bg-white p-3.5 active:opacity-85"
-                style={{ borderColor: BRAND, ...softShadow }}
-              >
+            {/* DELIVERY — ONE card. The top half is the address (tap to add
+                or change), the bottom half is the live delivery status for
+                that address. Previously these were TWO separate cards that
+                both opened the same sheet, which read as a duplicate. */}
+            <Pressable
+              onPress={() => setPickerOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                address === null ? 'Add delivery address' : 'Change delivery address'
+              }
+              className="mx-3 mt-2 overflow-hidden rounded-[14px] border bg-white active:opacity-85"
+              style={{
+                borderColor: address === null ? BRAND : CARD_BORDER,
+                borderWidth: address === null ? 1.4 : 1,
+                ...softShadow,
+              }}
+            >
+              <View className="flex-row items-center gap-3 p-3.5">
                 <View
                   className="h-[38px] w-[38px] items-center justify-center rounded-[11px]"
                   style={{ backgroundColor: AMBER_TINT }}
                 >
-                  <Ionicons name="home" size={19} color={AMBER} />
+                  <Ionicons name={address === null ? 'location-outline' : 'home'} size={19} color={AMBER} />
                 </View>
                 <View className="min-w-0 flex-1">
-                  <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
-                    Add delivery address
-                  </RNText>
-                  <RNText className="mt-0.5 text-[11.5px]" style={{ color: MUTED }}>
-                    Where should we deliver your order?
-                  </RNText>
-                </View>
-                <Ionicons name="chevron-forward" size={17} color={SUBTLE} />
-              </Pressable>
-            ) : (
-              <Pressable
-                onPress={() => setPickerOpen(true)}
-                accessibilityRole="button"
-                accessibilityLabel="Change delivery address"
-                className="mx-3 mt-2 flex-row items-start gap-3 rounded-[14px] border bg-white p-3.5 active:opacity-85"
-                style={{ borderColor: CARD_BORDER, ...softShadow }}
-              >
-                <View
-                  className="h-[38px] w-[38px] items-center justify-center rounded-[11px]"
-                  style={{ backgroundColor: AMBER_TINT }}
-                >
-                  <Ionicons name="home" size={19} color={AMBER} />
-                </View>
-                <View className="min-w-0 flex-1">
-                  <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
-                    Delivering to Home
-                  </RNText>
-                  <RNText className="mt-0.5 text-[12px] leading-[16px]" style={{ color: MUTED }}>
-                    {addressLine(address)}
-                  </RNText>
+                  {address === null ? (
+                    <>
+                      <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
+                        Add delivery address
+                      </RNText>
+                      <RNText className="mt-0.5 text-[11.5px]" style={{ color: MUTED }}>
+                        Where should we deliver your order?
+                      </RNText>
+                    </>
+                  ) : (
+                    <>
+                      <RNText className="text-[13.5px] font-bold" style={{ color: INK }} numberOfLines={1}>
+                        {addressLabel(address)}
+                      </RNText>
+                      <RNText className="mt-0.5 text-[12px] leading-[16px]" style={{ color: MUTED }} numberOfLines={1}>
+                        {addressLine(address)}
+                      </RNText>
+                    </>
+                  )}
                 </View>
                 <View className="rounded-[11px] px-2.5 py-1.5" style={{ backgroundColor: GREEN_TINT }}>
                   <RNText className="text-[11.5px] font-bold" style={{ color: GREEN }}>
-                    Change
+                    {address === null ? 'ADD' : 'Change'}
                   </RNText>
                 </View>
-              </Pressable>
-            )}
+              </View>
 
-            {/* Delivery — real serviceability for the chosen pincode. */}
-            {address === null ? (
-              <DetailCard
-                icon="bicycle-outline"
-                iconColor={MUTED}
-                iconBackground={SURFACE_MUTED}
-                title="Delivery Details"
-                primary="Add an address to see delivery availability"
-                onPress={() => setPickerOpen(true)}
-                accessibilityLabel="Delivery details"
-              />
-            ) : delivery.isPending ? (
-              <DetailCard
-                icon="bicycle-outline"
-                iconColor={MUTED}
-                iconBackground={SURFACE_MUTED}
-                title="Delivery Details"
-                primary={`Checking delivery availability for ${address.postalCode}…`}
-                accessibilityLabel="Delivery details"
-              />
-            ) : delivery.isError || recheckDelivery.isPending ? (
-              <DetailCard
-                icon="cloud-offline-outline"
-                iconColor={AMBER}
-                iconBackground={AMBER_TINT}
-                title="Delivery Details"
-                primary="Could not check delivery"
-                secondary="Tap to retry"
-                onPress={() => recheckDelivery.mutate()}
-                trailingIcon="refresh"
-                trailingColor={BRAND}
-                accessibilityLabel="Retry delivery check"
-              />
-            ) : !delivery.data?.serviceable ? (
-              <DetailCard
-                icon="location-outline"
-                iconColor={AMBER}
-                iconBackground={AMBER_TINT}
-                title="Delivery Details"
-                primary="Not serviceable yet"
-                secondary={`We don't deliver to ${address.postalCode} right now — try another address.`}
-                onPress={() => setPickerOpen(true)}
-                accessibilityLabel="Delivery details"
-              />
-            ) : (
-              <DetailCard
-                icon="bicycle-outline"
-                iconColor={GREEN}
-                iconBackground={GREEN_TINT}
-                title="Delivery Details"
-                primary="Standard Delivery"
-                secondary={delivery.data.etaLabel ?? `Delivering to ${address.city} ${address.postalCode}`}
-                onPress={() => setPickerOpen(true)}
-                accessibilityLabel="Delivery details"
-              />
-            )}
+              {address !== null ? (
+                <>
+                  <View className="h-px" style={{ backgroundColor: LINE }} />
+                  <View className="flex-row items-center gap-3 px-3.5 py-2.5">
+                    {delivery.isPending ? (
+                      <>
+                        <Ionicons name="bicycle-outline" size={17} color={MUTED} />
+                        <RNText className="min-w-0 flex-1 text-[11.5px]" style={{ color: MUTED }} numberOfLines={1}>
+                          {`Checking delivery for ${address.postalCode}…`}
+                        </RNText>
+                      </>
+                    ) : delivery.isError || recheckDelivery.isPending ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Retry delivery check"
+                        onPress={() => recheckDelivery.mutate()}
+                        className="min-w-0 flex-1 flex-row items-center gap-3 active:opacity-70"
+                      >
+                        <Ionicons name="cloud-offline-outline" size={17} color={AMBER} />
+                        <RNText className="min-w-0 flex-1 text-[11.5px] font-semibold" style={{ color: AMBER }}>
+                          Could not check delivery — tap to retry
+                        </RNText>
+                        <Ionicons name="refresh" size={15} color={BRAND} />
+                      </Pressable>
+                    ) : delivery.data?.serviceable ? (
+                      <>
+                        <Ionicons name="bicycle" size={17} color={GREEN} />
+                        <RNText className="min-w-0 flex-1 text-[11.5px] font-semibold" style={{ color: GREEN }} numberOfLines={1}>
+                          {delivery.data.etaLabel ?? 'Standard delivery available'}
+                        </RNText>
+                      </>
+                    ) : (
+                      <>
+                        <Ionicons name="location-outline" size={17} color={AMBER} />
+                        <RNText className="min-w-0 flex-1 text-[11.5px] font-semibold" style={{ color: AMBER }} numberOfLines={1}>
+                          {`Not serviceable at ${address.postalCode} yet — try another address`}
+                        </RNText>
+                      </>
+                    )}
+                  </View>
+                </>
+              ) : null}
+            </Pressable>
 
             {/* Payment method — ONE row per the reference. Tapping it opens
                 the COD / UPI / Card radios, which stay the source of truth. */}
@@ -561,7 +565,7 @@ export default function CheckoutScreen() {
                         onSelect={() => setMethod('CARD')}
                         icon="card-outline"
                         title="Card"
-                        subtitle={PAYMENTS_DEMO_ENABLED ? 'Credit or debit card' : 'Pay securely by card'}
+                        subtitle="Credit / debit — Visa, Mastercard, RuPay"
                         trailing={
                           PAYMENTS_DEMO_ENABLED ? (
                             <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
@@ -577,6 +581,18 @@ export default function CheckoutScreen() {
                 </View>
               ) : null}
             </DetailCard>
+
+            {/* SAVINGS CARDS — the two offers, with honest live state.
+                Delivery rule and coupon come from the server's own totals;
+                the cards only READ the cart, they never compute money. */}
+            <View className="mx-3">
+            <PromoCards
+              subtotalInPaise={cart.data.subtotalInPaise}
+              shippingInPaise={cart.data.shippingInPaise}
+              couponCode={cart.data.coupon?.code ?? null}
+              onPickCoupon={() => router.push('/(shop)/cart')}
+            />
+            </View>
 
             {/* Order items — what is actually being approved, from the server
                 cart, WITH the product imagery. No client math. */}
@@ -668,16 +684,8 @@ export default function CheckoutScreen() {
                 </View>
               ) : null}
 
-              {cart.data.taxInPaise > 0 ? (
-                <View className="mb-1.5 flex-row items-center justify-between">
-                  <RNText className="text-[12.5px]" style={{ color: MUTED }}>
-                    Taxes & charges (GST incl.)
-                  </RNText>
-                  <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
-                    {formatMoney(cart.data.taxInPaise)}
-                  </RNText>
-                </View>
-              ) : null}
+              {/* Taxes are inclusive in the displayed prices — no tax row is
+                  ever added. The fine print says so once, below the total. */}
 
               <View className="flex-row items-center justify-between">
                 <View className="flex-row items-center gap-1">
@@ -709,6 +717,9 @@ export default function CheckoutScreen() {
                   {formatMoney(cart.data.totalInPaise)}
                 </RNText>
               </View>
+              <RNText className="mt-2 text-[10.5px] leading-[14px]" style={{ color: SUBTLE }}>
+                Prices are inclusive of all applicable taxes.
+              </RNText>
             </View>
           </ScrollView>
 
@@ -733,25 +744,41 @@ export default function CheckoutScreen() {
                 {orderError}
               </RNText>
             ) : null}
+            {/* The confirm button is ALWAYS tappable. Without an address it
+                opens the address sheet instead of sitting inert — a disabled
+                primary action read as "there is no button". */}
             <Pressable
-              onPress={() => void handlePlaceOrder()}
-              disabled={address === null || placing}
+              onPress={() => {
+                if (placing) return;
+                if (address === null) {
+                  setSheetOpen(true);
+                  return;
+                }
+                void handlePlaceOrder();
+              }}
+              disabled={placing}
               accessibilityRole="button"
               accessibilityLabel="Place order"
-              accessibilityState={{ disabled: address === null || placing, busy: placing }}
+              accessibilityState={{ disabled: placing, busy: placing }}
               style={({ pressed }) => [
                 styles.placeOrder,
-                (address === null || placing) && styles.placeOrderDisabled,
-                pressed && !placing && address !== null && styles.placeOrderPressed,
+                placing && styles.placeOrderDisabled,
+                pressed && !placing && styles.placeOrderPressed,
               ]}
             >
               {placing ? (
                 <RNText style={styles.placeOrderLabel}>Placing order…</RNText>
               ) : address === null ? (
-                <RNText style={styles.placeOrderLabel}>Add address to continue</RNText>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="location-outline" size={17} color="#FFFFFF" />
+                  <RNText style={styles.placeOrderLabel}>Add Delivery Address</RNText>
+                  <Ionicons name="arrow-forward" size={17} color="#FFFFFF" />
+                </View>
               ) : (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <RNText style={styles.placeOrderLabel}>Place Order</RNText>
+                  <RNText style={styles.placeOrderLabel}>
+                    {method === 'COD' ? 'Confirm Order · Pay on Delivery' : 'Pay Now'}
+                  </RNText>
                   <RNText style={styles.placeOrderLabel}>{formatMoney(cart.data.totalInPaise)}</RNText>
                   <Ionicons name="arrow-forward" size={17} color="#FFFFFF" />
                 </View>
@@ -1124,6 +1151,15 @@ function CheckoutBackdrop({ topOffset }: { topOffset: number }) {
         accessibilityIgnoresInvertColors
       />
 
+      {/* Light frost under the fixed chrome — the photo keeps its texture
+          while the step labels stay readable at the top. */}
+      <BlurView
+        pointerEvents="none"
+        intensity={28}
+        tint="light"
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 72 }}
+      />
+
       {/* Vertical: readable top → the picture → the page. */}
       <LinearGradient
         start={{ x: 0.5, y: 0 }}
@@ -1352,9 +1388,9 @@ function paymentCopy(method: 'COD' | OnlinePaymentMethod): { title: string; blur
     return { title: 'Cash on Delivery', blurb: 'Pay when your order arrives' };
   }
   if (method === 'UPI') {
-    return { title: 'UPI', blurb: 'Pay using PhonePe, Google Pay, Paytm or any UPI app' };
+    return { title: 'UPI', blurb: 'GPay, PhonePe, Paytm & all UPI apps' };
   }
-  return { title: 'Card', blurb: 'Credit or debit card' };
+  return { title: 'Card', blurb: 'Credit / debit card — Visa, Mastercard, RuPay' };
 }
 
 function MethodRow({
@@ -1421,16 +1457,122 @@ function EmptyCart({ onBrowse }: { onBrowse: () => void }) {
   );
 }
 
-/** Single-line rendering of the saved address for the card. */
+
+/**
+ * Razorpay Checkout in a browser sheet (web / Expo Go fallback).
+ *
+ * Opens a popup pointing at Razorpay's hosted checkout with the SAME
+ * server-minted order id; the popup posts the outcome back and resolves.
+ * The result is NOT treated as proof of payment — the order screen polls the
+ * server and only the signed webhook advances state, exactly as with the
+ * native SDK. Resolves when the sheet closes; rejects on user cancel.
+ */
+function openRazorpayWebCheckout(options: {
+  key: string;
+  order_id: string;
+  amount: string;
+  currency: string;
+  name: string;
+  description: string;
+  prefill: { contact: string; name: string };
+  theme: { color: string };
+}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') {
+      reject(new Error('Web checkout is unavailable in this environment.'));
+      return;
+    }
+
+    const width = 480;
+    const height = 640;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    const popup = window.open('', 'sakya-razorpay', `width=${width},height=${height},left=${left},top=${top}`);
+    if (popup === null) {
+      reject(new Error('The payment window was blocked. Allow popups and try again.'));
+      return;
+    }
+
+    const messageHandler = (event: MessageEvent): void => {
+      if (typeof event.data !== 'object' || event.data === null) return;
+      const data = event.data as Record<string, unknown>;
+      if (data.source !== 'sakya-razorpay') return;
+      window.removeEventListener('message', messageHandler);
+      popup.close();
+      if (data.status === 'success') {
+        resolve();
+      } else {
+        reject(new Error(String(data.reason ?? 'Payment was not completed.')));
+      }
+    };
+    window.addEventListener('message', messageHandler);
+
+    // Razorpay's hosted checkout script runs INSIDE the popup and calls its
+    // own handler; it relays the outcome to the opener via postMessage.
+    popup.document.write(`<!DOCTYPE html><html><head><title>Sakya Farms — Pay</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+      </head><body style="margin:0;font-family:sans-serif">
+      <p style="padding:24px;color:#6F6C63">Opening secure payment…</p>
+      <script>
+        var rzp = new Razorpay({
+          key: ${JSON.stringify(options.key)},
+          order_id: ${JSON.stringify(options.order_id)},
+          amount: ${Number(options.amount)},
+          currency: ${JSON.stringify(options.currency)},
+          name: ${JSON.stringify(options.name)},
+          description: ${JSON.stringify(options.description)},
+          prefill: ${JSON.stringify(options.prefill)},
+          theme: ${JSON.stringify(options.theme)},
+          handler: function (response) {
+            window.opener && window.opener.postMessage(
+              { source: 'sakya-razorpay', status: 'success', response: response }, '*');
+          },
+          modal: { ondismiss: function () {
+            window.opener && window.opener.postMessage(
+              { source: 'sakya-razorpay', status: 'dismissed', reason: 'Payment was cancelled.' }, '*');
+          } }
+        });
+        rzp.on('payment.failed', function (response) {
+          window.opener && window.opener.postMessage(
+            { source: 'sakya-razorpay', status: 'failed', reason: 'Payment failed. You can retry from the order screen.' }, '*');
+        });
+        rzp.open();
+      </script></body></html>`);
+    popup.document.close();
+  });
+}
+
+/**
+ * Single-line rendering of the delivery card.
+ *
+ * Reads like the delivery apps: "Home · #233, 1st cross, …" — the customer's
+ * own words lead, the city/state collapse into the tail, and the pincode is
+ * always visible last. The full detail is one tap away via Change.
+ */
 function addressLine(address: CheckoutAddress): string {
-  return [
-    address.line1,
-    address.line2 ?? '',
-    address.landmark ?? '',
-    `${address.city}, ${address.state} ${address.postalCode}`,
-  ]
-    .filter((part) => part.trim() !== '')
+  const street = [address.line1, address.line2 ?? '', address.landmark ?? '']
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
     .join(', ');
+  const tail = [address.city, address.state].map((part) => part.trim()).filter((part) => part !== '');
+  return [street, ...tail, address.postalCode.replace(/\D/g, '')].filter(Boolean).join(', ');
+}
+
+/**
+ * Short card title like "Home · #233 1st Cross" — a tag (derived from who
+ * the address is for / what it contains) plus the first few words of the
+ * street. The full address lives in `addressLine` below it.
+ */
+function addressLabel(address: CheckoutAddress): string {
+  const street = address.line1.trim();
+  const shortStreet = street.split(/\s+/).slice(0, 4).join(' ');
+  const tag = /office|work/i.test(street)
+    ? 'Office'
+    : /flat|apt|apartment/i.test(street)
+      ? 'Flat'
+      : 'Home';
+  return `${tag} · ${shortStreet}`;
 }
 
 const styles = StyleSheet.create({

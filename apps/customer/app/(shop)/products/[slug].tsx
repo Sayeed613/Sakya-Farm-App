@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import Head from 'expo-router/head';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -30,6 +31,7 @@ import { RelatedProductCard } from '../../../src/components/commerce/RelatedProd
 import { ReviewsSection } from '../../../src/components/commerce/ReviewsSection';
 import { ProductMediaCard } from '../../../src/components/commerce/ProductMediaCard';
 import { QuantityStepper } from '../../../src/components/commerce/QuantityStepper';
+import { useDetailCartControls } from '../../../src/lib/use-detail-cart-controls';
 import { formatMoney } from '../../../src/lib/format';
 import { goBackOrHome } from '../../../src/lib/navigation';
 import { cardShadow } from '../../../src/lib/shadows';
@@ -38,7 +40,6 @@ import {
   defaultVariantOfDetail,
 } from '../../../src/lib/use-product-add';
 import { variantSelectorLabelOf } from '../../../src/lib/variant-units';
-import { useGuestCartStore } from '../../../src/stores/guest-cart-store';
 import type { ProductDetail, ProductListItem, WishlistResponse } from '@sakya/types';
 
 const BRAND = '#0B594C';
@@ -116,73 +117,17 @@ export default function ProductDetailScreen() {
     (detailData ? defaultVariantOfDetail(detailData) : null);
 
   /*
-   * Bridge product for existing cart/quantity logic.
+   * Cart controls — auth-aware and REACTIVE.
+   *
+   * The previous implementation wrote to the guest store unconditionally
+   * (signed-in customers' adds never reached the server cart) and read the
+   * quantity via useGuestCartStore.getState() during render (never
+   * re-rendered, so the stepper never replaced the ADD button). The
+   * useDetailCartControls hook fixes both: server cart when signed in,
+   * guest store otherwise, and quantity from subscribed state.
    */
-  /*
-   * Add selected variant to cart.
-   */
-  const onAddPress = useCallback(() => {
-    if (!selected || !detailData) return;
-
-    const store = useGuestCartStore.getState();
-
-    store.rememberPrice(
-      selected.id,
-      selected.priceInPaise,
-    );
-
-    store.rememberLastAdded(
-      detailData.slug,
-      detailData.primaryImageUrl,
-    );
-
-    store.addLine(
-      selected.id,
-      1,
-      {
-        productTitle: detailData.title,
-        variantTitle: selected.title,
-        imageUrl: detailData.primaryImageUrl,
-        slug: detailData.slug,
-      },
-    );
-  }, [selected, detailData]);
-
-  /*
-   * Quantity helpers.
-   */
-  const stepperIncrement = useCallback(
-    (variantId: string) => {
-      const store = useGuestCartStore.getState();
-
-      const current =
-        store.lines.find(
-          (line) => line.variantId === variantId,
-        )?.quantity ?? 0;
-
-      store.setQuantity(
-        variantId,
-        current + 1,
-      );
-    },
-    [],
-  );
-
-  const stepperDecrement = useCallback(() => {
-    if (!selected) return;
-
-    const store = useGuestCartStore.getState();
-
-    const current =
-      store.lines.find(
-        (line) => line.variantId === selected.id,
-      )?.quantity ?? 0;
-
-    store.setQuantity(
-      selected.id,
-      current - 1,
-    );
-  }, [selected]);
+  const { quantity: selectedQuantity, add: onAddPress, increment: stepperIncrement, decrement: stepperDecrement } =
+    useDetailCartControls(detailData, selected?.id ?? null);
 
   /*
    * Related products.
@@ -201,17 +146,6 @@ export default function ProductDetailScreen() {
       .filter((item) => item.slug !== slug)
       .slice(0, 10);
   }, [queryClient, slug]);
-
-  const selectedQuantity =
-    selected != null
-      ? (
-          useGuestCartStore
-            .getState()
-            .lines.find(
-              (line) => line.variantId === selected.id,
-            )?.quantity ?? 0
-        )
-      : 0;
 
   const handleShare = useCallback(() => {
     if (!detailData) return;
@@ -411,6 +345,16 @@ export default function ProductDetailScreen() {
         backgroundColor: CANVAS,
       }}
     >
+      {/* Web document title + social meta for the product page — the title
+          tracks the loaded product; the description is the real listing
+          intro, not fabricated copy. */}
+      <Head>
+        <title>{detailData ? `${detailData.title} — Sakya Farms` : 'Product — Sakya Farms'}</title>
+        <meta property="og:title" content={detailData?.title ?? 'Sakya Farms'} />
+        {detailData?.primaryImageUrl ? (
+          <meta property="og:image" content={detailData.primaryImageUrl} />
+        ) : null}
+      </Head>
       {/* ============================================================
           SCROLLING PRODUCT CONTENT
           ============================================================ */}
@@ -1359,15 +1303,11 @@ export default function ProductDetailScreen() {
               disabled={false}
               onAdd={onAddPress}
               onIncrement={() => {
-                if (selected) {
-                  stepperIncrement(
-                    selected.id,
-                  );
-                }
+                void stepperIncrement();
               }}
-              onDecrement={
-                stepperDecrement
-              }
+              onDecrement={() => {
+                void stepperDecrement();
+              }}
             />
           ) : null}
 

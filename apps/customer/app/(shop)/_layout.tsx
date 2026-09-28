@@ -1,6 +1,25 @@
 import { Stack } from 'expo-router';
 
 /**
+ * Screen titles double as web document titles (expo-router syncs them to
+ * document.title on web) — history entries, tabs and bookmarks read well.
+ */
+const SCREEN_TITLES: Record<string, string> = {
+  cart: 'Your Cart',
+  checkout: 'Checkout',
+  'products/[slug]': 'Product',
+  'categories/[slug]': 'Category',
+  'orders/[id]': 'Order Details',
+  notifications: 'Notifications',
+  'edit-profile': 'Edit Profile',
+  settings: 'Settings',
+  support: 'Support',
+  'delete-account': 'Delete Account',
+  wishlist: 'Wishlist',
+  'address-book': 'Address Book',
+};
+
+/**
  * Shop stack.
  *
  * Structure: this Stack wraps the (tabs) navigator and every pushed
@@ -21,19 +40,10 @@ import { Stack } from 'expo-router';
 export default function ShopLayout() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="cart" />
-      <Stack.Screen name="checkout" />
-      <Stack.Screen name="products/[slug]" />
-      <Stack.Screen name="categories/[slug]" />
-      <Stack.Screen name="orders/[id]" />
-      <Stack.Screen name="notifications" />
-      <Stack.Screen name="edit-profile" />
-      <Stack.Screen name="settings" />
-      <Stack.Screen name="support" />
-      <Stack.Screen name="delete-account" />
-      <Stack.Screen name="wishlist" />
-      <Stack.Screen name="address-book" />
+      <Stack.Screen name="(tabs)" options={{ title: 'Sakya Farms' }} />
+      {Object.entries(SCREEN_TITLES).map(([name, title]) => (
+        <Stack.Screen key={name} name={name} options={{ title }} />
+      ))}
     </Stack>
   );
 }

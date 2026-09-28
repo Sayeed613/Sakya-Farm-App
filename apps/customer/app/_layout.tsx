@@ -130,7 +130,9 @@ const styles = StyleSheet.create({
   webShell: {
     flex: 1,
     alignItems: 'center',
-    backgroundColor: '#EFE9DE',
+    // Matches the canvas so the desktop shell reads as one warm surface
+    // instead of a cool grey gutter around the phone column.
+    backgroundColor: colors.canvas,
   },
   webShellInner: {
     width: '100%',

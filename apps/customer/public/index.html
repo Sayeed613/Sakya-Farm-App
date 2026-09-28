@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>%WEB_TITLE%</title>
+
+    <!-- SEO + social. theme-color and description are injected from
+        app.json (web.themeColor / web.description); the favicon link is
+        injected from web.favicon. Everything below is static. -->
+    <link rel="canonical" href="https://sakya.farm" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Sakya Farms" />
+    <meta property="og:title" content="Sakya Farms — Farm-Fresh Delivered" />
+    <meta
+      property="og:description"
+      content="Farm-fresh fruits, vegetables, ghee, pickles and cold-pressed oils, delivered."
+    />
+    <meta property="og:url" content="https://sakya.farm" />
+    <meta property="og:image" content="https://sakya.farm/icon-192.png" />
+    <meta name="twitter:card" content="summary" />
+
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      /* These styles make the body full-height */
+      html,
+      body {
+        height: 100%;
+      }
+      /* These styles disable body scrolling if you are using <ScrollView> */
+      body {
+        overflow: hidden;
+      }
+      /* These styles make the root element full-height */
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+
+    <!-- Critical CSS: brand canvas + font stack paint BEFORE the JS bundle
+        boots, so first paint is the warm cream surface instead of white. -->
+    <style>
+      body {
+        margin: 0;
+        background-color: #fbf7f0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #root > div {
+        animation: sakya-boot 240ms ease-out;
+      }
+      @keyframes sakya-boot {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- Use static rendering with Expo Router to support running without JavaScript. -->
+    <noscript>
+      You need to enable JavaScript to run this app.
+    </noscript>
+    <!-- The root element for your Expo app. -->
+    <div id="root"></div>
+  </body>
+</html>

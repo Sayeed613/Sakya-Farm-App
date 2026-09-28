@@ -7,6 +7,7 @@ import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
 
 import type { ProductDetail } from '@sakya/types';
 import { formatMoney } from '../../lib/format';
+import { cdnImageUri } from '../../lib/cdn-image';
 import { ProductInfoAccordion, type AccordionSection } from './ProductInfoAccordion';
 
 const BRAND = '#0B594C';
@@ -114,7 +115,7 @@ export function ProductDetailsSheet({
               <View className="flex-row items-center gap-3 px-4 pb-2 pt-4">
                 {detail.primaryImageUrl ? (
                   <Image
-                    source={{ uri: detail.primaryImageUrl }}
+                    source={{ uri: cdnImageUri(detail.primaryImageUrl, 96) ?? detail.primaryImageUrl }}
                     style={{ width: 44, height: 44, borderRadius: 12 }}
                     contentFit="cover"
                     cachePolicy="disk"

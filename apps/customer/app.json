@@ -7,6 +7,14 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "backgroundColor": "#FBF7F0",
+    "web": {
+      "output": "single",
+      "favicon": "./public/favicon-48.png",
+      "name": "Sakya Farms — Farm-Fresh Delivered",
+      "themeColor": "#0B594C",
+      "description": "Shop farm-fresh fruits, vegetables, ghee, pickles and cold-pressed oils from Sakya Farms. Delivered across Bengaluru."
+    },
     "plugins": [
       "expo-router",
       "expo-status-bar",

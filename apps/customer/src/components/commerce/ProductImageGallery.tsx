@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import type { ProductDetail } from '@sakya/types';
+import { cdnImageUri } from '../../lib/cdn-image';
 
 const GALLERY_HEIGHT = 320;
 
@@ -63,11 +64,12 @@ function ProductImageGalleryInner({
       .slice()
       .sort((a, b) => a.position - b.position)
       .map((image) => image.url)
-      .filter((url): url is string => Boolean(url));
+      .filter((url): url is string => Boolean(url))
+      .map((url) => cdnImageUri(url, 720) ?? url);
 
     return fromDetail.length > 0
       ? fromDetail
-      : product.imageUrls ?? [];
+      : (product.imageUrls ?? []).map((url) => cdnImageUri(url, 720) ?? url);
   }, [product.images, product.imageUrls]);
 
   const height = fixedHeight ?? GALLERY_HEIGHT;

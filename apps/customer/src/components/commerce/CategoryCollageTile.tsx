@@ -6,7 +6,12 @@ import { AnimatedPressable, usePressScale } from '../../lib/motion';
 
 const INK = '#171A18';
 const INK_SOFT = '#68736E';
-const CANVAS = '#F1F2F4';
+// Photo-well placeholder. Must match the app's WARM canvas family
+// Matches the home page canvas exactly (#FBF7F0) so the discovery tiles read
+// as cut-outs of the page, not cards of a different colour sitting on it.
+// (An earlier value — cool grey #F1F2F4, then surfaceMuted #F3EDE3 — kept
+// showing as a visibly different block on the warm canvas.)
+const CANVAS = '#FBF7F0';
 const CARD_RADIUS = 18;
 // Tighter padding + gap → every photo well gets bigger (the "small images
 // a bit big" fix) without changing the grid's 3-column geometry.

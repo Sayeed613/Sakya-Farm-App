@@ -151,7 +151,7 @@ function HeroSlide({
     >
       <View
         className="overflow-hidden rounded-2xl"
-        style={{ width, height, backgroundColor: '#EFE9DE' }}
+        style={{ width, height, backgroundColor: '#FBF7F0' }}
       >
         <Image
           accessibilityRole="image"

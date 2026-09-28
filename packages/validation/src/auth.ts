@@ -84,6 +84,21 @@ export const updateProfileSchema = z
     firstName: z.string().trim().min(1).max(100).optional(),
     lastName: z.string().trim().max(100).nullable().optional(),
     email: z.string().trim().toLowerCase().email('Must be a valid email address').nullable().optional(),
+    /**
+     * The customer's profile photo. The client uploads the image bytes and
+     * sends back the URL it received from the upload endpoint; only
+     * http(s) URLs are accepted, and `null` removes the photo.
+     */
+    avatarUrl: z
+      .string()
+      .trim()
+      .url('Avatar must be a valid URL')
+      .max(2048)
+      .refine((value) => value.startsWith('https://') || value.startsWith('http://'), {
+        message: 'Avatar must be an http(s) URL',
+      })
+      .nullable()
+      .optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'Provide at least one field to update');
 

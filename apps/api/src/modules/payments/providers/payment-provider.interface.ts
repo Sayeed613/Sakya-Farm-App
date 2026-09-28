@@ -85,4 +85,14 @@ export interface PaymentProvider {
     amountInPaise: number;
     currency: string;
   }): Promise<{ providerOrderId: string; providerPayload: Record<string, unknown> }>;
+
+  /**
+   * Ask the gateway for the authoritative state of a payment attempt. Used by
+   * reconciliation paths that run OUTSIDE the webhook flow — the pending-order
+   * expiry sweep — which must never cancel an order whose money actually
+   * arrived while its webhook was still in flight. Returns null when the
+   * gateway reports no decisive outcome (nothing attempted, still processing,
+   * or only a failed attempt); throwing signals "gateway unreachable".
+   */
+  fetchPaymentStatus?(providerOrderId: string): Promise<ProviderWebhookEvent | null>;
 }

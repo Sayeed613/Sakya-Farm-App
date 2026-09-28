@@ -89,6 +89,48 @@ export class RazorpayProvider implements PaymentProvider {
     };
   }
 
+  /**
+   * Authoritative gateway status for one of our Razorpay orders.
+   *
+   * Scans every payment attempt Razorpay holds for the order and prefers a
+   * capture over an authorization (list order is not relied upon). Anything
+   * else — no attempts, `created`, `failed` — is "no decisive evidence of
+   * money", i.e. null. Money-math fields are validated before use, mirroring
+   * `parseWebhookEvent`.
+   */
+  async fetchPaymentStatus(providerOrderId: string): Promise<ProviderWebhookEvent | null> {
+    const response = await fetch(`${RAZORPAY_API}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
+      headers: this.apiHeaders(),
+    });
+    if (response.status === 404) return null;
+    const payload: unknown = await response.json();
+    if (!response.ok || !isRecord(payload) || !Array.isArray(payload.items)) {
+      throw new Error('Razorpay did not return a payment list for this order');
+    }
+
+    const entities = payload.items.filter(isRecord);
+    const captured = entities.find((entity) => entity.status === 'captured');
+    const authorized = entities.find((entity) => entity.status === 'authorized');
+    const decisive = captured ?? authorized;
+    if (
+      decisive === undefined ||
+      typeof decisive.id !== 'string' ||
+      typeof decisive.amount !== 'number' ||
+      typeof decisive.currency !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      type: decisive.status === 'captured' ? 'captured' : 'authorized',
+      providerPaymentId: decisive.id,
+      providerOrderId,
+      amountInPaise: decisive.amount,
+      currency: decisive.currency,
+      rawPayload: decisive,
+    };
+  }
+
   buildIntentResponse(view: IntentView): Record<string, unknown> {
     return {
       provider: this.name,

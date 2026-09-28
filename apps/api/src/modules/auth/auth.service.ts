@@ -38,6 +38,7 @@ type SessionIdentity = {
   phone: string | null;
   firstName: string;
   lastName: string | null;
+  avatarUrl?: string | null;
 };
 
 @Injectable()
@@ -114,7 +115,7 @@ export class AuthService {
   ): Promise<SessionIdentity & { created: boolean }> {
     const existing = await this.prisma.user.findUnique({
       where: { phone },
-      select: { id: true, email: true, phone: true, firstName: true, lastName: true },
+      select: { id: true, email: true, phone: true, firstName: true, lastName: true, avatarUrl: true },
     });
 
     if (existing !== null) {
@@ -136,7 +137,7 @@ export class AuthService {
             create: { role: { connect: { code: 'CUSTOMER' } } },
           },
         },
-        select: { id: true, email: true, phone: true, firstName: true, lastName: true },
+        select: { id: true, email: true, phone: true, firstName: true, lastName: true, avatarUrl: true },
       });
       return user;
     });
@@ -154,7 +155,7 @@ export class AuthService {
   async getProfile(userId: string): Promise<AuthUser> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, phone: true, firstName: true, lastName: true },
+      select: { id: true, email: true, phone: true, firstName: true, lastName: true, avatarUrl: true },
     });
 
     if (user === null) {
@@ -167,10 +168,13 @@ export class AuthService {
   /**
    * `PATCH /users/me` — minimal profile completion for a phone-first customer.
    */
-  async updateProfile(userId: string, input: { firstName?: string; lastName?: string | null; email?: string | null }) {
+  async updateProfile(
+    userId: string,
+    input: { firstName?: string; lastName?: string | null; email?: string | null; avatarUrl?: string | null },
+  ) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, phone: true, firstName: true, lastName: true },
+      select: { id: true, email: true, phone: true, firstName: true, lastName: true, avatarUrl: true },
     });
 
     if (user === null) {
@@ -193,8 +197,9 @@ export class AuthService {
         ...(input.firstName !== undefined ? { firstName: input.firstName } : {}),
         ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
         ...(input.email !== undefined ? { email: input.email } : {}),
+        ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}),
       },
-      select: { id: true, email: true, phone: true, firstName: true, lastName: true },
+      select: { id: true, email: true, phone: true, firstName: true, lastName: true, avatarUrl: true },
     });
 
     return this.toAuthUser(updated);
@@ -216,7 +221,7 @@ export class AuthService {
             },
           },
         },
-        select: { id: true, email: true, phone: true, firstName: true, lastName: true },
+        select: { id: true, email: true, phone: true, firstName: true, lastName: true, avatarUrl: true },
       });
       return this.issueSession(user, metadata);
     } catch (error) {
@@ -340,6 +345,7 @@ export class AuthService {
       phone: user.phone,
       firstName: user.firstName,
       lastName: user.lastName,
+      avatarUrl: user.avatarUrl ?? null,
     };
   }
 }

@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { AddressesController } from './addresses.controller';
 import { AddressesService } from './addresses.service';
+import { AvatarService } from './avatar.service';
 import { UsersController } from './users.controller';
 
 /**
@@ -33,6 +34,6 @@ import { UsersController } from './users.controller';
 @Module({
   imports: [AuthModule],
   controllers: [UsersController, AddressesController],
-  providers: [AddressesService],
+  providers: [AddressesService, AvatarService],
 })
 export class UsersModule {}

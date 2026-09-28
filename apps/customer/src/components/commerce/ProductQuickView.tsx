@@ -44,6 +44,7 @@ import type {
 } from '@sakya/types';
 
 import { formatMoney } from '../../lib/format';
+import { cdnImageUri } from '../../lib/cdn-image';
 import { deckFeaturesFor } from './deck-features';
 import { useProductAdd } from '../../lib/use-product-add';
 import { useWishlist } from '../../hooks/use-wishlist';
@@ -1095,7 +1096,7 @@ function SimilarProductsRail({
             style={{ width: 78 }}
           >
             <Image
-              source={item.primaryImageUrl ? { uri: item.primaryImageUrl } : undefined}
+              source={item.primaryImageUrl ? { uri: cdnImageUri(item.primaryImageUrl, 160) ?? item.primaryImageUrl } : undefined}
               style={{ width: 78, height: 78, borderRadius: 10, backgroundColor: '#F3EDE3' }}
               contentFit="cover"
               cachePolicy="disk"

@@ -8,6 +8,7 @@ import type { ProductDetail, ProductListItem } from '@sakya/types';
 import { catalogApi } from '../../api/catalog';
 import { router } from 'expo-router';
 import { formatMoney, formatPackSize } from '../../lib/format';
+import { cdnImageUri } from '../../lib/cdn-image';
 import { deriveBadges, deriveMerchBadges } from '../../lib/product-badges';
 import { AnimatedPressable, usePressScale } from '../../lib/motion';
 import { cardShadow } from '../../lib/shadows';
@@ -148,7 +149,9 @@ function ProductCardInner({
     product.price?.minInPaise != null &&
     product.compareAtMaxInPaise > product.price.minInPaise;
 
-  const images = product.imageUrls ?? (product.primaryImageUrl ? [product.primaryImageUrl] : []);
+  const images = (product.imageUrls ?? (product.primaryImageUrl ? [product.primaryImageUrl] : []))
+    .map((uri) => cdnImageUri(uri, isGrid ? 320 : 220))
+    .filter((uri): uri is string => uri !== null);
   const cardStyle = width != null ? { width } : undefined;
 
   /** The ADD / stepper control — Blinkit stacks it under the price. */

@@ -1,0 +1,17 @@
+{
+  "name": "Sakya Farms",
+  "short_name": "Sakya",
+  "description": "Farm-fresh fruits, vegetables, ghee, pickles and cold-pressed oils, delivered.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FBF7F0",
+  "theme_color": "#0B594C",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

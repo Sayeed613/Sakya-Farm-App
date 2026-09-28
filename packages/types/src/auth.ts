@@ -11,6 +11,8 @@ export interface AuthUser {
   phone: string | null;
   firstName: string;
   lastName: string | null;
+  /** The customer's own profile photo, when they added one. */
+  avatarUrl: string | null;
 }
 
 export interface AuthSessionResponse {

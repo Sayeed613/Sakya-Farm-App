@@ -246,15 +246,38 @@ model User {
   /// boundary; Json keeps the shape evolvable without a migration per field.
   notificationPrefs Json? @map("notification_prefs")
 
+  /// Profile photo the customer uploaded themselves. Kept as a URL the app
+  /// can render directly; the bytes live in the UserAvatar table (Postgres).
+  avatarUrl String? @map("avatar_url")
+
   /// Soft-deletion for account removal. The row is anonymised in the same
   /// transaction (see UsersService.deleteAccount): orders and payments must
   /// survive for finance law, so the user row cannot be hard-deleted.
   deletedAt       DateTime?        @map("deleted_at")
   analyticsEvents AnalyticsEvent[]
+  avatar          UserAvatar?
 
   @@index([status])
   @@index([createdAt])
   @@map("users")
+}
+
+/// The customer's profile photo bytes. One row per user (unique userId).
+/// Photos are client-resized (max 1024px) and re-validated server-side
+/// (≤400 KB, JPEG/PNG/WebP sniffed from magic bytes) before storage.
+model UserAvatar {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @unique @map("user_id") @db.Uuid
+  bytes       Bytes
+  contentType String   @map("content_type")
+  /// SHA-256 prefix of the bytes; informational.
+  contentHash String   @map("content_hash")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_avatars")
 }
 
 /// A named bundle of permissions. Codes are enumerated by RoleCode.

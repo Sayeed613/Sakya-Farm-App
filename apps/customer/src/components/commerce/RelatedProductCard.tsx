@@ -8,6 +8,7 @@ import type { ProductListItem } from '@sakya/types';
 
 import { useWishlist } from '../../hooks/use-wishlist';
 import { formatMoney, formatPackSize } from '../../lib/format';
+import { cdnImageUri } from '../../lib/cdn-image';
 import { softShadow } from '../../lib/shadows';
 import { useProductAdd } from '../../lib/use-product-add';
 import { useAuthStore } from '../../stores/auth-store';
@@ -89,7 +90,7 @@ function RelatedProductCardInner({
         >
           {item.primaryImageUrl && !failed ? (
             <Image
-              source={{ uri: item.primaryImageUrl }}
+              source={{ uri: cdnImageUri(item.primaryImageUrl, 160) ?? item.primaryImageUrl }}
               style={{
                 width: '100%',
                 height: '100%',
