@@ -119,27 +119,48 @@ export class PaymentsService {
     }
 
     // Reuse the checkout-created PENDING row when it matches provider+method.
+    // Reusing also retires the MANUAL/CASH_ON_DELIVERY placeholder: the order
+    // holds one live payment anchor, never two. Only that payment row is
+    // touched — order.paymentStatus stays owned by the webhook machine.
     const reusable = await this.prisma.payment.findFirst({
       where: { orderId: order.id, provider: providerName, method, status: 'PENDING' },
       orderBy: { createdAt: 'asc' },
     });
     if (reusable !== null) {
-      const withProviderOrder = await this.ensureProviderOrder(reusable as PaymentRowView, order.id, provider);
+      const retired = await this.prisma.$transaction(async (tx) => {
+        await tx.payment.updateMany({
+          where: { orderId: order.id, provider: 'MANUAL', method: 'CASH_ON_DELIVERY', status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        return reusable;
+      });
+      const withProviderOrder = await this.ensureProviderOrder(retired as PaymentRowView, order.id, provider);
       return this.toIntentResponse(withProviderOrder, provider);
     }
 
     try {
-      const created = await this.prisma.payment.create({
-        data: {
-          orderId: order.id,
-          userId: order.userId,
-          provider: providerName,
-          method,
-          status: 'PENDING',
-          currency: order.currency,
-          amountInPaise: order.totalInPaise,
-          idempotencyKey: body.idempotencyKey,
-        },
+      const created = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.payment.create({
+          data: {
+            orderId: order.id,
+            userId: order.userId,
+            provider: providerName,
+            method,
+            status: 'PENDING',
+            currency: order.currency,
+            amountInPaise: order.totalInPaise,
+            idempotencyKey: body.idempotencyKey,
+          },
+        });
+        // Checkout seeds a MANUAL/CASH_ON_DELIVERY PENDING placeholder. An
+        // online intent supersedes it: cancel that row in the SAME transaction
+        // so the order never holds two live payment anchors. Only the payment
+        // row changes — order.paymentStatus is owned by the webhook machine.
+        await tx.payment.updateMany({
+          where: { orderId: order.id, provider: 'MANUAL', method: 'CASH_ON_DELIVERY', status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        return row;
       });
       const withProviderOrder = await this.ensureProviderOrder(created as PaymentRowView, order.id, provider);
       return this.toIntentResponse(withProviderOrder, provider);

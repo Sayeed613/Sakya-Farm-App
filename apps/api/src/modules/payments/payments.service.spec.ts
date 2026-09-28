@@ -41,7 +41,7 @@ function setup(withRazorpay = false) {
   const paymentFindUniqueOrThrow = vi.fn();
 
   const tx = {
-    payment: { update: paymentUpdate },
+    payment: { create: paymentCreate, update: paymentUpdate, updateMany: vi.fn(async () => ({ count: 0 })) },
     order: { findUnique: orderFindUnique, update: orderUpdate },
     orderStatusHistory: { create: orderStatusHistoryCreate },
   };

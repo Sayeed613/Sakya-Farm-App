@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, useRouter } from 'expo-router';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cartApi } from '../../src/api/cart';
@@ -16,7 +16,7 @@ import {
   type CheckoutAddress,
   type OnlinePaymentMethod,
 } from '../../src/api/checkout';
-import type { CartResponse, PaymentDetail } from '@sakya/types';
+import type { CartResponse, OrderResponse, PaymentDetail } from '@sakya/types';
 import { toPaise } from '@sakya/utils';
 import { AddressSheet } from '../../src/components/checkout/AddressSheet';
 import { AddressPickerSheet } from '../../src/components/checkout/AddressPickerSheet';
@@ -29,6 +29,8 @@ import { goBackOrHome } from '../../src/lib/navigation';
 import { addressesApi } from '../../src/api/notifications-api';
 import { useAuthStore } from '../../src/stores/auth-store';
 import { useLastAddressStore } from '../../src/stores/last-address-store';
+import { useLastPaymentMethodStore } from '../../src/stores/last-payment-method-store';
+import { openRazorpayWebCheckout } from '../../src/lib/razorpay-checkout';
 import { softShadow } from '../../src/lib/shadows';
 
 const BRAND = '#0B594C';
@@ -61,8 +63,12 @@ const CARD_BORDER = '#EDE7DC';
  * differs.
  */
 const PAYMENTS_DEMO_ENABLED = process.env.EXPO_PUBLIC_PAYMENTS_DEMO === 'true';
-const RAZORPAY_ENABLED =
-  process.env.EXPO_PUBLIC_RAZORPAY_ENABLED === 'true' && process.env.EXPO_PUBLIC_RAZORPAY_KEY_ID !== undefined;
+/**
+ * Live online payments are a server capability: the gateway key arrives in the
+ * server's payment intent, so the client flag alone gates the UI. Never require
+ * a public key id here — the client must not hold gateway credentials.
+ */
+const RAZORPAY_ENABLED = process.env.EXPO_PUBLIC_RAZORPAY_ENABLED === 'true';
 const ONLINE_PAYMENTS_ENABLED = PAYMENTS_DEMO_ENABLED || RAZORPAY_ENABLED;
 
 /**
@@ -89,8 +95,22 @@ export default function CheckoutScreen() {
   /** The Payment Method options render expanded so UPI/Card/COD are
    * immediately visible without an extra tap. */
   const [paymentOpen, setPaymentOpen] = useState(true);
-  const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>('COD');
+  const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>(() => {
+    const saved = useLastPaymentMethodStore.getState().method;
+    return saved === 'UPI' || saved === 'CARD' || saved === 'NET_BANKING' ? saved : 'COD';
+  });
   const [placing, setPlacing] = useState(false);
+  /** Inline online-payment failure (stays on checkout; never an Alert). */
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  /**
+   * The order created by this checkout attempt. Tapping Pay Now again reuses
+   * it and only creates a fresh payment intent — `placeOrder` runs once per
+   * checkout so a retry can never double-place.
+   */
+  const createdOrderRef = useRef<OrderResponse | null>(null);
+  /** Idempotency keys: one per order attempt, one per payment-intent attempt. */
+  const orderKeyRef = useRef<string | null>(null);
+  const intentKeyRef = useRef<string | null>(null);
   /**
    * Placement failures render INLINE above the action: RNW's Alert.alert is a
    * no-op, so an alert-only error leaves a web customer tapping a button that
@@ -248,17 +268,23 @@ export default function CheckoutScreen() {
 
     setPlacing(true);
     setOrderError(null);
-    // One key per attempt: a retry after a network failure returns the same
-    // order instead of creating a second one (server-side idempotency).
-    const idempotencyKey = newIdempotencyKey();
+    setPaymentError(null);
+    // Reuse the order from the first tap: a retry only mints a fresh payment
+    // intent, it never places a second order. One order key per checkout
+    // attempt (server idempotency returns the same order on network retry).
+    if (orderKeyRef.current === null) orderKeyRef.current = newIdempotencyKey();
 
     try {
-      const order = await checkoutApi.placeOrder({
-        idempotencyKey,
-        shippingAddress: address,
-        billingAddress: null,
-        notes: null,
-      });
+      let order = createdOrderRef.current;
+      if (order === null) {
+        order = await checkoutApi.placeOrder({
+          idempotencyKey: orderKeyRef.current,
+          shippingAddress: address,
+          billingAddress: null,
+          notes: null,
+        });
+        createdOrderRef.current = order;
+      }
 
       rememberAddress(address);
 
@@ -269,18 +295,35 @@ export default function CheckoutScreen() {
        * status still comes only from the signed webhook.
        */
       if (method !== 'COD') {
+        // Every intent attempt gets a fresh key; the REUSED order id above is
+        // what keeps a Pay Now retry from double-placing.
+        if (intentKeyRef.current === null) intentKeyRef.current = newIdempotencyKey();
+        let response: Awaited<ReturnType<typeof checkoutApi.createPaymentIntent>>;
         try {
-          const response = await checkoutApi.createPaymentIntent({
+          response = await checkoutApi.createPaymentIntent({
             orderId: order.id,
             method,
-            idempotencyKey: newIdempotencyKey(),
+            idempotencyKey: intentKeyRef.current,
           });
+          intentKeyRef.current = newIdempotencyKey();
+          useLastPaymentMethodStore.getState().remember(method);
+        } catch (cause) {
+          // Stay on checkout with an inline error: retry reuses the order
+          // above, or the customer can switch to pay-on-delivery instead.
+          const message =
+            cause instanceof Error ? friendlyError(cause.message) : 'Please try again in a moment.';
+          setPaymentError(message);
+          return;
+        }
+        {
+          const placedOrder = order;
           if (response.payment.provider === 'MOCK' && PAYMENTS_DEMO_ENABLED) {
             setPendingPayment(response.payment);
             return;
           }
           if (response.payment.provider !== 'RAZORPAY' || !RAZORPAY_ENABLED) {
-            throw new Error('Online payments are not enabled for this app build.');
+            setPaymentError('Online payments are not enabled for this app build. Pay on delivery instead.');
+            return;
           }
 
           const intent = response.intent;
@@ -290,48 +333,51 @@ export default function CheckoutScreen() {
             typeof intent.amount !== 'number' ||
             typeof intent.currency !== 'string'
           ) {
-            throw new Error('The payment service returned an invalid checkout order.');
+            setPaymentError('The payment service returned an invalid checkout order.');
+            return;
           }
-          const checkoutOptions = {
-            key: intent.key,
-            order_id: intent.order_id,
-            amount: String(intent.amount),
-            currency: intent.currency,
-            name: 'Sakya Farms',
-            description: `Payment for order ${order.orderNumber}`,
-            prefill: {
-              contact: contactDefaults?.phone ?? '',
-              name: contactDefaults?.name ?? '',
-            },
-            theme: { color: BRAND },
-          };
 
-          if (Platform.OS === 'web') {
-            // WEB FALLBACK — the native SDK cannot load in a browser. Open
-            // Razorpay Checkout in a popup window over the checkout page.
-            // The handler posts the outcome back to this window; the order
-            // screen still polls the server, so the webhook stays the only
-            // authority for what actually happened.
-            await openRazorpayWebCheckout(checkoutOptions);
-          } else {
-            const { default: RazorpayCheckout } = await import('react-native-razorpay');
-            await RazorpayCheckout.open(checkoutOptions);
+          try {
+            await openRazorpayWebCheckout(
+              {
+                key: intent.key,
+                orderId: intent.order_id,
+                amountInPaise: intent.amount,
+                currency: intent.currency,
+                orderNumber: placedOrder.orderNumber,
+              },
+              {
+                onSuccess: () => {
+                  createdOrderRef.current = null;
+                  clearCartAfterOrder();
+                  router.replace({
+                    pathname: '/(shop)/orders/[id]',
+                    params: { id: placedOrder.id, justPlaced: '1' },
+                  });
+                },
+                // The sheet closed without a result: stay on checkout. The
+                // order already exists, so "Try payment again" reuses it.
+                onDismiss: () =>
+                  setPaymentError(
+                    'The payment window closed before we got a result. Try payment again, or pay on delivery instead.',
+                  ),
+                onError: (error) => setPaymentError(friendlyError(error.message)),
+              },
+            );
+          } catch (cause) {
+            const message =
+              cause instanceof Error ? friendlyError(cause.message) : 'Please try again in a moment.';
+            setPaymentError(message);
           }
-          // The SDK callback is not authoritative; the order page polls the
-          // server until the verified Razorpay webhook arrives.
-          clearCartAfterOrder();
-        } catch {
           // The order is saved either way; its detail screen offers a retry.
+          return;
         }
-        router.replace({
-          pathname: '/(shop)/orders/[id]',
-          params: { id: order.id, justPlaced: '1' },
-        });
-        return;
       }
 
       // The cart is not auto-cleared by checkout (intentional, server-side);
       // clear it client-side and refresh (shared with the demo sheet path).
+      useLastPaymentMethodStore.getState().remember('COD');
+      createdOrderRef.current = null;
       clearCartAfterOrder();
 
       router.replace({
@@ -341,9 +387,9 @@ export default function CheckoutScreen() {
     } catch (cause) {
       const message =
         cause instanceof Error ? friendlyError(cause.message) : 'Please try again in a moment.';
+      // Inline only — no dialog. A dialog would add a fourth tap (dismiss)
+      // to the Add → Checkout → Pay Now budget.
       setOrderError(message);
-      // Native keeps the dialog; web reads the inline message above.
-      Alert.alert('Could not place order', message, [{ text: 'OK' }]);
     } finally {
       setPlacing(false);
     }
@@ -744,6 +790,46 @@ export default function CheckoutScreen() {
                 {orderError}
               </RNText>
             ) : null}
+            {paymentError !== null ? (
+              <View
+                accessibilityLiveRegion="polite"
+                className="mb-2 rounded-2xl border p-3"
+                style={{ borderColor: '#F0C9C4', backgroundColor: '#FDEEEC' }}
+              >
+                <RNText className="text-center text-[12.5px] font-semibold" style={{ color: DANGER }}>
+                  {paymentError}
+                </RNText>
+                <View className="mt-2 flex-row gap-2">
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Try payment again"
+                    onPress={() => void handlePlaceOrder()}
+                    disabled={placing}
+                    className="flex-1 items-center justify-center rounded-full py-2.5 active:opacity-80"
+                    style={{ backgroundColor: BRAND, opacity: placing ? 0.6 : 1 }}
+                  >
+                    <RNText className="text-[13px] font-bold" style={{ color: '#FFFFFF' }}>
+                      Try payment again
+                    </RNText>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Pay on delivery instead"
+                    onPress={() => {
+                      setPaymentError(null);
+                      setMethod('COD');
+                    }}
+                    disabled={placing}
+                    className="flex-1 items-center justify-center rounded-full border py-2.5 active:opacity-80"
+                    style={{ borderColor: BRAND, opacity: placing ? 0.6 : 1 }}
+                  >
+                    <RNText className="text-[13px] font-bold" style={{ color: BRAND }}>
+                      Pay on delivery instead
+                    </RNText>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
             {/* The confirm button is ALWAYS tappable. Without an address it
                 opens the address sheet instead of sitting inert — a disabled
                 primary action read as "there is no button". */}
@@ -899,10 +985,12 @@ export default function CheckoutScreen() {
 /**
  * Demo payment processing sheet.
  *
- * The honest mock: "Pay now" simulates the provider's answer through the
+ * The honest mock: mounting simulates the provider's answer through the
  * server's webhook state machine (POST /payments/:id/simulate), then the
  * sheet POLLS the order's payment rows — it never declares success on its
- * own authority. "Cancel" parks the payment back to a retryable state.
+ * own authority. There is deliberately NO confirm phase: Pay Now on checkout
+ * already IS the confirmation, and an extra "Pay now" inside the sheet would
+ * push the purchase to 4 taps (Add → Checkout → Pay Now → Pay now).
  * Failure offers retry (a fresh simulate round) or leaving it pending for
  * the order screen. Cards/UPI are labelled demo because they ARE demo.
  */
@@ -913,38 +1001,21 @@ function DemoPaymentSheet({
   payment: PaymentDetail;
   onDone: (result: 'captured' | 'pending' | 'failed') => void;
 }) {
-  const [phase, setPhase] = useState<'confirm' | 'processing' | 'failed'>('confirm');
-  /** Demo instrument entry: fields look like a real checkout, stay local. */
-  const [upiId, setUpiId] = useState('');
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardExpiry, setCardExpiry] = useState('');
-  const [cardCvv, setCardCvv] = useState('');
-  const [instrumentError, setInstrumentError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<'processing' | 'failed'>('processing');
+  const startedRef = useRef(false);
 
-  const isCard = payment.method === 'CARD';
-
-  /** Client-side format check for the DEMO instrument only. */
-  const instrumentValid = isCard
-    ? cardNumber.replace(/\s/g, '').length === 16 &&
-      /^(0[1-9]|1[0-2])\s?\/\s?([0-9]{2})$/.test(cardExpiry.trim()) &&
-      /^[0-9]{3,4}$/.test(cardCvv.trim())
-    : /^[[a-zA-Z0-9._-]+@[a-zA-Z]+$/.test(upiId.trim());
-
-  function proceed(outcome: 'success' | 'failure') {
-    if (!instrumentValid) {
-      setInstrumentError(
-        isCard
-          ? 'Enter a 16-digit card, expiry as MM/YY and the 3-digit CVV.'
-          : 'Enter a valid UPI id, e.g. name@upi.',
-      );
-      return;
-    }
-    setInstrumentError(null);
-    void simulate(outcome);
-  }
+  // Auto-start the simulated provider round on mount: Pay Now on checkout was
+  // already the confirmation, so no second "Pay now" tap lives in this sheet.
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void simulate('success');
+  }, []);
+  const [simulateError, setSimulateError] = useState<string | null>(null);
 
   async function simulate(outcome: 'success' | 'failure') {
     setPhase('processing');
+    setSimulateError(null);
     try {
       await checkoutApi.simulatePayment({ paymentId: payment.id, outcome });
       // Confirm via the server, not the simulate response alone.
@@ -958,8 +1029,10 @@ function DemoPaymentSheet({
         onDone('pending');
       }
     } catch {
-      Alert.alert('Payment error', 'We could not reach the payment service. The order is saved — retry from the order screen.');
-      onDone('pending');
+      // Inline + stay on the sheet: the order is saved, "Try again" retries
+      // the simulate round, "Pay on delivery instead" parks it as pending.
+      setSimulateError('We could not reach the payment service. Try again.');
+      setPhase('failed');
     }
   }
 
@@ -983,70 +1056,6 @@ function DemoPaymentSheet({
             </RNText>
           </View>
 
-          {phase === 'confirm' ? (
-            // Demo instrument entry — real-looking fields, nothing sent
-            // anywhere: the server only sees the simulated outcome.
-            <View className="mt-3 gap-2.5">
-              {isCard ? (
-                <>
-                  <TextInput
-                    value={cardNumber}
-                    onChangeText={(value) => setCardNumber(value.replace(/[^0-9]/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim())}
-                    placeholder="Card number"
-                    placeholderTextColor={MUTED}
-                    keyboardType="number-pad"
-                    accessibilityLabel="Card number"
-                    className="h-[46px] rounded-xl border px-3 text-[14px]"
-                    style={{ borderColor: LINE, color: INK }}
-                  />
-                  <View className="flex-row gap-2.5">
-                    <TextInput
-                      value={cardExpiry}
-                      onChangeText={(value) => {
-                        const digits = value.replace(/[^0-9]/g, '').slice(0, 4);
-                        setCardExpiry(digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits);
-                      }}
-                      placeholder="MM/YY"
-                      placeholderTextColor={MUTED}
-                      keyboardType="number-pad"
-                      accessibilityLabel="Card expiry"
-                      className="h-[46px] flex-1 rounded-xl border px-3 text-[14px]"
-                      style={{ borderColor: LINE, color: INK }}
-                    />
-                    <TextInput
-                      value={cardCvv}
-                      onChangeText={(value) => setCardCvv(value.replace(/[^0-9]/g, '').slice(0, 4))}
-                      placeholder="CVV"
-                      placeholderTextColor={MUTED}
-                      keyboardType="number-pad"
-                      secureTextEntry
-                      accessibilityLabel="Card CVV"
-                      className="h-[46px] flex-1 rounded-xl border px-3 text-[14px]"
-                      style={{ borderColor: LINE, color: INK }}
-                    />
-                  </View>
-                </>
-              ) : (
-                <TextInput
-                  value={upiId}
-                  onChangeText={setUpiId}
-                  placeholder="yourname@upi"
-                  placeholderTextColor={MUTED}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  accessibilityLabel="UPI id"
-                  className="h-[46px] rounded-xl border px-3 text-[14px]"
-                  style={{ borderColor: LINE, color: INK }}
-                />
-              )}
-              {instrumentError !== null ? (
-                <RNText className="text-[11.5px]" style={{ color: DANGER }}>
-                  {instrumentError}
-                </RNText>
-              ) : null}
-            </View>
-          ) : null}
-
           {phase === 'processing' ? (
             <View style={{ alignItems: 'center', marginTop: 18, gap: 8 }}>
               <Ionicons name="sync-circle-outline" size={30} color={BRAND} />
@@ -1061,63 +1070,28 @@ function DemoPaymentSheet({
                 Payment declined
               </RNText>
               <RNText className="text-[12px] text-center" style={{ color: MUTED }}>
-                The demo provider declined this payment. Your order is saved.
+                {simulateError ?? 'The demo provider declined this payment. Your order is saved.'}
               </RNText>
               <Pressable
                 onPress={() => void simulate('success')}
                 accessibilityRole="button"
-                accessibilityLabel="Retry payment"
+                accessibilityLabel="Try payment again"
                 className="h-[44px] rounded-full bg-brand items-center justify-center mt-2 w-full"
               >
-                <RNText className="text-white text-[14px] font-bold">Retry payment</RNText>
-              </Pressable>
-              <Pressable
-                onPress={() => onDone('failed')}
-                accessibilityRole="button"
-                accessibilityLabel="Continue with unpaid order"
-                className="h-[40px] items-center justify-center w-full"
-              >
-                <RNText className="text-[13px] font-semibold" style={{ color: MUTED }}>
-                  Continue to order
-                </RNText>
-              </Pressable>
-            </View>
-          ) : (
-            <>
-              <Pressable
-                onPress={() => proceed('success')}
-                disabled={!instrumentValid}
-                accessibilityRole="button"
-                accessibilityLabel="Pay now"
-                className="h-[46px] rounded-full bg-brand items-center justify-center mt-4"
-                style={{ opacity: instrumentValid ? 1 : 0.5 }}
-              >
-                <RNText className="text-white text-[14.5px] font-bold">Pay now</RNText>
-              </Pressable>
-              <Pressable
-                onPress={() => proceed('failure')}
-                disabled={!instrumentValid}
-                accessibilityRole="button"
-                accessibilityLabel="Simulate a declined payment"
-                className="h-[34px] items-center justify-center mt-1"
-                style={{ opacity: instrumentValid ? 1 : 0.5 }}
-              >
-                <RNText className="text-[11.5px]" style={{ color: MUTED }}>
-                  Simulate a declined payment
-                </RNText>
+                <RNText className="text-white text-[14px] font-bold">Try payment again</RNText>
               </Pressable>
               <Pressable
                 onPress={cancel}
                 accessibilityRole="button"
-                accessibilityLabel="Pay later"
-                className="h-[36px] items-center justify-center"
+                accessibilityLabel="Pay on delivery instead"
+                className="h-[40px] items-center justify-center w-full"
               >
                 <RNText className="text-[13px] font-semibold" style={{ color: MUTED }}>
                   Pay on delivery instead
                 </RNText>
               </Pressable>
-            </>
-          )}
+            </View>
+          ) : null}
         </View>
       </View>
     </Modal>
@@ -1457,91 +1431,6 @@ function EmptyCart({ onBrowse }: { onBrowse: () => void }) {
   );
 }
 
-
-/**
- * Razorpay Checkout in a browser sheet (web / Expo Go fallback).
- *
- * Opens a popup pointing at Razorpay's hosted checkout with the SAME
- * server-minted order id; the popup posts the outcome back and resolves.
- * The result is NOT treated as proof of payment — the order screen polls the
- * server and only the signed webhook advances state, exactly as with the
- * native SDK. Resolves when the sheet closes; rejects on user cancel.
- */
-function openRazorpayWebCheckout(options: {
-  key: string;
-  order_id: string;
-  amount: string;
-  currency: string;
-  name: string;
-  description: string;
-  prefill: { contact: string; name: string };
-  theme: { color: string };
-}): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === 'undefined') {
-      reject(new Error('Web checkout is unavailable in this environment.'));
-      return;
-    }
-
-    const width = 480;
-    const height = 640;
-    const left = window.screenX + (window.outerWidth - width) / 2;
-    const top = window.screenY + (window.outerHeight - height) / 2;
-    const popup = window.open('', 'sakya-razorpay', `width=${width},height=${height},left=${left},top=${top}`);
-    if (popup === null) {
-      reject(new Error('The payment window was blocked. Allow popups and try again.'));
-      return;
-    }
-
-    const messageHandler = (event: MessageEvent): void => {
-      if (typeof event.data !== 'object' || event.data === null) return;
-      const data = event.data as Record<string, unknown>;
-      if (data.source !== 'sakya-razorpay') return;
-      window.removeEventListener('message', messageHandler);
-      popup.close();
-      if (data.status === 'success') {
-        resolve();
-      } else {
-        reject(new Error(String(data.reason ?? 'Payment was not completed.')));
-      }
-    };
-    window.addEventListener('message', messageHandler);
-
-    // Razorpay's hosted checkout script runs INSIDE the popup and calls its
-    // own handler; it relays the outcome to the opener via postMessage.
-    popup.document.write(`<!DOCTYPE html><html><head><title>Sakya Farms — Pay</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-      </head><body style="margin:0;font-family:sans-serif">
-      <p style="padding:24px;color:#6F6C63">Opening secure payment…</p>
-      <script>
-        var rzp = new Razorpay({
-          key: ${JSON.stringify(options.key)},
-          order_id: ${JSON.stringify(options.order_id)},
-          amount: ${Number(options.amount)},
-          currency: ${JSON.stringify(options.currency)},
-          name: ${JSON.stringify(options.name)},
-          description: ${JSON.stringify(options.description)},
-          prefill: ${JSON.stringify(options.prefill)},
-          theme: ${JSON.stringify(options.theme)},
-          handler: function (response) {
-            window.opener && window.opener.postMessage(
-              { source: 'sakya-razorpay', status: 'success', response: response }, '*');
-          },
-          modal: { ondismiss: function () {
-            window.opener && window.opener.postMessage(
-              { source: 'sakya-razorpay', status: 'dismissed', reason: 'Payment was cancelled.' }, '*');
-          } }
-        });
-        rzp.on('payment.failed', function (response) {
-          window.opener && window.opener.postMessage(
-            { source: 'sakya-razorpay', status: 'failed', reason: 'Payment failed. You can retry from the order screen.' }, '*');
-        });
-        rzp.open();
-      </script></body></html>`);
-    popup.document.close();
-  });
-}
 
 /**
  * Single-line rendering of the delivery card.

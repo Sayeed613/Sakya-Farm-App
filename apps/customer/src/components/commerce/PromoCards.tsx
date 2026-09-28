@@ -44,12 +44,17 @@ export function PromoCards({
   couponCode,
   onPickCoupon,
   applyCoupon,
+  applyError = null,
+  applying = false,
 }: {
   subtotalInPaise: number;
   shippingInPaise: number;
   couponCode: string | null;
   onPickCoupon: () => void;
   applyCoupon?: (code: string) => void;
+  /** Visible server failure from the last apply attempt (cart shows it). */
+  applyError?: string | null;
+  applying?: boolean;
 }) {
   const deliveryUnlocked = shippingInPaise === 0 || subtotalInPaise >= FREE_DELIVERY_THRESHOLD;
   const remainingForDelivery = Math.max(0, FREE_DELIVERY_THRESHOLD - subtotalInPaise);
@@ -144,12 +149,17 @@ export function PromoCards({
           ) : couponUnlocked ? (
             <View className="rounded-full px-2.5 py-1" style={{ backgroundColor: BRAND }}>
               <RNText className="text-[10.5px] font-bold" style={{ color: '#FFFFFF' }}>
-                APPLY
+                {applying ? '…' : 'APPLY'}
               </RNText>
             </View>
           ) : null}
         </View>
       </Pressable>
+      {applyError !== null && couponCode !== 'SAKYA100' ? (
+        <RNText accessibilityLiveRegion="polite" className="mt-1.5 text-[11px] font-semibold" style={{ color: '#B42318' }}>
+          {applyError}
+        </RNText>
+      ) : null}
     </View>
   );
 }

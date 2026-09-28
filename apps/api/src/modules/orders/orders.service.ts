@@ -303,6 +303,15 @@ export class OrdersService {
         }
       }
 
+      // The server cart is consumed by this checkout: empty its lines and
+      // detach the coupon in the SAME transaction, so a placed order can never
+      // leave a stale cart behind. Pricing/stock above are untouched.
+      await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+      await tx.cart.update({
+        where: { id: cart.id },
+        data: { couponId: null },
+      });
+
       return created;
     });
 

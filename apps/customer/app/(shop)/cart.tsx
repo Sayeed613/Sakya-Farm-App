@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { cartApi } from '../../src/api/cart';
 import { CouponBox } from '../../src/components/cart/CouponBox';
 import { EmptyState } from '../../src/components/EmptyState';
+import { ErrorState } from '../../src/components/ErrorState';
 import { LoadingState } from '../../src/components/LoadingState';
 import { PromoCards } from '../../src/components/commerce/PromoCards';
 import { formatMoney } from '../../src/lib/format';
@@ -242,6 +243,8 @@ export default function CartScreen() {
     enabled: session !== null,
   });
 
+  const [cartError, setCartError] = useState<string | null>(null);
+
   const update = useMutation({
     mutationFn: ({
       id,
@@ -253,7 +256,9 @@ export default function CartScreen() {
 
     onSuccess: (data) => {
       queryClient.setQueryData(['cart'], data);
+      setCartError(null);
     },
+    onError: (error: Error) => setCartError(error.message || 'Could not update quantity. Try again.'),
   });
 
   const remove = useMutation({
@@ -261,7 +266,9 @@ export default function CartScreen() {
 
     onSuccess: (data) => {
       queryClient.setQueryData(['cart'], data);
+      setCartError(null);
     },
+    onError: (error: Error) => setCartError(error.message || 'Could not remove the item. Try again.'),
   });
 
   /** Promo card 2 applies SAKYA100 straight through the server cart. */
@@ -270,7 +277,9 @@ export default function CartScreen() {
     onSuccess: (data) => {
       queryClient.setQueryData(['cart'], data);
       setCouponOpen(true);
+      setCartError(null);
     },
+    onError: (error: Error) => setCartError(error.message || 'Could not apply SAKYA100. Try again.'),
   });
 
   /* --------------------------------------------------------------------------
@@ -287,6 +296,22 @@ export default function CartScreen() {
 
   if (cart.isLoading) {
     return <LoadingState />;
+  }
+
+  // A failed load is never an empty cart: surface Retry instead of the
+  // "Your cart is empty" empty state.
+  if (cart.isError || cart.data === undefined) {
+    return (
+      <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
+        <CartBackdrop />
+        <CartHeaderBar count={0} />
+        <ErrorState
+          title="Could not load your cart"
+          message="We could not reach your cart just now. Check your connection and try again."
+          onRetry={() => void cart.refetch()}
+        />
+      </View>
+    );
   }
 
   const data = cart.data;
@@ -407,7 +432,18 @@ export default function CartScreen() {
               couponCode={data?.coupon?.code ?? null}
               onPickCoupon={() => setCouponOpen(true)}
               applyCoupon={() => applyPromo.mutate()}
+              applyError={applyPromo.isError ? (applyPromo.error?.message ?? 'Could not apply SAKYA100. Try again.') : null}
+              applying={applyPromo.isPending}
             />
+            {cartError !== null ? (
+              <RNText
+                accessibilityLiveRegion="polite"
+                className="mt-2 text-center text-[12px] font-semibold"
+                style={{ color: '#B42318' }}
+              >
+                {cartError}
+              </RNText>
+            ) : null}
 
             {/* ---------------- APPLY COUPON ---------------- */}
 

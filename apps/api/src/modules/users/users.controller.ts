@@ -55,7 +55,7 @@ export class UsersController {
   }
 
   @Put('me/avatar')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 400 * 1024 } }))
   async putAvatar(
     @CurrentUser('id') userId: string,
     @UploadedFile() file: { buffer: Buffer; mimetype?: string; size?: number } | undefined,

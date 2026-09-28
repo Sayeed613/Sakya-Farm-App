@@ -45,6 +45,9 @@ export function NotifyMeButton({
       queryClient.setQueryData(alertKey, result.active);
       setLocalError(null);
     },
+    onError: (error: Error) => {
+      setLocalError(error.message || 'Could not subscribe — try again');
+    },
   });
 
   if (subscribed) {

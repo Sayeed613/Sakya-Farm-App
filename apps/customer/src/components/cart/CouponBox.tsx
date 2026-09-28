@@ -45,6 +45,9 @@ export function CouponBox({ coupon }: { coupon: AppliedCouponResponse | null }) 
       queryClient.setQueryData(['cart'], data);
       setError(null);
     },
+    onError: (err: Error) => {
+      setError(err.message || 'Could not remove the coupon. Try again.');
+    },
   });
 
   if (coupon !== null) {

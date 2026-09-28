@@ -223,6 +223,88 @@ describe('OrdersService', () => {
     expect((result.payments[0] as unknown as { idempotencyKey?: string }).idempotencyKey).toBeUndefined();
   });
 
+  it('empties the server cart inside the checkout transaction', async () => {
+    cartService.getCurrentCart.mockResolvedValue(
+      cartWithItems({ id: 'i1', variantId: 'v1', quantity: 2, unitPriceInPaise: 2400 }),
+    );
+    prisma.payment.findFirst.mockResolvedValue(null);
+    // The transaction callback receives the prisma mock itself, plus the two
+    // cart-clearing writes the checkout must perform.
+    const tx = {
+      ...prisma,
+      cartItem: { deleteMany: vi.fn(async () => ({ count: 1 })) },
+      cart: { ...prisma.cart, update: vi.fn(async () => ({})) },
+      coupon: { update: vi.fn(async () => ({})) },
+      couponRedemption: { ...prisma.couponRedemption, create: vi.fn(async () => ({})) },
+    };
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(tx));
+    prisma.cart.findUnique.mockResolvedValue({
+      storeId: 'store-1',
+      couponId: 'coupon-1',
+      store: { id: 'store-1', isActive: true },
+    });
+    prisma.inventory.findUnique.mockResolvedValue({
+      id: 'inv-1',
+      variantId: 'v1',
+      storeId: 'store-1',
+      quantityOnHand: 10,
+    });
+    prisma.order.create.mockImplementation(async (args: any) => ({
+      ...args,
+      id: 'order-1',
+      orderNumber: 'ORD-CLEAR',
+      userId: 'user-1',
+      status: 'PENDING_PAYMENT',
+      paymentStatus: 'PENDING',
+      currency: 'INR',
+      subtotalInPaise: 4800,
+      discountInPaise: 0,
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      items: [],
+      payments: [],
+      statusHistory: [],
+      coupon: null,
+    }) as any);
+    prisma.order.findFirst.mockResolvedValue({
+      id: 'order-1',
+      orderNumber: 'ORD-CLEAR',
+      status: 'PENDING_PAYMENT',
+      paymentStatus: 'PENDING',
+      currency: 'INR',
+      subtotalInPaise: 4800,
+      discountInPaise: 0,
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      billingAddress: null,
+      notes: null,
+      placedAt: null,
+      cancelledAt: null,
+      deliveredAt: null,
+      cancelReason: null,
+      createdAt: new Date('2026-09-12T00:00:00Z'),
+      updatedAt: new Date('2026-09-12T00:00:00Z'),
+      items: [],
+      payments: [],
+      statusHistory: [],
+      coupon: null,
+    } as any);
+
+    await service.checkout('user-1', {
+      idempotencyKey: 'key-clear',
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      billingAddress: undefined,
+      notes: null,
+    });
+
+    // Minimal cart cleanup only — pricing/stock assertions live elsewhere.
+    expect(tx.cartItem.deleteMany).toHaveBeenCalledWith({ where: { cartId: 'cart-1' } });
+    expect(tx.cart.update).toHaveBeenCalledWith({ where: { id: 'cart-1' }, data: { couponId: null } });
+  });
+
   it('recomputes totals with a percentage coupon at checkout', async () => {
     cartService.getCurrentCart.mockResolvedValue({
       ...cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }, {
@@ -946,6 +1028,9 @@ function createPrismaMock() {
     payment: {
       findFirst: vi.fn(),
       create: vi.fn(),
+    },
+    cartItem: {
+      deleteMany: vi.fn(async () => ({ count: 0 })),
     },
     order: {
       create: vi.fn(),

@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, RefreshControl, ScrollView, Text as RNText, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ordersApi } from '../../../src/api/orders-api';
@@ -16,6 +16,7 @@ import { CancelReasonSheet } from '../../../src/components/orders/CancelReasonSh
 import { ReturnSheet, type ReturnableItem } from '../../../src/components/orders/ReturnSheet';
 import { InvoiceSheet } from '../../../src/components/orders/InvoiceSheet';
 import { formatMoney } from '../../../src/lib/format';
+import { openRazorpayWebCheckout } from '../../../src/lib/razorpay-checkout';
 import {
   cancellationBanner,
   codPendingNote,
@@ -132,26 +133,32 @@ export default function OrderDetailScreen() {
         throw new Error('The payment service returned an invalid checkout order.');
       }
 
-      const { default: RazorpayCheckout } = await import('react-native-razorpay');
-      await RazorpayCheckout.open({
-        key: intent.key,
-        order_id: intent.order_id,
-        amount: String(intent.amount),
-        currency: intent.currency,
-        name: 'Sakya Farms',
-        description: `Payment for order ${order.data.orderNumber}`,
-        prefill: {
-          contact: session?.user.phone ?? '',
-          name: [session?.user.firstName, session?.user.lastName].filter(Boolean).join(' '),
+      await openRazorpayWebCheckout(
+        {
+          key: intent.key,
+          orderId: intent.order_id,
+          amountInPaise: intent.amount,
+          currency: intent.currency,
+          orderNumber: order.data.orderNumber,
         },
-        theme: { color: BRAND },
-      });
+        {
+          onSuccess: () => {
+            void order.refetch();
+          },
+          onDismiss: () =>
+            setPaymentRetryError('The payment window closed before we got a result. Try again.'),
+          onError: (checkoutError) => {
+            setPaymentRetryError(
+              checkoutError.message || 'Payment was not completed. You can try again.',
+            );
+          },
+        },
+      );
       await order.refetch();
     } catch (error) {
       setPaymentRetryError(
         error instanceof Error ? error.message : 'Payment was not completed. You can try again.',
       );
-      Alert.alert('Payment not completed', 'Your order is saved. Retry payment when you are ready.');
     } finally {
       setPaymentRetrying(false);
     }

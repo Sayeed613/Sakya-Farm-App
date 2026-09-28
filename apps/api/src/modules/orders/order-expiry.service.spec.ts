@@ -25,6 +25,7 @@ vi.mock('../inventory/order-reservations', () => ({
 type TestPayment = {
   id: string;
   provider: string;
+  method: string;
   providerPaymentId: string | null;
   providerOrderId: string | null;
   status: string;
@@ -49,7 +50,7 @@ function codOrder(): TestOrder {
     status: 'PENDING_PAYMENT',
     createdAt: new Date(CUTOFF.getTime() - 60_000),
     payments: [
-      { id: 'p1', provider: 'MANUAL', providerPaymentId: null, providerOrderId: null, status: 'PENDING' },
+      { id: 'p1', provider: 'MANUAL', method: 'CASH_ON_DELIVERY', providerPaymentId: null, providerOrderId: null, status: 'PENDING' },
     ],
   };
 }
@@ -62,7 +63,12 @@ function unpaidOnlineOrder(): TestOrder {
     status: 'PENDING_PAYMENT',
     createdAt: new Date(CUTOFF.getTime() - 60_000),
     payments: [
-      { id: 'p2', provider: 'RAZORPAY', providerPaymentId: 'pay_1', providerOrderId: 'order_1', status: 'PENDING' },
+      // An online intent supersedes the MANUAL placeholder, so the fixture
+      // carries both: the placeholder row CANCELLED by createIntent and the
+      // live Razorpay row. Only CANCELLED-via-updateMany + PENDING-para checks
+      // distinguish this from a COD anchor.
+      { id: 'p1', provider: 'MANUAL', method: 'CASH_ON_DELIVERY', providerPaymentId: null, providerOrderId: null, status: 'CANCELLED' },
+      { id: 'p2', provider: 'RAZORPAY', method: 'UPI', providerPaymentId: 'pay_1', providerOrderId: 'order_1', status: 'PENDING' },
     ],
   };
 }
@@ -74,15 +80,17 @@ function capturedOnlineOrder(): TestOrder {
     orderNumber: 'ORD-PAID',
     userId: 'user-paid',
     payments: [
-      { id: 'p3', provider: 'RAZORPAY', providerPaymentId: 'pay_captured', providerOrderId: 'order_paid', status: 'CAPTURED' },
+      { id: 'p1', provider: 'MANUAL', method: 'CASH_ON_DELIVERY', providerPaymentId: null, providerOrderId: null, status: 'CANCELLED' },
+      { id: 'p3', provider: 'RAZORPAY', method: 'UPI', providerPaymentId: 'pay_captured', providerOrderId: 'order_paid', status: 'CAPTURED' },
     ],
   };
 }
 
 function setup(orders: TestOrder[]) {
   // Mirrors the Prisma filter: status + createdAt + `payments: { none:
-  // { method: 'CASH_ON_DELIVERY', status: 'PENDING' } }`. A MANUAL PENDING
-  // payment stands in for the COD anchor in the test data.
+  // { method: 'CASH_ON_DELIVERY', status: 'PENDING' } }`. The COD anchor is a
+  // live MANUAL/CASH_ON_DELIVERY PENDING row; an online order's placeholder is
+  // CANCELLED by createIntent, so the sweep still sees it.
   const findMany = vi.fn(async (args: { where: Record<string, any> }) =>
     orders
       .filter(
@@ -91,8 +99,8 @@ function setup(orders: TestOrder[]) {
           order.createdAt < (args.where.createdAt as { lt: Date }).lt &&
           !order.payments.some(
             (payment) =>
+              payment.method === 'CASH_ON_DELIVERY' &&
               payment.status === 'PENDING' &&
-              payment.provider !== 'RAZORPAY' &&
               (args.where.payments as { none: { method: string } }).none.method === 'CASH_ON_DELIVERY',
           ),
       )

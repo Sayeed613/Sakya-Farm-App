@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useState } from 'react';
 import Animated, {
   Easing,
   FadeIn,
@@ -53,6 +54,7 @@ export function AddressPickerSheet({
 }: AddressPickerSheetProps) {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const book = useQuery({
     queryKey: ['addresses'],
     queryFn: addressesApi.list,
@@ -62,7 +64,12 @@ export function AddressPickerSheet({
 
   const remove = useMutation({
     mutationFn: (id: string) => addressesApi.remove(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['addresses'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['addresses'] });
+      setRemoveError(null);
+    },
+    onError: (error: Error) =>
+      setRemoveError(error.message || 'Could not delete the address. Try again.'),
   });
 
 /**
@@ -152,6 +159,15 @@ function sameAs(saved: AddressView, current: CheckoutAddress | null): boolean {
                 <RNText className="text-[17px] font-bold" style={{ color: INK }}>
                   Saved addresses
                 </RNText>
+                {removeError !== null ? (
+                  <RNText
+                    accessibilityLiveRegion="polite"
+                    className="mt-1 text-[12px] font-semibold"
+                    style={{ color: '#B42318' }}
+                  >
+                    {removeError}
+                  </RNText>
+                ) : null}
               </View>
 
               <ScrollView

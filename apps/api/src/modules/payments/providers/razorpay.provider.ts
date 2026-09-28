@@ -1,6 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { IncomingHttpHeaders } from 'node:http';
-
 import type {
   IntentView,
   PaymentProvider,
@@ -8,6 +7,9 @@ import type {
 } from './payment-provider.interface';
 
 const RAZORPAY_API = 'https://api.razorpay.com/v1';
+
+/** Every gateway round-trip fails fast: a hung provider must not hang checkout. */
+const RAZORPAY_TIMEOUT_MS = 8_000;
 
 type RazorpayEntity = Record<string, unknown>;
 
@@ -26,16 +28,26 @@ export class RazorpayProvider implements PaymentProvider {
     amountInPaise: number;
     currency: string;
   }): Promise<{ providerOrderId: string; providerPayload: Record<string, unknown> }> {
-    const response = await fetch(`${RAZORPAY_API}/orders`, {
-      method: 'POST',
-      headers: this.apiHeaders(),
-      body: JSON.stringify({
-        amount: input.amountInPaise,
-        currency: input.currency,
-        receipt: input.paymentId,
-        notes: { orderId: input.orderId, paymentId: input.paymentId },
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${RAZORPAY_API}/orders`, {
+        method: 'POST',
+        headers: this.apiHeaders(),
+        body: JSON.stringify({
+          amount: input.amountInPaise,
+          currency: input.currency,
+          receipt: input.paymentId,
+          notes: { orderId: input.orderId, paymentId: input.paymentId },
+        }),
+        signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new Error(
+        error instanceof DOMException && error.name === 'TimeoutError'
+          ? 'Razorpay gateway timed out'
+          : 'Razorpay could not create the payment order',
+      );
+    }
     const payload: unknown = await response.json();
     if (!response.ok || !isRecord(payload) || typeof payload.id !== 'string') {
       throw new Error('Razorpay could not create the payment order');
@@ -99,9 +111,19 @@ export class RazorpayProvider implements PaymentProvider {
    * `parseWebhookEvent`.
    */
   async fetchPaymentStatus(providerOrderId: string): Promise<ProviderWebhookEvent | null> {
-    const response = await fetch(`${RAZORPAY_API}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
-      headers: this.apiHeaders(),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${RAZORPAY_API}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
+        headers: this.apiHeaders(),
+        signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new Error(
+        error instanceof DOMException && error.name === 'TimeoutError'
+          ? 'Razorpay gateway timed out'
+          : 'Razorpay did not return a payment list for this order',
+      );
+    }
     if (response.status === 404) return null;
     const payload: unknown = await response.json();
     if (!response.ok || !isRecord(payload) || !Array.isArray(payload.items)) {

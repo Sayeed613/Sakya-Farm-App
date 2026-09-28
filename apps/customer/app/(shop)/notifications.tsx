@@ -67,12 +67,23 @@ function Inbox() {
   const markRead = useMutation({
     mutationFn: (id: string) => notificationsApi.markRead(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications', 'inbox'] }),
+    onError: () => {
+      // Read state is a nicety; a failure surfaces once via the header note.
+      queryClient.setQueryData(['notifications', 'actionError'], 'Could not mark as read. Try again.');
+    },
   });
 
   const markAllRead = useMutation({
     mutationFn: () => notificationsApi.markAllRead(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications', 'inbox'] }),
+    onError: (error: Error) =>
+      queryClient.setQueryData(
+        ['notifications', 'actionError'],
+        error.message || 'Could not mark all as read. Try again.',
+      ),
   });
+
+  const actionError = queryClient.getQueryData<string>(['notifications', 'actionError']) ?? null;
 
   if (inbox.isPending) {
     return (
@@ -103,7 +114,17 @@ function Inbox() {
       showsVerticalScrollIndicator={false}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 100, gap: 10 }}
       ListHeaderComponent={
-        items.length > 0 && unreadCount > 0 ? (
+        <>
+          {actionError !== null ? (
+            <RNText
+              accessibilityLiveRegion="polite"
+              className="px-1 pb-1 text-center text-[12px] font-semibold"
+              style={{ color: '#B42318' }}
+            >
+              {actionError}
+            </RNText>
+          ) : null}
+          {items.length > 0 && unreadCount > 0 ? (
           <View className="flex-row items-center justify-between px-1 pb-1">
             <RNText className="text-[12.5px] font-semibold" style={{ color: BRAND }}>
               {unreadCount} unread
@@ -120,7 +141,8 @@ function Inbox() {
               </RNText>
             </Pressable>
           </View>
-        ) : null
+          ) : null}
+          </>
       }
       ListEmptyComponent={
         <View className="items-center gap-2 px-8 pt-24">

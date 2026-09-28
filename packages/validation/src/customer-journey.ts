@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { quantitySchema, slugSchema, uuidSchema } from './primitives';
+import { slugSchema, uuidSchema } from './primitives';
 
 // ---------------------------------------------------------------------------
 // Serviceability

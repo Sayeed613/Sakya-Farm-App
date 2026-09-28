@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Pressable, ScrollView, Text as RNText, View } from 'react-native';
+import { useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { journeyApi } from '../../src/api/journey';
@@ -39,9 +40,15 @@ export default function WishlistScreen() {
     staleTime: 30_000,
   });
 
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const remove = useMutation({
     mutationFn: (productSlug: string) => journeyApi.removeWishlistItem(productSlug),
-    onSuccess: (data) => queryClient.setQueryData(['wishlist'], data),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['wishlist'], data);
+      setActionError(null);
+    },
+    onError: (error: Error) => setActionError(error.message || 'Could not update your wishlist. Try again.'),
   });
 
   const moveToCart = useMutation({
@@ -49,8 +56,10 @@ export default function WishlistScreen() {
     onSuccess: (data) => {
       queryClient.setQueryData(['cart'], data);
       void queryClient.invalidateQueries({ queryKey: ['cart'] });
+      setActionError(null);
       router.push('/(shop)/cart');
     },
+    onError: (error: Error) => setActionError(error.message || 'Could not add to cart. Try again.'),
   });
 
   if (session === null) {
@@ -72,6 +81,14 @@ export default function WishlistScreen() {
     <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
       {/* Header */}
       <SubScreenHeader title="Wishlist" />
+
+      {actionError !== null ? (
+        <View className="mx-4 mt-2 rounded-2xl border px-3 py-2" style={{ borderColor: '#F0C9C4', backgroundColor: '#FDEEEC' }}>
+          <RNText accessibilityLiveRegion="polite" className="text-center text-[12px] font-semibold" style={{ color: '#B42318' }}>
+            {actionError}
+          </RNText>
+        </View>
+      ) : null}
 
       {wishlist.isPending ? (
         <View className="gap-3 px-4 pt-3">
