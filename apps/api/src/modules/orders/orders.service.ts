@@ -15,6 +15,8 @@ import type {
   OrderResponse,
 } from '@sakya/types';
 import {
+  isBengaluruPincode,
+  containsFreshProduce,
   isPaise,
   multiplyPaise,
   sumPaise,
@@ -117,14 +119,12 @@ export class OrdersService {
   async checkout(userId: string, body: CheckoutRequest): Promise<OrderResponse> {
     const parsed = checkoutSchema.parse(body);
 
-    const cart = await this.cartService.getCurrentCart(userId);
-    if (cart.items.length === 0) {
-      throw new BadRequestException('Cannot place an order from an empty cart');
-    }
-
-    // Idempotency: a retried request cannot create a second order. The key is
-    // scoped to the caller, so another customer using the same string is
-    // irrelevant here rather than a spurious conflict.
+    // Idempotency FIRST: a retried request cannot create a second order, and
+    // the retry must succeed even though the successful first attempt already
+    // emptied the cart. Checking the cart first would turn every safe retry
+    // (timeout, flaky network) into a 400 that looks like a failed checkout.
+    // The key is scoped to the caller, so another customer using the same
+    // string is irrelevant here rather than a spurious conflict.
     const existing = await this.prisma.payment.findFirst({
       where: { userId, idempotencyKey: parsed.idempotencyKey },
       include: { order: true },
@@ -134,13 +134,15 @@ export class OrdersService {
       return this.getOrderById(existing.order.id, userId);
     }
 
+    const cart = await this.cartService.getCurrentCart(userId);
+    if (cart.items.length === 0) {
+      throw new BadRequestException('Cannot place an order from an empty cart');
+    }
+
     const items = cart.items.map(snapshotItem);
 
-    /*
-     * Serviceability gate: the shipping pincode must fall inside an active
-     * zone of the fulfilment store BEFORE any order exists. Undeliverable
-     * addresses are rejected here with a customer-actionable message.
-     */
+    // All categories except fresh produce ship nationwide. Fresh produce is
+    // restricted to Bengaluru PIN codes and rejected before an order exists.
     const commerce = this.config.get('commerce', { infer: true })!;
     const shippingPincode = String(
       (parsed.shippingAddress as Record<string, unknown>).postalCode ?? '',
@@ -163,18 +165,13 @@ export class OrdersService {
       true,
     );
 
-    if (this.prisma.serviceabilityZone !== undefined) {
-      // The zone check runs against the CART'S fulfilment store, so the zone
-      // table's store scoping actually binds the promise to the fulfilling store.
-      const zone = await this.prisma.serviceabilityZone.findFirst({
-        where: { isActive: true, pincodes: { has: shippingPincode } },
-        select: { storeId: true },
-      });
-      if (zone === null) {
-        throw new BadRequestException(
-          'We do not deliver to this pincode yet. Please choose a different address.',
-        );
-      }
+    const hasFreshProduce = containsFreshProduce(
+      cart.items.flatMap((item) => item.categorySlugs),
+    );
+    if (hasFreshProduce && !isBengaluruPincode(shippingPincode)) {
+      throw new BadRequestException(
+        'Fresh fruits and vegetables are currently delivered within Bengaluru only.',
+      );
     }
 
     // The order, its items and the stock reservation are written in one
@@ -313,7 +310,7 @@ export class OrdersService {
       });
 
       return created;
-    });
+    }, { maxWait: 10_000, timeout: 30_000 });
 
     return this.getOrderById(order.id, userId);
   }

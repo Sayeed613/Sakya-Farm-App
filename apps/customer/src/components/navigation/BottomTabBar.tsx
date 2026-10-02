@@ -302,7 +302,6 @@ function BottomTabBarInner(props: BottomTabBarProps) {
 
   return (
     <Animated.View
-      pointerEvents="box-none"
       style={[
         {
           position: 'absolute',
@@ -317,6 +316,7 @@ function BottomTabBarInner(props: BottomTabBarProps) {
             insets.bottom,
             10,
           ),
+          pointerEvents: 'box-none',
         },
 
         floatingStyle,
@@ -340,18 +340,7 @@ function BottomTabBarInner(props: BottomTabBarProps) {
           backgroundColor:
             GLASS_WHITE,
 
-          shadowColor: BRAND_DARK,
-
-          shadowOffset: {
-            width: 0,
-            height: 10,
-          },
-
-          shadowOpacity: 0.15,
-
-          shadowRadius: 24,
-
-          elevation: 14,
+          boxShadow: '0 10px 24px rgba(11, 63, 54, 0.15)',
         }}
       >
         <BlurView
@@ -409,18 +398,7 @@ function BottomTabBarInner(props: BottomTabBarProps) {
                     borderColor:
                       ACTIVE_BORDER,
 
-                    shadowColor: BRAND,
-
-                    shadowOffset: {
-                      width: 0,
-                      height: 3,
-                    },
-
-                    shadowOpacity: 0.10,
-
-                    shadowRadius: 9,
-
-                    elevation: 3,
+                    boxShadow: '0 3px 9px rgba(11, 89, 76, 0.10)',
                   },
 
                   activePillStyle,

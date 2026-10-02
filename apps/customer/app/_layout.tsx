@@ -13,6 +13,7 @@ import { colors } from '../src/theme';
 import { useAuthStore } from '../src/stores/auth-store';
 import { useConnectivity } from '../src/hooks/use-connectivity';
 import { OfflineBanner } from '../src/components/OfflineBanner';
+import { RazorpaySheetHost } from '../src/components/RazorpaySheetHost';
 
 /**
  * Push support loads lazily and natively only. Merely importing
@@ -119,6 +120,9 @@ export default function RootLayout() {
             <Stack.Screen name="(auth)" />
             <Stack.Screen name="(shop)" />
           </Stack>
+          {/* In-app Razorpay sheet for builds without the native SDK (Expo
+              Go). Renders null on web and whenever no checkout is pending. */}
+          <RazorpaySheetHost />
         </View>
       </View>
     </QueryClientProvider>

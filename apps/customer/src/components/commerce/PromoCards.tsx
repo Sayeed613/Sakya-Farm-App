@@ -8,30 +8,23 @@ const INK = '#171A18';
 const MUTED = '#6F6C63';
 const BRAND = '#0B594C';
 const GREEN = '#1F7A43';
-/** Amber for in-progress accents (delivery fee, progress bars). */
-const AMBER = '#B4612F';
 const ACCENT = '#B4612F';
 const ACCENT_TINT = '#F7E9DD';
-const GREEN_TINT = '#E3EFE9';
-const SURFACE_MUTED = '#F3EDE3';
-const CARD_BORDER = '#EDE7DC';
 
-/** Free delivery kicks in at ₹599 — keep in sync with the API pricing config. */
-const FREE_DELIVERY_THRESHOLD = 59900;
 /** SAKYA100: ₹100 off orders at/above ₹1999 (server-enforced minimum). */
 const SAKYA100_MIN_ORDER = 199900;
 
 /**
- * Commerce promo cards (cart + checkout) — the two standing offers:
- *   1. Free-delivery unlock card with a live progress bar.
- *   2. SAKYA100 coupon card.
+ * Commerce promo card (cart + checkout) — the SAKYA100 standing offer.
  *
- * Honest live state: both cards only READ the server cart's totals — they
- * never compute money on the client. Delivery rule and coupon minimum come
- * from the same pricing config the API enforces.
+ * Honest live state: the card only READs the server cart's totals — it never
+ * computes money on the client. The coupon minimum comes from the same
+ * pricing config the API enforces. The delivery charge itself is NOT
+ * advertised here (no free-delivery claim): it lives in Price Details,
+ * computed server-side.
  *
- * `applyCoupon` (cart screen): pressing the SAKYA100 card applies the code
- * directly through the server. Without it (checkout) the card falls back to
+ * `applyCoupon` (cart screen): pressing the card applies the code directly
+ * through the server. Without it (checkout) the card falls back to
  * `onPickCoupon`, e.g. navigating to the cart where the coupon box lives.
  *
  * Margins: the component deliberately carries NO horizontal margin — callers
@@ -40,7 +33,6 @@ const SAKYA100_MIN_ORDER = 199900;
  */
 export function PromoCards({
   subtotalInPaise,
-  shippingInPaise,
   couponCode,
   onPickCoupon,
   applyCoupon,
@@ -48,7 +40,6 @@ export function PromoCards({
   applying = false,
 }: {
   subtotalInPaise: number;
-  shippingInPaise: number;
   couponCode: string | null;
   onPickCoupon: () => void;
   applyCoupon?: (code: string) => void;
@@ -56,56 +47,12 @@ export function PromoCards({
   applyError?: string | null;
   applying?: boolean;
 }) {
-  const deliveryUnlocked = shippingInPaise === 0 || subtotalInPaise >= FREE_DELIVERY_THRESHOLD;
-  const remainingForDelivery = Math.max(0, FREE_DELIVERY_THRESHOLD - subtotalInPaise);
   const couponUnlocked = subtotalInPaise >= SAKYA100_MIN_ORDER;
   const remainingForCoupon = Math.max(0, SAKYA100_MIN_ORDER - subtotalInPaise);
-  const progress = (threshold: number): number =>
-    Math.min(1, threshold === 0 ? 1 : subtotalInPaise / threshold);
 
   return (
     <View className="mt-3 gap-2.5">
-      {/* Card 1 — free delivery */}
-      <View
-        className="rounded-[14px] border bg-white p-3.5"
-        style={{ borderColor: deliveryUnlocked ? '#CDE7DC' : CARD_BORDER, ...softShadow }}
-      >
-        <View className="flex-row items-center gap-2.5">
-          <View
-            className="h-[34px] w-[34px] items-center justify-center rounded-[10px]"
-            style={{ backgroundColor: deliveryUnlocked ? GREEN_TINT : SURFACE_MUTED }}
-          >
-            <Ionicons
-              name={deliveryUnlocked ? 'leaf' : 'bicycle-outline'}
-              size={17}
-              color={deliveryUnlocked ? GREEN : MUTED}
-            />
-          </View>
-          <View className="min-w-0 flex-1">
-            <RNText className="text-[13px] font-bold" style={{ color: INK }}>
-              {deliveryUnlocked ? 'Free delivery unlocked 🎉' : 'Free delivery on orders above ₹599'}
-            </RNText>
-            <RNText className="mt-0.5 text-[11px]" style={{ color: MUTED }}>
-              {deliveryUnlocked
-                ? 'Your order ships free.'
-                : `Add ${formatMoney(remainingForDelivery)} more to unlock FREE delivery`}
-            </RNText>
-          </View>
-        </View>
-        {deliveryUnlocked ? null : (
-          <View className="mt-2.5 h-[5px] overflow-hidden rounded-full" style={{ backgroundColor: SURFACE_MUTED }}>
-            <View
-              className="h-full rounded-full"
-              style={{
-                width: `${Math.round(progress(FREE_DELIVERY_THRESHOLD) * 100)}%`,
-                backgroundColor: AMBER,
-              }}
-            />
-          </View>
-        )}
-      </View>
-
-      {/* Card 2 — SAKYA100 coupon. With a direct apply handler (cart), the
+      {/* SAKYA100 coupon. With a direct apply handler (cart), the
           card is pressable only when the order actually qualifies — tapping
           below the minimum would just 400 against the server's rule. Without
           one (checkout), it routes to the cart where the code can be applied

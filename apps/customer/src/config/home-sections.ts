@@ -1,3 +1,5 @@
+import { FRESH_PRODUCE_CATEGORY_SLUGS } from '@sakya/utils';
+
 /**
  * Home screen section registry.
  *
@@ -116,15 +118,7 @@ export const EXCLUDED_PRODUCT_SLUGS: ReadonlySet<string> = new Set(['checkout-te
  * collections (pickles, oils, ghee, podulu, combos, health goals, best
  * sellers) live on Home — Fresh is fruits & vegetables, by design.
  */
-export const FRESH_SIDEBAR_HANDLES: readonly string[] = [
-  'leafy-greens',
-  'leafy-greens-copy',
-  'daily-vegetables-copy',
-  'beans-peas-copy',
-  'gourds-local-vegetables-copy',
-  'premium-vegetables-copy',
-  'country-special-copy',
-];
+export const FRESH_SIDEBAR_HANDLES: readonly string[] = FRESH_PRODUCE_CATEGORY_SLUGS;
 
 /** Duplicate collection pairs: the first handle powers rails, the second is dropped. */
 export const DUPLICATE_HANDLE_PAIRS: ReadonlyArray<readonly [string, string]> = [

@@ -19,8 +19,6 @@ const BRAND = '#0B594C';
 const INK = '#171A18';
 const MUTED = '#8C8A80';
 
-import { Alert } from 'react-native';
-
 /**
  * Orders tab — the caller's real orders from `GET /orders`.
  *
@@ -119,6 +117,7 @@ function OrdersList() {
 function OrderCard({ order }: { order: OrderResponse }) {
   const queryClient = useQueryClient();
   const [reorderState, setReorderState] = useState<'idle' | 'busy'>('idle');
+  const [reorderError, setReorderError] = useState<string | null>(null);
   const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0);
   const placed = order.placedAt ?? order.createdAt;
   const date = new Date(placed).toLocaleDateString('en-IN', {
@@ -132,67 +131,53 @@ function OrderCard({ order }: { order: OrderResponse }) {
   const handleReorder = async () => {
     if (reorderState === 'busy') return;
     setReorderState('busy');
+    setReorderError(null);
     try {
       const result = await journeyApi.reorder(order.id);
       await queryClient.invalidateQueries({ queryKey: ['cart'] });
       if (result.addedCount > 0) {
         router.push('/(shop)/cart');
+      } else {
+        setReorderError('None of these items are available to add right now.');
       }
     } catch {
-      // The reorder must not fail silently from the list — say what happened
-      // and keep the customer where they are.
-      Alert.alert(
-        'Could not add to cart',
-        'Some items may have changed. Open the order to see details or try again.',
-        [{ text: 'OK' }],
-      );
+      setReorderError('Could not add these items. Open the order details and try again.');
     } finally {
       setReorderState('idle');
     }
   };
 
   return (
-    <Pressable
-      onPress={() => router.push(`/(shop)/orders/${order.id}` as never)}
-      accessibilityRole="button"
-      accessibilityLabel={`Order ${order.orderNumber}, status ${order.status}`}
-      className="rounded-2xl border border-line bg-white p-3.5"
-    >
-      <View className="flex-row items-center justify-between">
-        <RNText className="text-[14px] font-bold" style={{ color: INK }}>
-          {order.orderNumber}
-        </RNText>
-        <View className="rounded-full bg-brand/10 px-2.5 py-1">
-          <RNText className="text-[10.5px] font-bold" style={{ color: BRAND }}>
-            {order.status}
+    <View className="rounded-2xl border border-line bg-white p-3.5">
+      <Pressable
+        onPress={() => router.push(`/(shop)/orders/${order.id}` as never)}
+        accessibilityRole="button"
+        accessibilityLabel={`View order ${order.orderNumber}, status ${order.status}`}
+        className="active:opacity-75"
+      >
+        <View className="flex-row items-center justify-between">
+          <RNText className="text-[14px] font-bold" style={{ color: INK }}>
+            {order.orderNumber}
           </RNText>
-        </View>
-      </View>
-      <RNText className="mt-0.5 text-[11.5px]" style={{ color: MUTED }}>
-        Placed {date} · {itemCount} item{itemCount === 1 ? '' : 's'}
-      </RNText>
-      {firstItem ? (
-        <RNText className="mt-1.5 text-[12.5px]" style={{ color: INK }} numberOfLines={1}>
-          {firstItem.productTitle}
-          {order.items.length > 1 ? ` +${order.items.length - 1} more` : ''}
-        </RNText>
-      ) : null}
-      <View className="mt-2 flex-row items-center justify-between">
-        <RNText className="text-[15px] font-bold" style={{ color: INK }}>
-          {formatMoney(order.totalInPaise)}
-        </RNText>
-        <View className="flex-row items-center gap-3">
-          <Pressable
-            onPress={() => void handleReorder()}
-            disabled={reorderState === 'busy'}
-            accessibilityRole="button"
-            accessibilityLabel={`Buy again from order ${order.orderNumber}`}
-            hitSlop={6}
-          >
-            <RNText className="text-[12px] font-bold" style={{ color: BRAND }}>
-              {reorderState === 'busy' ? 'Adding…' : 'Buy Again'}
+          <View className="rounded-full bg-brand/10 px-2.5 py-1">
+            <RNText className="text-[10.5px] font-bold" style={{ color: BRAND }}>
+              {order.status.replaceAll('_', ' ')}
             </RNText>
-          </Pressable>
+          </View>
+        </View>
+        <RNText className="mt-0.5 text-[11.5px]" style={{ color: MUTED }}>
+          Placed {date} · {itemCount} item{itemCount === 1 ? '' : 's'}
+        </RNText>
+        {firstItem ? (
+          <RNText className="mt-1.5 text-[12.5px]" style={{ color: INK }} numberOfLines={1}>
+            {firstItem.productTitle}
+            {order.items.length > 1 ? ` +${order.items.length - 1} more` : ''}
+          </RNText>
+        ) : null}
+        <View className="mt-2 flex-row items-center justify-between">
+          <RNText className="text-[15px] font-bold" style={{ color: INK }}>
+            {formatMoney(order.totalInPaise)}
+          </RNText>
           <View className="flex-row items-center gap-0.5">
             <RNText className="text-[12px] font-bold" style={{ color: BRAND }}>
               View details
@@ -200,7 +185,29 @@ function OrderCard({ order }: { order: OrderResponse }) {
             <Ionicons name="chevron-forward" size={13} color={BRAND} />
           </View>
         </View>
+      </Pressable>
+
+      <View className="mt-2 border-t border-line pt-2">
+        <Pressable
+          onPress={() => void handleReorder()}
+          disabled={reorderState === 'busy'}
+          accessibilityRole="button"
+          accessibilityLabel={`Buy again from order ${order.orderNumber}`}
+          accessibilityState={{ disabled: reorderState === 'busy', busy: reorderState === 'busy' }}
+          className="h-10 flex-row items-center justify-center gap-2 rounded-xl active:opacity-75"
+          style={{ backgroundColor: '#F2F7F1', opacity: reorderState === 'busy' ? 0.65 : 1 }}
+        >
+          <Ionicons name="refresh" size={15} color={BRAND} />
+          <RNText className="text-[12.5px] font-bold" style={{ color: BRAND }}>
+            {reorderState === 'busy' ? 'Adding to cart…' : 'Buy Again'}
+          </RNText>
+        </Pressable>
       </View>
-    </Pressable>
+      {reorderError !== null ? (
+        <RNText accessibilityLiveRegion="polite" className="mt-2 text-[11.5px] leading-4" style={{ color: '#B42318' }}>
+          {reorderError}
+        </RNText>
+      ) : null}
+    </View>
   );
 }

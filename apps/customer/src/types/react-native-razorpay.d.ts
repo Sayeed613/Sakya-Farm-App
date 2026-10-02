@@ -6,6 +6,7 @@ declare module 'react-native-razorpay' {
     currency: string;
     name: string;
     description: string;
+    method?: 'upi' | 'card' | 'netbanking';
     prefill?: {
       contact?: string;
       name?: string;

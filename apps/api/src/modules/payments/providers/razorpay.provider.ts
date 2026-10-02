@@ -46,6 +46,7 @@ export class RazorpayProvider implements PaymentProvider {
         error instanceof DOMException && error.name === 'TimeoutError'
           ? 'Razorpay gateway timed out'
           : 'Razorpay could not create the payment order',
+        { cause: error },
       );
     }
     const payload: unknown = await response.json();
@@ -122,6 +123,7 @@ export class RazorpayProvider implements PaymentProvider {
         error instanceof DOMException && error.name === 'TimeoutError'
           ? 'Razorpay gateway timed out'
           : 'Razorpay did not return a payment list for this order',
+        { cause: error },
       );
     }
     if (response.status === 404) return null;
@@ -151,6 +153,52 @@ export class RazorpayProvider implements PaymentProvider {
       currency: decisive.currency,
       rawPayload: decisive,
     };
+  }
+
+  /**
+   * Capture an authorized payment (`POST /payments/:id/capture`).
+   *
+   * Razorpay only captures immediately when the account's auto-capture
+   * setting is on; otherwise every test payment would sit authorized forever
+   * (and auto-release), stranding the order. Amount + currency are required
+   * by the capture API and are cross-checked by the service before we get
+   * here, so a mismatch fails loudly.
+   */
+  async capturePayment(input: {
+    providerPaymentId: string;
+    amountInPaise: number;
+    currency: string;
+  }): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(
+        `${RAZORPAY_API}/payments/${encodeURIComponent(input.providerPaymentId)}/capture`,
+        {
+          method: 'POST',
+          headers: this.apiHeaders(),
+          body: JSON.stringify({ amount: input.amountInPaise, currency: input.currency }),
+          signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof DOMException && error.name === 'TimeoutError'
+          ? 'Razorpay gateway timed out'
+          : 'Razorpay could not capture the payment',
+        { cause: error },
+      );
+    }
+    const payload: unknown = await response.json().catch(() => null);
+    // Already captured is a success for us: the follow-up status read will
+    // see `captured`; anything else is a real failure worth retrying later.
+    const description =
+      isRecord(payload) && isRecord(payload.error) && typeof payload.error.description === 'string'
+        ? payload.error.description
+        : null;
+    const alreadyCaptured = response.status === 400 && description !== null && /already captured/i.test(description);
+    if (!response.ok && !alreadyCaptured) {
+      throw new Error('Razorpay could not capture the payment');
+    }
   }
 
   buildIntentResponse(view: IntentView): Record<string, unknown> {

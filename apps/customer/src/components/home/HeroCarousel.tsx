@@ -100,6 +100,11 @@ function HeroCarouselInner({ slides }: HeroCarouselProps) {
         showsHorizontalScrollIndicator={false}
         data={slides}
         keyExtractor={(slide) => slide.key}
+        getItemLayout={(_, index) => ({
+          length: slideW,
+          offset: (slideW + GAP) * index,
+          index,
+        })}
         viewabilityConfig={viewabilityRef.current}
         onViewableItemsChanged={handleViewableItemsChanged}
         contentContainerStyle={{ paddingHorizontal: screenPadding, gap: GAP }}

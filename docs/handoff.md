@@ -197,14 +197,15 @@ always visible and is the real flow.
 
 ## 7. Sanity checks (Audit task 4) — all green
 
-Run 2026-09-26:
+Run 2026-10-02 (the 2026-09-26 numbers are superseded):
 
 | Check                        | apps/api                        | apps/customer          |
 | ---------------------------- | ------------------------------- | ---------------------- |
 | `typecheck`                  | 0 errors                        | 0 errors               |
-| `lint`                       | 0 errors (19 pre-existing warnings) | 0 errors           |
-| `test`                       | 233 passed / 37 skipped (26 files) | 63 passed (6 files) |
+| `lint`                       | 0 errors (20 pre-existing warnings) | 0 errors           |
+| `test`                       | 283 passed / 37 skipped (32 files) | 63 passed (6 files) |
 
+Shared packages: `@sakya/utils` 30 passed, `@sakya/validation` 11 passed.
 **Nothing fails.** Skip conditions to know about:
 
 - API **e2e DB tests are gated**: they run only with `RUN_DB_E2E=1`
@@ -234,3 +235,21 @@ cd apps/api && RUN_DB_E2E=1 pnpm test           # include DB e2e
 For production launch: `NODE_ENV=production`, `OTP_DEMO_MODE=false` + real
 `MSG91_*` credentials, real JWT secrets, `TRUST_PROXY`/`CORS_ORIGINS` set for
 the deployed host — and resolve the COD expiry defect in §5.1 first.
+
+---
+
+## 9. Repository hygiene
+
+- `apps/customer/.qa-profile/` — a headless-Chrome QA profile (491 tracked
+  files: caches, History, GPU blobs) is committed to git and dirties every
+  `git status` with dozens of M/D entries. It is now listed in `.gitignore`,
+  which alone does NOT untrack already-tracked files. To stop tracking it
+  WITHOUT touching anything on disk (safe, reversible):
+
+  ```bash
+  git rm -r --cached apps/customer/.qa-profile
+  ```
+
+- Root-level audit/handoff notes now live in `docs/` (this file,
+  `journey-audit.md`, `customer-ui-qa-audit.md`, `scaling-summary.md`); the
+  full backend + customer flow diagrams are in [`system-flow.md`](./system-flow.md).

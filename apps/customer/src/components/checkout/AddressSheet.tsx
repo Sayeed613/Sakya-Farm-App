@@ -71,7 +71,7 @@ export interface AddressSheetProps {
   /** Signed-in customers can persist the address to their server-side book. */
   canSaveToBook?: boolean;
   /** Present = the sheet also reports the customer's save-to-book choice. */
-  onSave?: (address: CheckoutAddress, saveToBook: boolean) => void;
+  onSave?: (address: CheckoutAddress, saveToBook: boolean) => void | Promise<void>;
   /** Kept for backward compatibility when onSave is not provided. */
   onLegacySave?: (address: CheckoutAddress) => void;
   onClose: () => void;
@@ -110,6 +110,7 @@ export function AddressSheet({
   const [form, setForm] = useState<CheckoutAddress>(EMPTY);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [alsoSave, setAlsoSave] = useState(false);
+  const [saving, setSaving] = useState(false);
   /** 'idle' | 'locating' | 'done' | 'failed' — Zomato-style GPS fill. */
   const [geoStatus, setGeoStatus] = useState<'idle' | 'locating' | 'done' | 'failed'>('idle');
 
@@ -162,14 +163,14 @@ export function AddressSheet({
   useEffect(() => {
     if (!visible) return;
     setErrors({});
-    setAlsoSave(false);
+    setAlsoSave(canSaveToBook && initial == null);
     setForm({
       ...EMPTY,
       ...(initial ?? {}),
       fullName: initial?.fullName || contactDefaults?.name || '',
       phone: toLocalPhone(initial?.phone || contactDefaults?.phone || ''),
     });
-  }, [visible, initial, contactDefaults]);
+  }, [visible, initial, contactDefaults, canSaveToBook]);
 
   const canSave = useMemo(
     () =>
@@ -187,7 +188,8 @@ export function AddressSheet({
     setErrors((current) => ({ ...current, [key]: undefined }));
   }
 
-  function handleSave() {
+  async function handleSave() {
+    if (saving || !canSave) return;
     const next: FieldErrors = {};
     if (form.fullName.trim() === '') next.fullName = 'Name is required';
     if (!PHONE_RE.test(form.phone)) next.phone = 'Enter a valid 10-digit mobile number';
@@ -213,7 +215,12 @@ export function AddressSheet({
     };
 
     if (onSave !== undefined) {
-      onSave(cleaned, alsoSave && canSaveToBook);
+      setSaving(true);
+      try {
+        await onSave(cleaned, alsoSave && canSaveToBook);
+      } finally {
+        setSaving(false);
+      }
     } else {
       onLegacySave?.(cleaned);
     }
@@ -388,16 +395,18 @@ export function AddressSheet({
 
               <Pressable
                 onPress={handleSave}
-                disabled={!canSave}
+                disabled={!canSave || saving}
                 accessibilityRole="button"
                 accessibilityLabel="Save delivery address"
-                accessibilityState={{ disabled: !canSave }}
+                accessibilityState={{ disabled: !canSave || saving, busy: saving }}
                 className={
                   'h-[50px] rounded-full bg-brand items-center justify-center mt-3' +
                   (!canSave ? ' opacity-55' : '')
                 }
               >
-                <RNText className="text-white text-[15px] font-bold">Save address</RNText>
+                <RNText className="text-white text-[15px] font-bold">
+                  {saving ? 'Saving address…' : 'Save address'}
+                </RNText>
               </Pressable>
             </Animated.View>
           </KeyboardAvoidingView>

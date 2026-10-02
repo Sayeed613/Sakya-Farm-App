@@ -5,7 +5,7 @@ import { PaymentsService, type PaymentRowView } from './payments.service';
 import { ManualProvider } from './providers/manual.provider';
 import { MockProvider } from './providers/mock.provider';
 import { RazorpayProvider } from './providers/razorpay.provider';
-import type { PaymentProvider } from './providers/payment-provider.interface';
+import type { PaymentProvider, ProviderWebhookEvent } from './providers/payment-provider.interface';
 
 function row(overrides: Partial<PaymentRowView> = {}): PaymentRowView {
   const now = new Date('2026-01-01T00:00:00.000Z');
@@ -82,6 +82,7 @@ function setup(withRazorpay = false) {
     orderStatusHistoryCreate,
     paymentFindUnique,
     paymentFindFirst,
+    paymentFindMany,
     paymentCreate,
     paymentUpdate,
     paymentFindUniqueOrThrow,
@@ -378,5 +379,101 @@ describe('PaymentsService webhooks', () => {
         rawPayload: {},
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('PaymentsService reconciliation (pull-based capture)', () => {
+  let ctx: ReturnType<typeof setup>;
+
+  const gatewayEvent = (
+    type: 'authorized' | 'captured',
+    overrides: Partial<ProviderWebhookEvent> = {},
+  ): ProviderWebhookEvent => ({
+    type,
+    providerPaymentId: 'pay_rzp_1',
+    providerOrderId: 'order_rzp_1',
+    amountInPaise: 49900,
+    currency: 'INR',
+    rawPayload: { status: type },
+    ...overrides,
+  });
+
+  const gatewayRow = (status: string): PaymentRowView =>
+    row({ provider: 'RAZORPAY', providerOrderId: 'order_rzp_1', method: 'UPI', status });
+
+  beforeEach(() => {
+    ctx = setup(true);
+  });
+
+  it('captures an authorized gateway payment and applies the captured event', async () => {
+    const fetchStatus = vi
+      .spyOn(ctx.razorpay, 'fetchPaymentStatus')
+      .mockResolvedValueOnce(gatewayEvent('authorized'))
+      .mockResolvedValueOnce(gatewayEvent('captured'));
+    const capture = vi.spyOn(ctx.razorpay, 'capturePayment').mockResolvedValue(undefined);
+    ctx.paymentFindFirst.mockResolvedValue(gatewayRow('PENDING'));
+    ctx.paymentUpdate.mockImplementation(async () =>
+      gatewayRow('CAPTURED') as never,
+    );
+    ctx.orderFindUnique.mockResolvedValue({ id: 'order-id', status: 'PENDING_PAYMENT' });
+
+    const applied = await ctx.service.reconcilePayment(gatewayRow('PENDING'));
+
+    expect(capture).toHaveBeenCalledWith({
+      providerPaymentId: 'pay_rzp_1',
+      amountInPaise: 49900,
+      currency: 'INR',
+    });
+    expect(fetchStatus).toHaveBeenCalledTimes(2);
+    expect(applied?.type).toBe('captured');
+    expect(ctx.paymentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'CAPTURED', providerPaymentId: 'pay_rzp_1' }),
+      }),
+    );
+    expect(ctx.orderStatusHistoryCreate).toHaveBeenCalledOnce();
+  });
+
+  it('still applies the authorization when the capture call fails (next reconcile retries)', async () => {
+    const fetchStatus = vi
+      .spyOn(ctx.razorpay, 'fetchPaymentStatus')
+      .mockResolvedValueOnce(gatewayEvent('authorized'));
+    vi.spyOn(ctx.razorpay, 'capturePayment').mockRejectedValue(new Error('capture refused'));
+    ctx.paymentFindFirst.mockResolvedValue(gatewayRow('PENDING'));
+    ctx.paymentUpdate.mockImplementation(async () => gatewayRow('AUTHORIZED') as never);
+    ctx.orderFindUnique.mockResolvedValue({ id: 'order-id', status: 'PENDING_PAYMENT' });
+
+    const applied = await ctx.service.reconcilePayment(gatewayRow('PENDING'));
+
+    // One status read only: the failed capture short-circuits the re-read and
+    // the AUTHORIZED money is still recorded (never dropped, never cancelled).
+    expect(fetchStatus).toHaveBeenCalledTimes(1);
+    expect(applied?.type).toBe('authorized');
+    expect(ctx.paymentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'AUTHORIZED' }),
+      }),
+    );
+  });
+
+  it('re-drives an AUTHORIZED row from the list endpoint until captured', async () => {
+    const authorizedRow = gatewayRow('AUTHORIZED');
+    const capturedRow = gatewayRow('CAPTURED');
+    ctx.orderFindFirst.mockResolvedValue({ id: 'order-id' });
+    ctx.paymentFindMany
+      .mockResolvedValueOnce([authorizedRow])
+      .mockResolvedValueOnce([capturedRow]);
+    vi.spyOn(ctx.razorpay, 'fetchPaymentStatus')
+      .mockResolvedValueOnce(gatewayEvent('authorized'))
+      .mockResolvedValueOnce(gatewayEvent('captured'));
+    vi.spyOn(ctx.razorpay, 'capturePayment').mockResolvedValue(undefined);
+    ctx.paymentFindFirst.mockResolvedValue(authorizedRow);
+    ctx.paymentUpdate.mockImplementation(async () => capturedRow as never);
+    ctx.orderFindUnique.mockResolvedValue({ id: 'order-id', status: 'PENDING_PAYMENT' });
+
+    const attempts = await ctx.service.listForOrder('user-id', 'order-id');
+
+    // The capture ran inside the read, and the caller sees the advanced row.
+    expect(attempts.map((attempt) => attempt.status)).toEqual(['CAPTURED']);
   });
 });

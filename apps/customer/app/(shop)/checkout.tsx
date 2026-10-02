@@ -4,8 +4,8 @@ import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, useRouter } from 'expo-router';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cartApi } from '../../src/api/cart';
@@ -17,30 +17,32 @@ import {
   type OnlinePaymentMethod,
 } from '../../src/api/checkout';
 import type { CartResponse, OrderResponse, PaymentDetail } from '@sakya/types';
-import { toPaise } from '@sakya/utils';
-import { AddressSheet } from '../../src/components/checkout/AddressSheet';
-import { AddressPickerSheet } from '../../src/components/checkout/AddressPickerSheet';
-import { EmptyState } from '../../src/components/EmptyState';
+import { containsFreshProduce as cartHasFreshProduce, toPaise } from '@sakya/utils';
 import { ErrorState } from '../../src/components/ErrorState';
 import { SkeletonBlock } from '../../src/components/LoadingSkeleton';
-import { PromoCards } from '../../src/components/commerce/PromoCards';
 import { formatMoney } from '../../src/lib/format';
 import { goBackOrHome } from '../../src/lib/navigation';
 import { addressesApi } from '../../src/api/notifications-api';
 import { useAuthStore } from '../../src/stores/auth-store';
 import { useLastAddressStore } from '../../src/stores/last-address-store';
 import { useLastPaymentMethodStore } from '../../src/stores/last-payment-method-store';
-import { openRazorpayWebCheckout } from '../../src/lib/razorpay-checkout';
+import { openRazorpayWebCheckout, reserveRazorpayPopup } from '../../src/lib/razorpay-checkout';
 import { softShadow } from '../../src/lib/shadows';
+
+import { AddressSelection } from './components/AddressSelection';
+import { ApplyCouponCard } from './components/ApplyCouponCard';
+import { PaymentMethodSelection } from './components/PaymentMethodSelection';
+import { OrderReview } from './components/OrderReview';
+import { CheckoutProgress } from './components/CheckoutProgress';
+import { addressLine, addressLabel } from './components/addressHelpers';
+import { EmptyCart } from './components/EmptyCart';
 
 const BRAND = '#0B594C';
 const BRAND_DARK = '#08483E';
-const BRAND_TINT = 'rgba(11, 89, 76, 0.08)';
 const INK = '#171A18';
 const MUTED = '#6F6C63';
 const SUBTLE = '#8C8A80';
 const LINE = '#EFEAE1';
-const SURFACE_MUTED = '#F3EDE3';
 const DANGER = '#B42318';
 /** Completed steps + savings figures. Deliberately lighter than BRAND. */
 const GREEN = '#1F7A43';
@@ -65,8 +67,8 @@ const CARD_BORDER = '#EDE7DC';
 const PAYMENTS_DEMO_ENABLED = process.env.EXPO_PUBLIC_PAYMENTS_DEMO === 'true';
 /**
  * Live online payments are a server capability: the gateway key arrives in the
- * server's payment intent, so the client flag alone gates the UI. Never require
- * a public key id here — the client must not hold gateway credentials.
+ * server's payment intent, so the client flag alone gates the UI. The client
+ * must not hold gateway credentials — the public key id is never required.
  */
 const RAZORPAY_ENABLED = process.env.EXPO_PUBLIC_RAZORPAY_ENABLED === 'true';
 const ONLINE_PAYMENTS_ENABLED = PAYMENTS_DEMO_ENABLED || RAZORPAY_ENABLED;
@@ -90,15 +92,6 @@ export default function CheckoutScreen() {
   const lastAddress = useLastAddressStore((state) => state.address);
   const rememberAddress = useLastAddressStore((state) => state.remember);
 
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  /** The Payment Method options render expanded so UPI/Card/COD are
-   * immediately visible without an extra tap. */
-  const [paymentOpen, setPaymentOpen] = useState(true);
-  const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>(() => {
-    const saved = useLastPaymentMethodStore.getState().method;
-    return saved === 'UPI' || saved === 'CARD' || saved === 'NET_BANKING' ? saved : 'COD';
-  });
   const [placing, setPlacing] = useState(false);
   /** Inline online-payment failure (stays on checkout; never an Alert). */
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -117,6 +110,7 @@ export default function CheckoutScreen() {
    * silently does nothing.
    */
   const [orderError, setOrderError] = useState<string | null>(null);
+  const [addressBookError, setAddressBookError] = useState<string | null>(null);
 
   /*
    * DEMO PAYMENT SHEET — for online methods the flow goes: place order →
@@ -125,13 +119,6 @@ export default function CheckoutScreen() {
    * payment row until it resolves. The UI never claims success on its own.
    */
   const [pendingPayment, setPendingPayment] = useState<PaymentDetail | null>(null);
-
-  /**
-   * Prefill for the manual-entry sheet. Normally null (last-used address
-   * applies); set when editing a saved row from the picker, cleared on close.
-   */
-  const editPrefillRef = useRef<CheckoutAddress | null>(null);
-  const sheetInitial = editPrefillRef.current;
 
   const cart = useQuery({ queryKey: ['cart'], queryFn: cartApi.getCart, staleTime: 15_000 });
 
@@ -175,7 +162,7 @@ export default function CheckoutScreen() {
   const [address, setAddress] = useState<CheckoutAddress | null>(() => {
     if (lastAddress === null) return null;
     if (matchedSaved) {
-      return {
+      const newAddress = {
         fullName: matchedSaved.recipientName,
         phone: matchedSaved.phone,
         line1: matchedSaved.line1,
@@ -185,20 +172,24 @@ export default function CheckoutScreen() {
         state: matchedSaved.state,
         postalCode: matchedSaved.pincode,
       };
+      rememberAddress(newAddress);
+      return newAddress;
     }
     return lastAddress;
   });
+
+  /** True once the customer explicitly picked or saved an address this visit. */
+  const pickerConfirmedRef = useRef(false);
 
   // The book can ARRIVE after mount (async query). When it does and the
   // customer has not already confirmed a row in the picker this session, swap
   // the provisional last-address for its saved twin so the picker highlights
   // the right row without any extra tap.
-  const pickerConfirmedRef = useRef(false);
   useEffect(() => {
     if (pickerConfirmedRef.current || matchedSaved === null) return;
     setAddress((current) => {
       if (current === null || current !== lastAddress) return current;
-      return {
+      const newAddress = {
         fullName: matchedSaved.recipientName,
         phone: matchedSaved.phone,
         line1: matchedSaved.line1,
@@ -208,8 +199,29 @@ export default function CheckoutScreen() {
         state: matchedSaved.state,
         postalCode: matchedSaved.pincode,
       };
+      // Update the lastAddress store to keep the cart card in sync
+      rememberAddress(newAddress);
+      return newAddress;
     });
-  }, [matchedSaved, lastAddress]);
+  }, [matchedSaved, lastAddress, pickerConfirmedRef]);
+
+  useEffect(() => {
+    if (pickerConfirmedRef.current || lastAddress !== null || address !== null || book.data === undefined) {
+      return;
+    }
+    const saved = book.data.addresses.find((candidate) => candidate.isDefault) ?? book.data.addresses[0];
+    if (saved === undefined) return;
+    setAddress({
+      fullName: saved.recipientName,
+      phone: saved.phone,
+      line1: saved.line1,
+      line2: saved.line2 ?? '',
+      landmark: saved.landmark ?? '',
+      city: saved.city,
+      state: saved.state,
+      postalCode: saved.pincode,
+    });
+  }, [address, book.data, lastAddress]);
 
   const hasItems = (cart.data?.items.length ?? 0) > 0;
 
@@ -222,24 +234,41 @@ export default function CheckoutScreen() {
    * address changes; a retry exists for transient failures.
    */
   const pincode = address?.postalCode.replace(/\D/g, '') ?? '';
+  const containsFreshProduce = (cart.data?.items ?? []).some((item) =>
+    cartHasFreshProduce(item.categorySlugs ?? []),
+  );
   const delivery = useQuery({
-    queryKey: ['serviceability', pincode],
-    queryFn: () => journeyApi.checkServiceability(pincode),
-    enabled: pincode.length === 6,
+    queryKey: ['serviceability', pincode, containsFreshProduce],
+    queryFn: () => journeyApi.checkServiceability(pincode, containsFreshProduce),
+    enabled: pincode.length === 6 && cart.data !== undefined,
     staleTime: 60_000,
     retry: 1,
   });
-  const recheckDelivery = useMutation({ mutationFn: () => journeyApi.checkServiceability(pincode) });
+  const recheckDelivery = useMutation({
+    mutationFn: () => journeyApi.checkServiceability(pincode, containsFreshProduce),
+  });
 
-  const contactDefaults = useMemo(() => {
-    // session.user is guarded: a malformed persisted session (partial JSON,
-    // older shape) must not crash the whole checkout — prefill just degrades.
-    if (session === null || session.user === undefined || session.user === null) return null;
-    return {
-      name: [session.user.firstName, session.user.lastName].filter(Boolean).join(' ').trim(),
-      phone: session.user.phone ?? '',
-    };
-  }, [session]);
+  /**
+   * Persist a manual address to the server book. Errors PROPAGATE:
+   * AddressSelection turns a failure into a visible alert while the order
+   * still ships to the address that was entered.
+   */
+  const saveAddressToBook = useCallback(
+    async (saved: CheckoutAddress) => {
+      await addressesApi.create({
+        recipientName: saved.fullName,
+        phone: saved.phone,
+        line1: saved.line1,
+        line2: saved.line2 === '' ? null : saved.line2,
+        landmark: saved.landmark === '' ? null : saved.landmark,
+        city: saved.city,
+        state: saved.state,
+        pincode: saved.postalCode,
+      });
+      void queryClient.invalidateQueries({ queryKey: ['addresses'] });
+    },
+    [queryClient],
+  );
 
   /** Post-order cart cleanup shared by the COD path and the demo sheet. */
   const clearCartAfterOrder = useCallback(() => {
@@ -265,6 +294,15 @@ export default function CheckoutScreen() {
 
   async function handlePlaceOrder() {
     if (address === null || !hasItems || placing) return;
+
+    const needsRazorpayPopup =
+      Platform.OS === 'web' && method !== 'COD' && RAZORPAY_ENABLED && !PAYMENTS_DEMO_ENABLED;
+    const reservedPopup = needsRazorpayPopup ? reserveRazorpayPopup(method) : null;
+    if (needsRazorpayPopup && reservedPopup === null) {
+      setPaymentError('Allow pop-ups for Sakya Farms to continue to secure payment.');
+      return;
+    }
+    let popupHandedOff = false;
 
     setPlacing(true);
     setOrderError(null);
@@ -345,6 +383,8 @@ export default function CheckoutScreen() {
                 amountInPaise: intent.amount,
                 currency: intent.currency,
                 orderNumber: placedOrder.orderNumber,
+                method,
+                reservedPopup: reservedPopup ?? undefined,
               },
               {
                 onSuccess: () => {
@@ -364,6 +404,7 @@ export default function CheckoutScreen() {
                 onError: (error) => setPaymentError(friendlyError(error.message)),
               },
             );
+            popupHandedOff = true;
           } catch (cause) {
             const message =
               cause instanceof Error ? friendlyError(cause.message) : 'Please try again in a moment.';
@@ -391,9 +432,20 @@ export default function CheckoutScreen() {
       // to the Add → Checkout → Pay Now budget.
       setOrderError(message);
     } finally {
+      if (reservedPopup !== null && !popupHandedOff && !reservedPopup.closed) {
+        reservedPopup.close();
+      }
       setPlacing(false);
     }
   }
+
+  const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>(() => {
+    const saved = useLastPaymentMethodStore.getState().method;
+    return saved === 'UPI' || saved === 'CARD' || saved === 'NET_BANKING' ? saved : 'COD';
+  });
+
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   if (session === null) {
     // Route-level guard; kept as a hard stop in case of deep-linking.
@@ -466,7 +518,38 @@ export default function CheckoutScreen() {
               </RNText>
             </View>
 
-            {/* DELIVERY — ONE card. The top half is the address (tap to add
+            {/* Address Selection */}
+            <AddressSelection
+              address={address}
+              pickerOpen={pickerOpen}
+              sheetOpen={sheetOpen}
+              onPickerOpenChange={setPickerOpen}
+              onSheetOpenChange={setSheetOpen}
+              onAddressChange={(picked) => {
+                // A manual save is an explicit choice — it wins over the
+                // cart-derived match for the rest of this visit.
+                pickerConfirmedRef.current = true;
+                setAddressBookError(null);
+                setAddress(picked);
+                // `picked` can theoretically be null (clear); the store only
+                // persists a real address.
+                if (picked !== null) rememberAddress(picked);
+              }}
+              onAddressConfirm={(picked) => {
+                pickerConfirmedRef.current = true;
+                setAddress(picked);
+                rememberAddress(picked);
+              }}
+              onSaveToAddressBook={saveAddressToBook}
+              onAddressBookSaveStatus={setAddressBookError}
+            />
+            {addressBookError !== null ? (
+              <RNText className="mx-4 mt-2 text-[11.5px] leading-4" style={{ color: DANGER }}>
+                {addressBookError}
+              </RNText>
+            ) : null}
+
+            {/* Delivery — ONE card. The top half is the address (tap to add
                 or change), the bottom half is the live delivery status for
                 that address. Previously these were TWO separate cards that
                 both opened the same sheet, which read as a duplicate. */}
@@ -564,209 +647,33 @@ export default function CheckoutScreen() {
 
             {/* Payment method — ONE row per the reference. Tapping it opens
                 the COD / UPI / Card radios, which stay the source of truth. */}
-            <DetailCard
-              icon={method === 'COD' ? 'cash-outline' : 'card-outline'}
-              iconColor={INK}
-              iconBackground="#F1EEE6"
-              badge={method === 'UPI' ? 'UPI' : undefined}
-              title="Payment Method"
-              primary={paymentCopy(method).title}
-              secondary={paymentCopy(method).blurb}
-              onPress={() => setPaymentOpen((value) => !value)}
-              trailingIcon={paymentOpen ? 'chevron-up' : 'chevron-forward'}
-              accessibilityLabel="Change payment method"
-            >
-              {paymentOpen ? (
-                <View>
-                  <View className="h-px" style={{ backgroundColor: LINE }} />
-                  <MethodRow
-                    selected={method === 'COD'}
-                    onSelect={() => setMethod('COD')}
-                    icon="cash-outline"
-                    title="Cash on Delivery"
-                    subtitle="Pay when your order arrives"
-                  />
-                  {ONLINE_PAYMENTS_ENABLED ? (
-                    <>
-                      <View className="h-px" style={{ backgroundColor: LINE }} />
-                      <MethodRow
-                        selected={method === 'UPI'}
-                        onSelect={() => setMethod('UPI')}
-                        icon="phone-portrait-outline"
-                        title="UPI"
-                        subtitle={PAYMENTS_DEMO_ENABLED ? 'Pay with any UPI app' : 'Pay securely with UPI'}
-                        trailing={
-                          PAYMENTS_DEMO_ENABLED ? (
-                            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
-                              <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
-                                DEMO
-                              </RNText>
-                            </View>
-                          ) : null
-                        }
-                      />
-                      <View className="h-px" style={{ backgroundColor: LINE }} />
-                      <MethodRow
-                        selected={method === 'CARD'}
-                        onSelect={() => setMethod('CARD')}
-                        icon="card-outline"
-                        title="Card"
-                        subtitle="Credit / debit — Visa, Mastercard, RuPay"
-                        trailing={
-                          PAYMENTS_DEMO_ENABLED ? (
-                            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: SURFACE_MUTED }}>
-                              <RNText className="text-[9.5px] font-bold" style={{ color: MUTED }}>
-                                DEMO
-                              </RNText>
-                            </View>
-                          ) : null
-                        }
-                      />
-                    </>
-                  ) : null}
-                </View>
-              ) : null}
-            </DetailCard>
-
-            {/* SAVINGS CARDS — the two offers, with honest live state.
-                Delivery rule and coupon come from the server's own totals;
-                the cards only READ the cart, they never compute money. */}
-            <View className="mx-3">
-            <PromoCards
-              subtotalInPaise={cart.data.subtotalInPaise}
-              shippingInPaise={cart.data.shippingInPaise}
-              couponCode={cart.data.coupon?.code ?? null}
-              onPickCoupon={() => router.push('/(shop)/cart')}
+            <PaymentMethodSelection
+              method={method}
+              onMethodChange={setMethod}
+              isOnlinePaymentsEnabled={ONLINE_PAYMENTS_ENABLED}
             />
+
+            {/* APPLY COUPON — explicit Apply, applied state with Remove,
+                server-authoritative totals. CouponBox writes the returned
+                cart into the ['cart'] cache, so Price Details and the
+                place-order amount update the moment the server accepts.
+                `forceOpen` shows the pre-selected code on arrival: the
+                customer sees SAKYA100 ready, taps Apply, and the server's
+                confirmation (the applied state) is the confirm step. */}
+            <View className="mx-3">
+              <ApplyCouponCard
+                coupon={cart.data.coupon ?? null}
+                subtotalInPaise={cart.data.subtotalInPaise}
+                forceOpen
+              />
             </View>
 
-            {/* Order items — what is actually being approved, from the server
-                cart, WITH the product imagery. No client math. */}
-            <View className="mx-3 mt-3.5">
-              <View className="mb-2 flex-row items-center justify-between px-1">
-                <RNText className="text-[14px] font-extrabold" style={{ color: INK }}>
-                  {`Order items (${itemCount})`}
-                </RNText>
-                <Pressable
-                  onPress={() => router.push('/(shop)/cart')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Edit order items"
-                  hitSlop={8}
-                  className="active:opacity-60"
-                >
-                  <RNText className="text-[12.5px] font-bold" style={{ color: BRAND }}>
-                    Edit
-                  </RNText>
-                </Pressable>
-              </View>
-
-              <View
-                className="flex-row items-center gap-2.5 rounded-[14px] border bg-white p-2.5"
-                style={{ borderColor: CARD_BORDER, ...softShadow }}
-              >
-                {cart.data.items.slice(0, 3).map((item) => (
-                  <View
-                    key={item.id}
-                    className="items-center justify-center overflow-hidden rounded-[10px]"
-                    style={{ backgroundColor: SURFACE_MUTED, height: 62, width: 62 }}
-                  >
-                    {item.productImageUrl !== null ? (
-                      <ExpoImage
-                        source={{ uri: item.productImageUrl }}
-                        style={{ width: 62, height: 62 }}
-                        contentFit="cover"
-                        cachePolicy="disk"
-                        recyclingKey={item.id}
-                        accessibilityIgnoresInvertColors
-                      />
-                    ) : (
-                      <Ionicons name="leaf-outline" size={20} color={SUBTLE} />
-                    )}
-                  </View>
-                ))}
-
-                <View className="flex-1 items-end">
-                  <Pressable
-                    onPress={() => router.push('/(shop)/cart')}
-                    accessibilityRole="button"
-                    accessibilityLabel="Review all items"
-                    className="h-[34px] w-[34px] items-center justify-center rounded-full active:opacity-70"
-                    style={{ backgroundColor: '#F4F1E9' }}
-                  >
-                    <Ionicons name="chevron-forward" size={16} color={INK} />
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-
-            {/* Price details — the server cart's own numbers, verbatim. */}
-            <View
-              className="mx-3 mt-3 rounded-[14px] border bg-white px-3.5 py-3.5"
-              style={{ borderColor: CARD_BORDER, ...softShadow }}
-            >
-              <RNText className="mb-2.5 text-[14px] font-extrabold" style={{ color: INK }}>
-                Price Details
-              </RNText>
-
-              <View className="mb-1.5 flex-row items-center justify-between">
-                <RNText className="text-[12.5px]" style={{ color: MUTED }}>
-                  {`Items total (${itemCount} ${itemCount === 1 ? 'item' : 'items'})`}
-                </RNText>
-                <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
-                  {formatMoney(cart.data.subtotalInPaise)}
-                </RNText>
-              </View>
-
-              {cart.data.discountInPaise > 0 ? (
-                <View className="mb-1.5 flex-row items-center justify-between">
-                  <RNText className="text-[12.5px]" style={{ color: GREEN }}>
-                    {cart.data.coupon !== null
-                      ? `Discount (Coupon: ${cart.data.coupon.code})`
-                      : 'Discount'}
-                  </RNText>
-                  <RNText className="text-[12.5px] font-semibold" style={{ color: GREEN }}>
-                    {`−${formatMoney(cart.data.discountInPaise)}`}
-                  </RNText>
-                </View>
-              ) : null}
-
-              {/* Taxes are inclusive in the displayed prices — no tax row is
-                  ever added. The fine print says so once, below the total. */}
-
-              <View className="flex-row items-center justify-between">
-                <View className="flex-row items-center gap-1">
-                  <RNText className="text-[12.5px]" style={{ color: MUTED }}>
-                    Delivery charges
-                  </RNText>
-                  <Ionicons name="information-circle-outline" size={13} color={SUBTLE} />
-                </View>
-
-                {cart.data.shippingInPaise > 0 ? (
-                  <RNText className="text-[12.5px] font-semibold" style={{ color: INK }}>
-                    {formatMoney(cart.data.shippingInPaise)}
-                  </RNText>
-                ) : (
-                  <RNText className="text-[12.5px] font-semibold" style={{ color: GREEN }}>
-                    FREE
-                  </RNText>
-                )}
-              </View>
-
-              <View
-                className="mt-2.5 flex-row items-center justify-between border-t pt-2.5"
-                style={{ borderColor: LINE }}
-              >
-                <RNText className="text-[14.5px] font-extrabold" style={{ color: INK }}>
-                  Total amount
-                </RNText>
-                <RNText className="text-[15.5px] font-extrabold" style={{ color: INK }}>
-                  {formatMoney(cart.data.totalInPaise)}
-                </RNText>
-              </View>
-              <RNText className="mt-2 text-[10.5px] leading-[14px]" style={{ color: SUBTLE }}>
-                Prices are inclusive of all applicable taxes.
-              </RNText>
-            </View>
+            {/* Order Review */}
+            <OrderReview
+              cart={cart.data}
+              itemCount={itemCount}
+              onEditCart={() => router.push('/(shop)/cart')}
+            />
           </ScrollView>
 
           {/* Place-order bar — STATIC (not absolute) so the confirm button is
@@ -880,77 +787,6 @@ export default function CheckoutScreen() {
               </RNText>
             </View>
           </View>
-
-          {/* Address book picker (signed-in): saved addresses from the server. */}
-          <AddressPickerSheet
-            visible={pickerOpen}
-            selected={address}
-            onClose={() => setPickerOpen(false)}
-            onConfirm={(picked) => {
-              // An explicit picker confirm wins over the cart-derived match
-              // for the rest of this visit.
-              pickerConfirmedRef.current = true;
-              setAddress(picked);
-              rememberAddress(picked);
-              setPickerOpen(false);
-            }}
-            onEdit={(prefill) => {
-              setPickerOpen(false);
-              setSheetOpen(true);
-              editPrefillRef.current = prefill;
-            }}
-            onAddNew={() => {
-              // Fresh entry: clear any edit prefill so the sheet opens EMPTY
-              // (session name/phone still apply via contactDefaults).
-              editPrefillRef.current = null;
-              setPickerOpen(false);
-              setSheetOpen(true);
-            }}
-          />
-
-          {/* Manual entry / edit. `sheetInitial` wins over the last-used
-              default so editing a saved row opens THAT row's data. */}
-          <AddressSheet
-            visible={sheetOpen}
-            initial={sheetInitial}
-            contactDefaults={contactDefaults}
-            canSaveToBook
-            onSave={(saved, saveToBook) => {
-              // A manual save is an explicit customer choice too.
-              pickerConfirmedRef.current = true;
-              setAddress(saved);
-              rememberAddress(saved);
-              setSheetOpen(false);
-              if (saveToBook) {
-                // Visible outcome either way — a silent failure looks broken.
-                void (async () => {
-                  try {
-                    await addressesApi.create({
-                      recipientName: saved.fullName,
-                      phone: saved.phone,
-                      line1: saved.line1,
-                      line2: saved.line2 === '' ? null : saved.line2,
-                      landmark: saved.landmark === '' ? null : saved.landmark,
-                      city: saved.city,
-                      state: saved.state,
-                      pincode: saved.postalCode,
-                    });
-                    void queryClient.invalidateQueries({ queryKey: ['addresses'] });
-                  } catch {
-                    Alert.alert(
-                      'Address not saved to your address book',
-                      'Your order will still deliver to this address. You can save it to your address book next time.',
-                      [{ text: 'OK' }],
-                    );
-                  }
-                })();
-              }
-            }}
-            onClose={() => {
-              setSheetOpen(false);
-              editPrefillRef.current = null;
-            }}
-          />
 
           {/* DEMO PAYMENT SHEET — demo builds only; unreachable otherwise
               because no online method can be selected. Drives the provider
@@ -1217,61 +1053,7 @@ function CheckoutHeaderBar() {
    green so the sequence reads at a glance over the artwork.
    =========================================================================== */
 
-function CheckoutProgress({
-  steps,
-}: {
-  steps: readonly { label: string; state: 'done' | 'current' | 'future' }[];
-}) {
-  return (
-    <View className="flex-row items-start px-4 pt-2.5" pointerEvents="none">
-      {steps.map((step, index) => (
-        <Fragment key={step.label}>
-          {index > 0 ? (
-            <View
-              style={[
-                styles.progressLine,
-                steps[index - 1]?.state === 'done' ? styles.progressLineDone : null,
-              ]}
-            />
-          ) : null}
-
-          <View style={styles.progressStep}>
-            <View
-              style={[
-                styles.progressDot,
-                step.state === 'done' ? styles.progressDotDone : null,
-                step.state === 'current' ? styles.progressDotCurrent : null,
-                step.state === 'future' ? styles.progressDotFuture : null,
-              ]}
-            >
-              {step.state === 'done' ? (
-                <Ionicons name="checkmark" size={13} color="#FFFFFF" />
-              ) : (
-                <RNText
-                  style={[
-                    styles.progressIndex,
-                    step.state === 'current' ? styles.progressIndexCurrent : null,
-                  ]}
-                >
-                  {index + 1}
-                </RNText>
-              )}
-            </View>
-
-            <RNText
-              style={[
-                styles.progressLabel,
-                step.state === 'future' ? styles.progressLabelFuture : null,
-              ]}
-            >
-              {step.label}
-            </RNText>
-          </View>
-        </Fragment>
-      ))}
-    </View>
-  );
-}
+/* This component has been moved to ./components/CheckoutProgress.tsx */
 
 /* ===========================================================================
    DETAIL CARD — icon tile + title + two-line detail + chevron
@@ -1281,188 +1063,29 @@ function CheckoutProgress({
    row inside the same card, which is how the payment radios expand.
    =========================================================================== */
 
-function DetailCard({
-  icon,
-  iconColor,
-  iconBackground,
-  badge,
-  title,
-  primary,
-  secondary,
-  onPress,
-  accessibilityLabel,
-  trailingIcon = 'chevron-forward',
-  trailingColor = SUBTLE,
-  children,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  iconColor: string;
-  iconBackground: string;
-  badge?: string;
-  title: string;
-  primary?: string;
-  secondary?: string;
-  onPress?: () => void;
-  accessibilityLabel: string;
-  trailingIcon?: keyof typeof Ionicons.glyphMap;
-  trailingColor?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <View
-      className="mx-3 mt-3 overflow-hidden rounded-[14px] border bg-white"
-      style={{ borderColor: CARD_BORDER, ...softShadow }}
-    >
-      <Pressable
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel={accessibilityLabel}
-        className="flex-row items-center gap-3 p-3.5 active:opacity-85"
-      >
-        <View
-          className="h-[38px] w-[38px] items-center justify-center rounded-full"
-          style={{ backgroundColor: iconBackground }}
-        >
-          {badge !== undefined ? (
-            <RNText className="text-[10px] font-extrabold" style={{ color: iconColor }}>
-              {badge}
-            </RNText>
-          ) : (
-            <Ionicons name={icon} size={19} color={iconColor} />
-          )}
-        </View>
+/* This component has been moved to ./components/DetailCard.tsx */
 
-        <View className="min-w-0 flex-1">
-          <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
-            {title}
-          </RNText>
-          {primary !== undefined ? (
-            <RNText className="mt-0.5 text-[12px]" style={{ color: MUTED }}>
-              {primary}
-            </RNText>
-          ) : null}
-          {secondary !== undefined ? (
-            <RNText className="text-[11.5px] leading-[15px]" style={{ color: SUBTLE }}>
-              {secondary}
-            </RNText>
-          ) : null}
-        </View>
+/* ===========================================================================
+   COPY FOR THE COLLAPSED PAYMENT METHOD ROW (mirrors the method radios).
+   =========================================================================== */
 
-        <Ionicons name={trailingIcon} size={17} color={trailingColor} />
-      </Pressable>
+/* This function has been moved to ./components/paymentCopy.ts */
 
-      {children}
-    </View>
-  );
-}
-
-/** Copy for the collapsed Payment Method row (mirrors the method radios). */
-function paymentCopy(method: 'COD' | OnlinePaymentMethod): { title: string; blurb: string } {
-  if (method === 'COD') {
-    return { title: 'Cash on Delivery', blurb: 'Pay when your order arrives' };
-  }
-  if (method === 'UPI') {
-    return { title: 'UPI', blurb: 'GPay, PhonePe, Paytm & all UPI apps' };
-  }
-  return { title: 'Card', blurb: 'Credit / debit card — Visa, Mastercard, RuPay' };
-}
-
-function MethodRow({
-  selected,
-  onSelect,
-  icon,
-  title,
-  subtitle,
-  trailing,
-}: {
-  selected: boolean;
-  onSelect: () => void;
-  icon: keyof typeof Ionicons.glyphMap;
-  title: string;
-  subtitle: string;
-  trailing?: React.ReactNode;
-}) {
-  return (
-    <Pressable
-      onPress={onSelect}
-      accessibilityRole="radio"
-      accessibilityLabel={title}
-      accessibilityState={{ selected }}
-      className="flex-row items-center gap-3 p-3.5"
-      // Selected row gets the brand-tint wash — the navbar active-capsule
-      // recipe — so the choice reads at a glance without heavy borders.
-      style={selected ? { backgroundColor: BRAND_TINT } : null}
-    >
-      <View
-        className="h-[34px] w-[34px] items-center justify-center rounded-full"
-        style={{ backgroundColor: selected ? BRAND : SURFACE_MUTED }}
-      >
-        <Ionicons name={icon} size={17} color={selected ? '#FFFFFF' : INK} />
-      </View>
-      <View className="flex-1">
-        <RNText className="text-[13.5px] font-bold" style={{ color: INK }}>
-          {title}
-        </RNText>
-        <RNText className="text-[11.5px]" style={{ color: MUTED }}>
-          {subtitle}
-        </RNText>
-      </View>
-      {trailing}
-      <View
-        className="h-5 w-5 items-center justify-center rounded-full border-2"
-        style={{ borderColor: selected ? BRAND : LINE }}
-      >
-        {selected ? <View className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: BRAND }} /> : null}
-      </View>
-    </Pressable>
-  );
-}
-
-function EmptyCart({ onBrowse }: { onBrowse: () => void }) {
-  return (
-    <EmptyState
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      image={require('../../src/assets/empty-cart.png')}
-      title="Your cart is empty"
-      message="Add something fresh and come back to check out."
-      ctaLabel="Browse products"
-      onCta={onBrowse}
-    />
-  );
-}
+/* ===========================================================================
+   METHOD ROW — removed: the payment choices are now three side-by-side
+   tiles inside PaymentMethodSelection.tsx (no stacked radio rows).
+   =========================================================================== */
 
 
-/**
- * Single-line rendering of the delivery card.
- *
- * Reads like the delivery apps: "Home · #233, 1st cross, …" — the customer's
- * own words lead, the city/state collapse into the tail, and the pincode is
- * always visible last. The full detail is one tap away via Change.
- */
-function addressLine(address: CheckoutAddress): string {
-  const street = [address.line1, address.line2 ?? '', address.landmark ?? '']
-    .map((part) => part.trim())
-    .filter((part) => part !== '')
-    .join(', ');
-  const tail = [address.city, address.state].map((part) => part.trim()).filter((part) => part !== '');
-  return [street, ...tail, address.postalCode.replace(/\D/g, '')].filter(Boolean).join(', ');
-}
+/* ===========================================================================
+   ADDRESS LINE AND LABEL HELPERS
+   =========================================================================== */
 
-/**
- * Short card title like "Home · #233 1st Cross" — a tag (derived from who
- * the address is for / what it contains) plus the first few words of the
- * street. The full address lives in `addressLine` below it.
- */
-function addressLabel(address: CheckoutAddress): string {
-  const street = address.line1.trim();
-  const shortStreet = street.split(/\s+/).slice(0, 4).join(' ');
-  const tag = /office|work/i.test(street)
-    ? 'Office'
-    : /flat|apt|apartment/i.test(street)
-      ? 'Flat'
-      : 'Home';
-  return `${tag} · ${shortStreet}`;
-}
+/* These functions have been moved to ./components/addressHelpers.tsx */
+
+/* ===========================================================================
+   STYLES
+   =========================================================================== */
 
 const styles = StyleSheet.create({
   /* ── Progress over the artwork ──────────────────────────────────────── */

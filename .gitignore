@@ -34,6 +34,11 @@ Thumbs.db
 !.vscode/extensions.json
 !.vscode/settings.json.example
 
+# QA tooling artifacts — headless-Chrome profile written by scripts/drive-screen.mjs.
+# Never belongs in git (491 tracked binary/cache files; see the untrack note in
+# docs/handoff.md). Pattern matches at any depth.
+.qa-profile/
+
 # Turborepo
 .turbo/
 

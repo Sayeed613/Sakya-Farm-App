@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 
 import { cartApi } from '../api/cart';
@@ -62,6 +62,24 @@ export function useProductAdd(
   const isAuthenticated = useAuthStore((state) => state.session !== null);
   const preferredVariantId = options?.preferredVariantId ?? null;
 
+  const serverCart = useQuery({
+    queryKey: ['cart'],
+    queryFn: cartApi.getCart,
+    enabled: isAuthenticated,
+    staleTime: 15_000,
+  });
+  const activeLines = useMemo(
+    () =>
+      isAuthenticated
+        ? (serverCart.data?.items ?? []).map((item) => ({
+            id: item.id,
+            variantId: item.variantId,
+            quantity: item.quantity,
+          }))
+        : lines.map((line) => ({ id: null, variantId: line.variantId, quantity: line.quantity })),
+    [isAuthenticated, lines, serverCart.data],
+  );
+
   const [resolving, setResolving] = useState(false);
 
   const detailKey = useMemo(() => ['catalog', 'product', product.slug] as const, [product.slug]);
@@ -92,17 +110,17 @@ export function useProductAdd(
     // product is already in the cart owns the stepper (first line wins), so a
     // picker-chosen variant keeps its quantity visible on the card.
     const variantIds = new Set(detail.variants.map((variant) => variant.id));
-    const line = lines.find((candidate) => variantIds.has(candidate.variantId));
+    const line = activeLines.find((candidate) => variantIds.has(candidate.variantId));
     return line?.quantity ?? 0;
-  }, [readDetail, lines]);
+  }, [readDetail, activeLines]);
 
   /** The variant currently owning this product's stepper, if any. */
   const activeVariantId = useMemo(() => {
     const detail = readDetail();
     if (!detail) return null;
     const variantIds = new Set(detail.variants.map((variant) => variant.id));
-    return lines.find((candidate) => variantIds.has(candidate.variantId))?.variantId ?? null;
-  }, [readDetail, lines]);
+    return activeLines.find((candidate) => variantIds.has(candidate.variantId))?.variantId ?? null;
+  }, [readDetail, activeLines]);
 
   const add = useCallback(async () => {
     const detail = await fetchDetail();
@@ -116,11 +134,11 @@ export function useProductAdd(
      * the guest store, which would be invisible (and merged again later).
      */
     if (isAuthenticated) {
-      await cartApi.addItem({
+      const updated = await cartApi.addItem({
         variantId: variant.id,
         quantity: 1,
       });
-      await queryClient.invalidateQueries({ queryKey: ['cart'] });
+      queryClient.setQueryData(['cart'], updated);
       return;
     }
 
@@ -131,46 +149,59 @@ export function useProductAdd(
 
   /** Add exactly the chosen variant (picker/detail flows). */
   const addVariant = useCallback(
-    (variant: { id: string; priceInPaise: number; title?: string }) => {
+    async (variant: { id: string; priceInPaise: number; title?: string }) => {
+      if (isAuthenticated) {
+        const updated = await cartApi.addItem({ variantId: variant.id, quantity: 1 });
+        queryClient.setQueryData(['cart'], updated);
+        return;
+      }
       rememberPrice(variant.id, variant.priceInPaise);
       addLine(variant.id, 1, variant.title ? displaySnapshot(readDetail(), variant as never) : undefined);
     },
-    [addLine, rememberPrice, readDetail],
+    [addLine, isAuthenticated, queryClient, rememberPrice, readDetail],
   );
 
   const increment = useCallback(async () => {
     const detail = await fetchDetail();
     // Bump the line that owns the stepper, else the preferred/default variant.
     const variantIds = new Set(detail.variants.map((variant) => variant.id));
-    const owned = lines.find((candidate) => variantIds.has(candidate.variantId));
+    const owned = activeLines.find((candidate) => variantIds.has(candidate.variantId));
     const variant =
       detail.variants.find((candidate) => candidate.id === (owned?.variantId ?? preferredVariantId)) ??
       defaultVariantOfDetail(detail);
     if (!variant) return;
 
     if (isAuthenticated) {
-      await cartApi.addItem({
+      const updated = await cartApi.addItem({
         variantId: variant.id,
         quantity: 1,
       });
-      await queryClient.invalidateQueries({ queryKey: ['cart'] });
+      queryClient.setQueryData(['cart'], updated);
       return;
     }
 
     rememberPrice(variant.id, variant.priceInPaise);
-    const current = lines.find((line) => line.variantId === variant.id)?.quantity ?? 0;
+    const current = activeLines.find((line) => line.variantId === variant.id)?.quantity ?? 0;
     setQuantity(variant.id, current + 1);
-  }, [fetchDetail, lines, setQuantity, rememberPrice, preferredVariantId, isAuthenticated, queryClient]);
+  }, [fetchDetail, activeLines, setQuantity, rememberPrice, preferredVariantId, isAuthenticated, queryClient]);
 
-  const decrement = useCallback(() => {
+  const decrement = useCallback(async () => {
     const detail = readDetail();
     if (!detail) return;
     const variantIds = new Set(detail.variants.map((variant) => variant.id));
-    const owned = lines.find((candidate) => variantIds.has(candidate.variantId));
+    const owned = activeLines.find((candidate) => variantIds.has(candidate.variantId));
     if (!owned) return;
     const current = owned.quantity;
+    if (isAuthenticated && owned.id !== null) {
+      const updated =
+        current <= 1
+          ? await cartApi.removeItem(owned.id)
+          : await cartApi.updateItem(owned.id, { quantity: current - 1 });
+      queryClient.setQueryData(['cart'], updated);
+      return;
+    }
     setQuantity(owned.variantId, current - 1);
-  }, [readDetail, lines, setQuantity]);
+  }, [readDetail, activeLines, isAuthenticated, queryClient, setQuantity]);
 
   return { quantity, add, addVariant, increment, decrement, resolving, activeVariantId };
 }

@@ -25,7 +25,12 @@ function toCartItemResponse(item: {
     title: string | null;
     sku: string | null;
     isAvailable: boolean | null;
-    product: { title: string | null; slug?: string; images?: { url: string; position: number }[] };
+    product: {
+      title: string | null;
+      slug?: string;
+      images?: { url: string; position: number }[];
+      categories?: { category: { slug: string } }[];
+    };
   };
 }): CartItemResponse {
   const unitPrice = toPaise(item.unitPriceInPaise);
@@ -37,6 +42,7 @@ function toCartItemResponse(item: {
     variantTitle: item.variant.title ?? 'Unknown variant',
     productImageUrl: images[0]?.url ?? null,
     productSlug: item.variant.product.slug ?? '',
+    categorySlugs: (item.variant.product.categories ?? []).map(({ category }) => category.slug),
     sku: item.variant.sku,
     quantity: item.quantity,
     unitPriceInPaise: unitPrice,
@@ -58,7 +64,7 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
       items: {
         where: { quantity: { gt: 0 } },
         orderBy: { createdAt: 'asc' },
-        include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } } } } } } },
+        include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } }, categories: { select: { category: { select: { slug: true } } } } } } } } },
       },
       coupon: true,
     },
@@ -68,7 +74,7 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
     const created = await prisma.cart.create({
       data: { userId, status: 'ACTIVE', currency: 'INR' },
       include: {
-        items: { include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } } } } } } } },
+        items: { include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } }, categories: { select: { category: { select: { slug: true } } } } } } } } } },
         coupon: true,
       },
     });

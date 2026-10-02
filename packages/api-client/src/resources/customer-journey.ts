@@ -60,7 +60,7 @@ import { parseInput } from '../schema';
  * same schemas the server uses, so an invalid request never leaves the app.
  */
 export interface CustomerJourneyResource {
-  checkServiceability(pincode: string): Promise<ServiceabilityResponse>;
+  checkServiceability(pincode: string, containsFreshProduce?: boolean): Promise<ServiceabilityResponse>;
 
   listWishlist(): Promise<WishlistResponse>;
   addWishlistItem(input: WishlistAddRequest): Promise<WishlistResponse>;
@@ -90,9 +90,12 @@ export interface CustomerJourneyResource {
 
 export function createCustomerJourneyResource(http: HttpClient): CustomerJourneyResource {
   return {
-    async checkServiceability(pincode: string): Promise<ServiceabilityResponse> {
+    async checkServiceability(
+      pincode: string,
+      containsFreshProduce = false,
+    ): Promise<ServiceabilityResponse> {
       return http.request<ServiceabilityResponse>('/serviceability', {
-        query: { pincode },
+        query: { pincode, containsFreshProduce: String(containsFreshProduce) },
       });
     },
 

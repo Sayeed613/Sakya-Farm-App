@@ -395,11 +395,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     zIndex: 50,
-    shadowColor: '#073F36',
-    shadowOpacity: 0.14,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 12,
+    boxShadow: '0 8px 18px rgba(7, 63, 54, 0.14)',
     backgroundColor: '#FFFFFF',
   },
 });

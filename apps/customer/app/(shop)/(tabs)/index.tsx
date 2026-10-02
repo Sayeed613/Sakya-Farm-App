@@ -2,7 +2,6 @@ import { router, useFocusEffect } from 'expo-router';
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
-  Pressable,
   RefreshControl,
   Text as RNText,
   View,
@@ -12,7 +11,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BANNER_H, BANNER_W, PEEK } from '../../../src/components/home/HeroCarousel';
 import { useResponsive } from '../../../src/lib/responsive';
-import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 
 import { ErrorState } from '../../../src/components/ErrorState';
@@ -24,20 +22,23 @@ import {
   type VariantPickerState,
 } from '../../../src/components/commerce/VariantPickerSheet';
 import { DiscoveryGrid } from '../../../src/components/home/DiscoveryGrid';
-import { HeroCarousel } from '../../../src/components/home/HeroCarousel';
 import { CategoryIconStrip } from '../../../src/components/home/CategoryIconStrip';
 import { ProductDuoRail } from '../../../src/components/home/ProductDuoRail';
 import { HomeHeader } from '../../../src/components/home/HomeHeader';
 import { ProductSection } from '../../../src/components/home/ProductSection';
 import { SakyaPromoBanner } from '../../../src/components/home/SakyaPromoBanner';
 import { SectionHeader } from '../../../src/components/home/SectionHeader';
-import { BRAND_PHILOSOPHY, HERO_SLIDES, PROMO_BANNERS } from '../../../src/config/home-content';
+import { HERO_SLIDES, PROMO_BANNERS } from '../../../src/config/home-content';
 import { useHomeCatalog } from '../../../src/hooks/use-home-catalog';
 import { useHomeDiscovery, type DiscoveryTile } from '../../../src/hooks/use-home-discovery';
 import { useFreshToday } from '../../../src/hooks/use-fresh-today';
-import { DeliveryProgressBar } from '../../../src/components/home/DeliveryProgressBar';
 import { navBarVisibility, navVisibleFromScroll } from '../../../src/lib/nav-visibility';
 import { headerCollapse, headerCollapsedFromScroll } from '../../../src/lib/header-collapse';
+
+// Import extracted components
+import { HomeFooter } from './components/HomeFooter';
+import { BrandPhilosophy } from './components/BrandPhilosophy';
+import { WelcomeBanner } from './components/WelcomeBanner';
 
 const BOTTOM_NAV_CLEARANCE = 120;
 
@@ -51,7 +52,6 @@ type HomeRailRow = {
 
 type Row =
   | { key: string; type: 'header' }
-  | { key: string; type: 'progress' }
   | { key: string; type: 'strip' }
   | { key: string; type: 'fresh-today' }
   | { key: string; type: 'welcome' }
@@ -184,7 +184,7 @@ interface HomeListProps {
 
 function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant }: HomeListProps) {
   const [refreshing, setRefreshing] = useState(false);
-  const { subtotalInPaise, itemCount } = useCartSummary();
+  const { itemCount } = useCartSummary();
   const freshToday = useFreshToday();
   const { contentWidth, screenPadding } = useResponsive();
 
@@ -333,9 +333,6 @@ function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant 
     // The promo carousel IS the hero: it sits directly under the green band
     // (Blinkit/Zepto order).
     list.push({ key: 'welcome', type: 'welcome' });
-    // Free-delivery progress: only when the cart is non-empty (the component
-    // animates its own presence, the row just reserves a slot).
-    list.push({ key: 'progress', type: 'progress' });
     // "Fresh today" — the daily-rotating variable-reward rail.
     if (freshToday.products.length > 0) list.push({ key: 'fresh-today', type: 'fresh-today' });
 
@@ -423,8 +420,6 @@ function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant 
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<Row>) => {
       switch (item.type) {
-        case 'progress':
-          return <DeliveryProgressBar subtotalInPaise={subtotalInPaise} />;
         case 'welcome':
           return (
             <View className="mt-4">
@@ -504,23 +499,22 @@ function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant 
           return <HomeFooter />;
         default:
           return null;
-      }
-    },
-    [
-      subtotalInPaise,
-      heroSlides,
-      freshToday.products,
-      onPressProduct,
-      onQuickView,
-      onPickVariant,
-      pantryTiles,
-      discoveryById,
-      openTile,
-      editorialRails,
-      openCategory,
-      seeAllByRailId,
-    ],
-  );
+        }
+      },
+      [
+        heroSlides,
+        freshToday.products,
+        onPressProduct,
+        onQuickView,
+        onPickVariant,
+        pantryTiles,
+        discoveryById,
+        openTile,
+        editorialRails,
+        openCategory,
+        seeAllByRailId,
+      ],
+    );
 
   if (rows[0]?.type === 'skeleton') {
     return <HomeSkeleton />;
@@ -643,80 +637,15 @@ const COLLECTION_TITLES: Record<string, string> = {
  * the checkout uses (support settings), never invented claims. A quiet
  * trademark line ends the scroll.
  */
-function HomeFooter() {
-  const openRoute = useCallback((route: string) => router.push(route), []);
 
-  const links: Array<{ label: string; route: string }> = [
-    { label: 'Shop All', route: '/(shop)/categories' },
-    { label: 'Sakya Fresh', route: '/(shop)/fresh' },
-    { label: 'My Orders', route: '/(shop)/orders' },
-    { label: 'Wishlist', route: '/(shop)/wishlist' },
-    { label: 'Help & Support', route: '/(shop)/support' },
-  ];
-
-  return (
-    <View className="mt-12 overflow-hidden rounded-t-3xl bg-brand/5 px-6 pb-10 pt-8">
-      {/* Wordmark row: the real logo asset, tinted brand green. */}
-      <View className="items-center">
-        <Image
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          source={require('../../../src/images/sakya-logo-white.png')}
-          style={{ width: 104, height: 52, tintColor: '#0B594C' }}
-          contentFit="contain"
-          cachePolicy="memory"
-          accessibilityLabel="Sakya Farms"
-        />
-        <RNText className="mt-2 text-center text-[12px] leading-5 text-ink-soft">
-          Pure food. Rooted in tradition.
-        </RNText>
-      </View>
-
-      {/* Real navigation links — every route is a live screen. */}
-      <View className="mt-6 flex-row flex-wrap justify-center gap-x-5 gap-y-2">
-        {links.map((link) => (
-          <Pressable
-            key={link.route}
-            onPress={() => openRoute(link.route)}
-            accessibilityRole="link"
-            accessibilityLabel={link.label}
-            hitSlop={6}
-          >
-            <RNText className="text-[12.5px] font-semibold text-brand">{link.label}</RNText>
-          </Pressable>
-        ))}
-      </View>
-
-      <View className="mt-6 items-center gap-1">
-        <RNText className="text-[11px] text-ink-soft">
-          Farm-direct · Packed at source · Delivered fresh
-        </RNText>
-        <RNText className="text-[10px] tracking-wide text-ink-soft/70">
-          © {new Date().getFullYear()} Sakya Farms. All rights reserved.
-        </RNText>
-      </View>
-    </View>
-  );
-}
+/* This function has been moved to ./components/HomeFooter.tsx */
 
 /**
  * Brand philosophy: quiet, premium, factual. No testimonials, no review-style
  * marketing, no claims the backend cannot back — just the farm-to-home idea.
  */
-function BrandPhilosophy() {
-  return (
-    <View className="mt-8 items-center gap-1.5 px-10 pb-2">
-      <RNText className="text-[10px] font-bold uppercase tracking-widest text-ink-soft">
-        {BRAND_PHILOSOPHY.eyebrow}
-      </RNText>
-      <RNText className="text-center font-serif text-[19px] leading-6 text-ink">
-        {BRAND_PHILOSOPHY.heading}
-      </RNText>
-      <RNText className="mt-1 text-center text-[13px] leading-5 text-ink-soft">
-        {BRAND_PHILOSOPHY.body}
-      </RNText>
-    </View>
-  );
-}
+
+/* This function has been moved to ./components/BrandPhilosophy.tsx */
 
 /**
  * Welcome hero: the 6-slide promo carousel directly under the green band —
@@ -724,16 +653,5 @@ function BrandPhilosophy() {
  * every supplied creative renders with pill/expand dot pagination; each
  * slide taps through to its category.
  */
-function WelcomeBanner({
-  slides,
-}: {
-  slides: Array<{
-    key: string;
-    image: import('react-native').ImageSourcePropType;
-    accessibilityLabel: string;
-    onPress: () => void;
-  }>;
-}) {
-  if (slides.length === 0) return null;
-  return <HeroCarousel slides={slides} />;
-}
+
+/* This function has been moved to ./components/WelcomeBanner.tsx */

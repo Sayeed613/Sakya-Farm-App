@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text as RNText, TextInput, View } from 'react-native';
 
 import { cartApi } from '../../api/cart';
+import { formatMoney } from '../../lib/format';
 import { colors } from '../../theme';
 import type { AppliedCouponResponse, CartResponse } from '@sakya/types';
 
@@ -22,16 +23,31 @@ import type { AppliedCouponResponse, CartResponse } from '@sakya/types';
  * box itself therefore carries NO card chrome — only the inner field row
  * (filled input style) and the applied-coupon state.
  */
-export function CouponBox({ coupon }: { coupon: AppliedCouponResponse | null }) {
+export function CouponBox({
+  coupon,
+  initialCode = '',
+  subtotalInPaise,
+  minimumInPaise,
+}: {
+  coupon: AppliedCouponResponse | null;
+  initialCode?: string;
+  subtotalInPaise?: number;
+  minimumInPaise?: number;
+}) {
   const queryClient = useQueryClient();
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(initialCode);
   const [error, setError] = useState<string | null>(null);
+  const belowMinimum =
+    code.trim().toUpperCase() === 'SAKYA100' &&
+    subtotalInPaise !== undefined &&
+    minimumInPaise !== undefined &&
+    subtotalInPaise < minimumInPaise;
 
   const apply = useMutation({
     mutationFn: () => cartApi.applyCoupon(code.trim()),
     onSuccess: (data: CartResponse) => {
       queryClient.setQueryData(['cart'], data);
-      setCode('');
+      setCode(initialCode);
       setError(null);
     },
     onError: (err: Error) => {
@@ -43,6 +59,7 @@ export function CouponBox({ coupon }: { coupon: AppliedCouponResponse | null }) 
     mutationFn: () => cartApi.removeCoupon(),
     onSuccess: (data: CartResponse) => {
       queryClient.setQueryData(['cart'], data);
+      setCode(initialCode);
       setError(null);
     },
     onError: (err: Error) => {
@@ -112,16 +129,21 @@ export function CouponBox({ coupon }: { coupon: AppliedCouponResponse | null }) 
             }
             apply.mutate();
           }}
-          disabled={apply.isPending || code.trim().length === 0}
+          disabled={apply.isPending || code.trim().length === 0 || belowMinimum}
           style={({ pressed }) => [
             styles.applyBtn,
-            (apply.isPending || code.trim().length === 0 || pressed) && { opacity: 0.5 },
+            (apply.isPending || code.trim().length === 0 || belowMinimum || pressed) && { opacity: 0.5 },
           ]}
         >
           <RNText style={styles.applyText}>{apply.isPending ? '…' : 'APPLY'}</RNText>
         </Pressable>
       </View>
 
+      {belowMinimum ? (
+        <RNText style={styles.error}>
+          Add {formatMoney(minimumInPaise! - subtotalInPaise!)} more to use SAKYA100.
+        </RNText>
+      ) : null}
       {error !== null ? <RNText style={styles.error}>{error}</RNText> : null}
     </View>
   );

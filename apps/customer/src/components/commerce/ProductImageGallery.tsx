@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   Dimensions,
-  FlatList,
   Pressable,
+  ScrollView,
   View,
   type LayoutChangeEvent,
   type NativeScrollEvent,
@@ -58,6 +58,7 @@ function ProductImageGalleryInner({
   );
 
   const [index, setIndex] = useState(0);
+  const gestureReleaseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const urls = useMemo(() => {
     const fromDetail = (product.images ?? [])
@@ -73,6 +74,29 @@ function ProductImageGalleryInner({
   }, [product.images, product.imageUrls]);
 
   const height = fixedHeight ?? GALLERY_HEIGHT;
+
+  const beginCarouselGesture = () => {
+    if (gestureReleaseTimer.current !== null) {
+      clearTimeout(gestureReleaseTimer.current);
+      gestureReleaseTimer.current = null;
+    }
+    onCarouselTouchStart?.();
+  };
+
+  const finishCarouselGesture = () => {
+    if (gestureReleaseTimer.current !== null) clearTimeout(gestureReleaseTimer.current);
+    gestureReleaseTimer.current = setTimeout(() => {
+      gestureReleaseTimer.current = null;
+      onCarouselTouchEnd?.();
+    }, 280);
+  };
+
+  useEffect(
+    () => () => {
+      if (gestureReleaseTimer.current !== null) clearTimeout(gestureReleaseTimer.current);
+    },
+    [],
+  );
 
   const measurePage = (event: LayoutChangeEvent) => {
     const nextWidth = event.nativeEvent.layout.width;
@@ -90,7 +114,7 @@ function ProductImageGalleryInner({
     event: NativeSyntheticEvent<NativeScrollEvent>,
   ) => {
     if (pageWidth <= 0 || urls.length === 0) {
-      onCarouselTouchEnd?.();
+      finishCarouselGesture();
       return;
     }
 
@@ -105,7 +129,7 @@ function ProductImageGalleryInner({
 
     setIndex(nextIndex);
 
-    onCarouselTouchEnd?.();
+    finishCarouselGesture();
   };
 
   if (urls.length === 0) {
@@ -138,8 +162,7 @@ function ProductImageGalleryInner({
         backgroundColor: NEUTRAL_BG,
       }}
     >
-      <FlatList
-        data={urls}
+      <ScrollView
         horizontal
         pagingEnabled
         bounces={false}
@@ -149,34 +172,18 @@ function ProductImageGalleryInner({
         decelerationRate="fast"
         scrollEventThrottle={16}
         keyboardShouldPersistTaps="handled"
-
-        /*
-         * IMPORTANT:
-         *
-         * Tell the parent product pager to stop handling
-         * horizontal gestures while the user is interacting
-         * with the image carousel.
-         */
-        onTouchStart={() => {
-          onCarouselTouchStart?.();
-        }}
-
-        onTouchEnd={() => {
-          onCarouselTouchEnd?.();
-        }}
-
-        onTouchCancel={() => {
-          onCarouselTouchEnd?.();
-        }}
-
+        contentContainerStyle={{ flexDirection: 'row' }}
+        onTouchStart={beginCarouselGesture}
+        onTouchEnd={finishCarouselGesture}
+        onTouchCancel={finishCarouselGesture}
+        onScrollBeginDrag={beginCarouselGesture}
+        onScrollEndDrag={handleScrollEnd}
+        onMomentumScrollBegin={beginCarouselGesture}
         onMomentumScrollEnd={handleScrollEnd}
-
-        keyExtractor={(url, imageIndex) =>
-          `${product.slug}-${url}-${imageIndex}`
-        }
-
-        renderItem={({ item }) => (
+      >
+        {urls.map((item, imageIndex) => (
           <Pressable
+            key={`${product.slug}-${item}-${imageIndex}`}
             onPress={onPressImage}
             accessibilityRole="imagebutton"
             accessibilityLabel="Product image"
@@ -192,7 +199,7 @@ function ProductImageGalleryInner({
                 width: '100%',
                 height: '100%',
               }}
-              contentFit="fill"
+              contentFit="contain"
               cachePolicy="disk"
 
               /*
@@ -202,8 +209,8 @@ function ProductImageGalleryInner({
               transition={0}
             />
           </Pressable>
-        )}
-      />
+        ))}
+      </ScrollView>
 
       {urls.length > 1 ? (
         <View

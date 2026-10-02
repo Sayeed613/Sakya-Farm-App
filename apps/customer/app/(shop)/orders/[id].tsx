@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, Text as RNText, View } from 'react-native';
+import { Platform, Pressable, RefreshControl, ScrollView, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ordersApi } from '../../../src/api/orders-api';
@@ -16,7 +16,7 @@ import { CancelReasonSheet } from '../../../src/components/orders/CancelReasonSh
 import { ReturnSheet, type ReturnableItem } from '../../../src/components/orders/ReturnSheet';
 import { InvoiceSheet } from '../../../src/components/orders/InvoiceSheet';
 import { formatMoney } from '../../../src/lib/format';
-import { openRazorpayWebCheckout } from '../../../src/lib/razorpay-checkout';
+import { openRazorpayWebCheckout, reserveRazorpayPopup } from '../../../src/lib/razorpay-checkout';
 import {
   cancellationBanner,
   codPendingNote,
@@ -114,6 +114,13 @@ export default function OrderDetailScreen() {
       return;
     }
 
+    const reservedPopup = Platform.OS === 'web' ? reserveRazorpayPopup(payment.method as 'UPI' | 'CARD' | 'NET_BANKING') : null;
+    if (Platform.OS === 'web' && reservedPopup === null) {
+      setPaymentRetryError('Allow pop-ups for Sakya Farms to continue to secure payment.');
+      return;
+    }
+    let popupHandedOff = false;
+
     setPaymentRetrying(true);
     setPaymentRetryError(null);
     try {
@@ -140,6 +147,8 @@ export default function OrderDetailScreen() {
           amountInPaise: intent.amount,
           currency: intent.currency,
           orderNumber: order.data.orderNumber,
+          method: payment.method as 'UPI' | 'CARD' | 'NET_BANKING',
+          reservedPopup: reservedPopup ?? undefined,
         },
         {
           onSuccess: () => {
@@ -154,12 +163,16 @@ export default function OrderDetailScreen() {
           },
         },
       );
+      popupHandedOff = true;
       await order.refetch();
     } catch (error) {
       setPaymentRetryError(
         error instanceof Error ? error.message : 'Payment was not completed. You can try again.',
       );
     } finally {
+      if (reservedPopup !== null && !popupHandedOff && !reservedPopup.closed) {
+        reservedPopup.close();
+      }
       setPaymentRetrying(false);
     }
   };
@@ -569,7 +582,10 @@ function OrderBody({
         <View className="gap-1.5">
           <TotalRow label="Subtotal" value={order.subtotalInPaise} />
           {order.discountInPaise > 0 ? (
-            <TotalRow label="Discount" value={-order.discountInPaise} />
+            <TotalRow
+              label={order.coupon !== null ? `Discount (Coupon: ${order.coupon.code})` : 'Discount'}
+              value={-order.discountInPaise}
+            />
           ) : null}
           {order.taxInPaise > 0 ? <TotalRow label="Tax" value={order.taxInPaise} /> : null}
           <TotalRow label="Shipping" value={order.shippingInPaise} />
@@ -873,7 +889,9 @@ function PlacedBanner({ order }: { order: OrderResponse }) {
             ? 'Payment received. We are getting your order ready.'
             : order.paymentStatus === 'PENDING'
               ? 'We have received your order. Payment is pending.'
-              : `Payment status: ${order.paymentStatus}`}
+              : order.paymentStatus === 'AUTHORIZED'
+                ? 'Payment authorized — confirming your order…'
+                : `Payment status: ${order.paymentStatus}`}
         </RNText>
       </View>
     </View>
@@ -897,8 +915,11 @@ function useFreshOrderPolling(order: OrderResponse | undefined, fresh: boolean) 
   useEffect(() => {
     if (!fresh || orderId === undefined || order === undefined) return;
     // COD stays PENDING by design — polling would never resolve.
+    // AUTHORIZED is also unresolved: money arrived at the gateway but capture
+    // has not landed yet, and the server keeps driving it to captured on this
+    // very endpoint (pull-based reconcile) — so we must keep watching.
     const isOnlinePending =
-      order.paymentStatus === 'PENDING' &&
+      (order.paymentStatus === 'PENDING' || order.paymentStatus === 'AUTHORIZED') &&
       order.payments.some((payment) => payment.provider !== 'MANUAL');
     if (!isOnlinePending) return;
 

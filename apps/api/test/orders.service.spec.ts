@@ -50,12 +50,13 @@ function variant(variantId: string, price = 2400) {
   };
 }
 
-function cartWithItems(...specs: Array<{ id: string; variantId: string; quantity: number; unitPriceInPaise: number }>) {
+function cartWithItems(...specs: Array<{ id: string; variantId: string; quantity: number; unitPriceInPaise: number; categorySlugs?: string[] }>) {
   return cart('user-1', 'cart-1', specs.map((spec) => ({
     id: spec.id,
     variantId: spec.variantId,
     quantity: spec.quantity,
     unitPriceInPaise: spec.unitPriceInPaise,
+    categorySlugs: spec.categorySlugs ?? [],
     variant: variant(spec.variantId, spec.unitPriceInPaise),
   })));
 }
@@ -87,6 +88,10 @@ describe('OrdersService', () => {
   });
 
   it('rejects checkout when the cart is empty', async () => {
+    // Idempotency is checked before the cart, so a safe retry of a checkout
+    // whose first attempt succeeded (and emptied the cart) still resolves to
+    // the original order — the lookup must therefore run first here too.
+    prisma.payment.findFirst.mockResolvedValue(null);
     cartService.getCurrentCart.mockResolvedValue(cart());
 
     await expect(
@@ -96,6 +101,28 @@ describe('OrdersService', () => {
         notes: null,
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects fresh-produce checkout outside Bengaluru before creating an order', async () => {
+    prisma.payment.findFirst.mockResolvedValue(null);
+    cartService.getCurrentCart.mockResolvedValue(
+      cartWithItems({
+        id: 'i1',
+        variantId: 'v1',
+        quantity: 1,
+        unitPriceInPaise: 2400,
+        categorySlugs: ['leafy-greens'],
+      }),
+    );
+
+    await expect(
+      service.checkout('user-1', {
+        idempotencyKey: 'fresh-outside-bengaluru',
+        shippingAddress: { line1: 'Home', postalCode: '400001' },
+        notes: null,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('places an order with server-computed totals and a MANUAL PENDING payment', async () => {
@@ -844,6 +871,59 @@ describe('OrdersService', () => {
 
     expect(result.orderNumber).toBe('ORD-001');
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('returns the original order on retry even after the cart was emptied', async () => {
+    // Regression: checkout empties the cart in its transaction, so a retried
+    // request (timeout, flaky network) arrives at an EMPTY cart. The
+    // idempotency lookup must run first — otherwise the safe retry 400s and
+    // looks like a failed checkout to the customer.
+    cartService.getCurrentCart.mockResolvedValue(cart()); // no items
+    prisma.payment.findFirst.mockResolvedValue({
+      id: 'payment-1',
+      orderId: 'order-1',
+      idempotencyKey: 'key-1',
+      order: {
+        id: 'order-1',
+        status: 'PENDING_PAYMENT',
+      } as any,
+    } as any);
+    prisma.order.findFirst.mockResolvedValue({
+      id: 'order-1',
+      orderNumber: 'ORD-RETRY',
+      userId: 'user-1',
+      status: 'PENDING_PAYMENT',
+      paymentStatus: 'PENDING',
+      currency: 'INR',
+      subtotalInPaise: 4800,
+      discountInPaise: 0,
+      taxInPaise: 0,
+      shippingInPaise: 4900,
+      totalInPaise: 9700,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      billingAddress: null,
+      notes: null,
+      placedAt: null,
+      cancelledAt: null,
+      deliveredAt: null,
+      cancelReason: null,
+      createdAt: new Date('2026-09-12T00:00:00Z'),
+      updatedAt: new Date('2026-09-12T00:00:00Z'),
+      items: [],
+      payments: [],
+      statusHistory: [],
+      coupon: null,
+    } as any);
+
+    const result = await service.checkout('user-1', {
+      idempotencyKey: 'key-1',
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      notes: null,
+    });
+
+    expect(result.orderNumber).toBe('ORD-RETRY');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(cartService.getCurrentCart).not.toHaveBeenCalled();
   });
 
   it('lists the caller own orders with pagination', async () => {

@@ -242,10 +242,49 @@ export class PaymentsService {
       throw new NotFoundException('No order found for the given id');
     }
 
-    const rows = await this.prisma.payment.findMany({
+    let rows = await this.prisma.payment.findMany({
       where: { orderId },
       orderBy: { createdAt: 'asc' },
     });
+
+    // Pull-based capture: the order screen polls this endpoint while an online
+    // payment is unresolved. When a gateway attempt is still awaiting
+    // capture (PENDING, or AUTHORIZED but never captured), ask the
+    // gateway its authoritative state and feed a decisive answer through the
+    // SAME state machine the webhook uses. This is what lets a test-mode
+    // payment confirm even when Razorpay's webhook cannot reach the dev
+    // machine (localhost has no public URL). The webhook stays the primary
+    // path — this only fires for rows still awaiting capture, and a
+    // gateway/transport failure returns null without failing the read.
+    const unresolvedGateway = rows.filter(
+      (row) =>
+        // PENDING covers "no answer yet"; AUTHORIZED covers "money arrived
+        // but nobody captured it". Both must be re-driven until capture,
+        // or a paid order strands forever (and its authorization expires).
+        (row.status === 'PENDING' || row.status === 'AUTHORIZED') &&
+        row.providerOrderId !== null &&
+        row.provider !== 'MOCK',
+    );
+    if (unresolvedGateway.length > 0) {
+      for (const row of unresolvedGateway) {
+        try {
+          await this.reconcilePayment(row as PaymentRowView);
+        } catch (error) {
+          // Reconciliation is best-effort here: the read must still succeed.
+          this.logger.warn(
+            `Inline reconcile failed for payment ${row.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      // Re-read so the caller gets whatever the reconcile just advanced.
+      rows = await this.prisma.payment.findMany({
+        where: { orderId },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
+
     return rows.map((row) => toPaymentDetail(row as PaymentRowView));
   }
 
@@ -284,7 +323,7 @@ export class PaymentsService {
 
     let event: ProviderWebhookEvent | null;
     try {
-    event = await provider.fetchPaymentStatus(row.providerOrderId);
+      event = await provider.fetchPaymentStatus(row.providerOrderId);
     } catch (error) {
       this.logger.warn(
         `Reconciliation could not reach ${row.provider} for order ${row.providerOrderId}: ${
@@ -295,6 +334,34 @@ export class PaymentsService {
     }
 
     if (event === null) return null;
+
+    // Gateways without auto-capture (Razorpay's default) park money in
+    // AUTHORIZED until someone captures it. Feeding `authorized` alone would
+    // strand the order — never captured, never refunded, authorization
+    // auto-releasing — so capture NOW and re-read. The gateway's answer stays
+    // the only authority: a failed capture keeps the authorization (money
+    // that exists is never cancelled) and the next reconcile retries.
+    if (event.type === 'authorized' && provider.capturePayment !== undefined) {
+      const amountInPaise = event.amountInPaise ?? row.amountInPaise;
+      const currency = event.currency ?? row.currency;
+      try {
+        await provider.capturePayment({
+          providerPaymentId: event.providerPaymentId,
+          amountInPaise,
+          currency,
+        });
+        const captured = await provider.fetchPaymentStatus(row.providerOrderId);
+        if (captured !== null && captured.type === 'captured') {
+          event = captured;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Capture of ${event.providerPaymentId} at ${row.provider} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
 
     // The gateway says money moved; funnel the event through the identical
     // path a webhook would take (amount/currency cross-check, replay

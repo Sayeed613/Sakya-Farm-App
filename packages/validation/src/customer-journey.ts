@@ -11,6 +11,7 @@ export const serviceabilityQuerySchema = z.object({
     .string()
     .trim()
     .regex(/^[1-9][0-9]{5}$/, 'Enter a valid 6-digit pincode'),
+  containsFreshProduce: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
 });
 export type ServiceabilityQuery = z.infer<typeof serviceabilityQuerySchema>;
 
@@ -24,6 +25,13 @@ export const serviceabilityAddressSchema = z.object({
     .string()
     .trim()
     .regex(/^[1-9][0-9]{5}$/, 'Enter a valid 6-digit pincode'),
+  /**
+   * Same flag as the GET /serviceability query: fresh produce only ships
+   * within Bengaluru. Omitted (older clients) means "no fresh produce in this
+   * basket", matching the query schema's default — but it must never be
+   * hardcoded per-route, or the two endpoints disagree for the same basket.
+   */
+  containsFreshProduce: z.boolean().optional(),
 });
 export type ServiceabilityAddress = z.infer<typeof serviceabilityAddressSchema>;
 

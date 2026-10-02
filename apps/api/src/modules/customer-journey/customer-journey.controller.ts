@@ -34,6 +34,7 @@ import type {
 } from '@sakya/validation';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import {
@@ -87,6 +88,9 @@ export class CustomerJourneyController {
 
   // --- Serviceability ------------------------------------------------------
 
+  // Public by contract (see route map): a shopper checks delivery before
+  // signing in, and the endpoint reveals nothing about any account.
+  @Public()
   @Get('serviceability')
   async serviceability(
     @Query(new ZodValidationPipe(serviceabilityQuerySchema)) query: ServiceabilityQuery,
@@ -94,12 +98,21 @@ export class CustomerJourneyController {
     return this.journey.checkServiceability(query);
   }
 
+  @Public()
   @Post('serviceability/check')
   @HttpCode(200)
   async serviceabilityCheck(
-    @Body(new ZodValidationPipe(serviceabilityAddressSchema)) body: { postalCode: string },
+    @Body(new ZodValidationPipe(serviceabilityAddressSchema))
+    body: { postalCode: string; containsFreshProduce?: boolean },
   ): Promise<ServiceabilityResponse> {
-    return this.journey.checkServiceability({ pincode: body.postalCode });
+    return this.journey.checkServiceability({
+      pincode: body.postalCode,
+      // Same semantics as GET /serviceability: a basket with fresh produce is
+      // only serviceable inside Bengaluru. Never hardcode false here — that
+      // made this endpoint answer "serviceable" for baskets the order gate
+      // would later reject.
+      containsFreshProduce: body.containsFreshProduce ?? false,
+    });
   }
 
   // --- Wishlist ------------------------------------------------------------

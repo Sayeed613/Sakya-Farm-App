@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RazorpayProvider } from './razorpay.provider';
 
@@ -54,6 +54,63 @@ describe('RazorpayProvider', () => {
     );
     expect(() => provider.parseWebhookEvent({ event: 'subscription.activated' })).toThrow(
       'Unsupported Razorpay webhook event',
+    );
+  });
+});
+
+describe('RazorpayProvider capturePayment', () => {
+  const provider = new RazorpayProvider('rzp_test_key', 'key-secret', WEBHOOK_SECRET);
+  const fetchMock = vi.fn();
+  const input = { providerPaymentId: 'pay_test_1', amountInPaise: 12500, currency: 'INR' };
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('captures the full authorized amount at the gateway', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ id: 'pay_test_1', status: 'captured' }), { status: 200 }),
+    );
+
+    await provider.capturePayment(input);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.razorpay.com/v1/payments/pay_test_1/capture');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ amount: 12500, currency: 'INR' });
+  });
+
+  it('treats "already captured" as success so a repeated reconcile is harmless', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { description: 'The payment is already captured' } }), {
+        status: 400,
+      }),
+    );
+
+    await expect(provider.capturePayment(input)).resolves.toBeUndefined();
+  });
+
+  it('throws on any other capture failure so the caller retries next reconcile', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { description: 'Bad request' } }), { status: 400 }),
+    );
+
+    await expect(provider.capturePayment(input)).rejects.toThrow(
+      'Razorpay could not capture the payment',
+    );
+  });
+
+  it('throws when the gateway is unreachable', async () => {
+    fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+    await expect(provider.capturePayment(input)).rejects.toThrow(
+      'Razorpay could not capture the payment',
     );
   });
 });

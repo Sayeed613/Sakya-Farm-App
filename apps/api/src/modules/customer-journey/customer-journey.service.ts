@@ -33,7 +33,7 @@ import type {
   ReorderRequest,
   ServiceabilityQuery,
 } from '@sakya/validation';
-import { toPaise } from '@sakya/utils';
+import { isBengaluruPincode, toPaise } from '@sakya/utils';
 
 import { PrismaService } from '../../database/prisma.service';
 import type { AppConfig } from '../../config/configuration';
@@ -44,7 +44,7 @@ import { CartService } from '../cart/cart.service';
  *
  * Scope, deliberately in one service (they share the order/catalog internals
  * and none is large enough to justify a module each):
- * - pincode serviceability + delivery promise
+ * - nationwide delivery checks, with Fresh produce limited to Bengaluru
  * - wishlist CRUD
  * - return requests (eligibility, creation, listing, status)
  * - back-in-stock alerts
@@ -76,69 +76,22 @@ export class CustomerJourneyService {
   }
 
   // -------------------------------------------------------------------------
-  // Serviceability
+  // Serviceability: pantry nationwide, Fresh produce in Bengaluru
   // -------------------------------------------------------------------------
 
   async checkServiceability(query: ServiceabilityQuery): Promise<ServiceabilityResponse> {
-    const zone = await this.prisma.serviceabilityZone.findFirst({
-      where: {
-        isActive: true,
-        pincodes: { has: query.pincode },
-        store: { isActive: true },
-      },
-      orderBy: { createdAt: 'asc' },
-      select: {
-        id: true,
-        name: true,
-        storeId: true,
-        minDeliveryDays: true,
-        maxDeliveryDays: true,
-        codAvailable: true,
-        shippingFeeInPaise: true,
-        freeShippingThresholdInPaise: true,
-      },
-    });
-
-    if (zone === null) {
-      return { serviceable: false, pincode: query.pincode, zone: null, etaLabel: null };
-    }
-
+    const bengaluru = isBengaluruPincode(query.pincode);
+    const serviceable = !query.containsFreshProduce || bengaluru;
     return {
-      serviceable: true,
+      serviceable,
       pincode: query.pincode,
-      zone: {
-        id: zone.id,
-        name: zone.name,
-        storeId: zone.storeId,
-        minDeliveryDays: zone.minDeliveryDays,
-        maxDeliveryDays: zone.maxDeliveryDays,
-        codAvailable: zone.codAvailable,
-        shippingFeeInPaise: zone.shippingFeeInPaise,
-        freeShippingThresholdInPaise: zone.freeShippingThresholdInPaise,
-      },
-      etaLabel: `Delivers in ${zone.minDeliveryDays}\u2013${zone.maxDeliveryDays} days`,
+      zone: null,
+      etaLabel: serviceable
+        ? bengaluru
+          ? 'About 30 minutes in Bengaluru'
+          : 'Delivery available across India'
+        : null,
     };
-  }
-
-  /**
-   * Server-side gate used by checkout: the order's shipping pincode must fall
-   * inside an active zone of the cart's fulfilment store. Undeliverable
-   * addresses never become orders.
-   */
-  async assertPincodeServiceable(pincode: string, storeId: string | null): Promise<void> {
-    const zone = await this.prisma.serviceabilityZone.findFirst({
-      where: {
-        isActive: true,
-        pincodes: { has: pincode },
-        store: { isActive: true, ...(storeId !== null ? { id: storeId } : {}) },
-      },
-      select: { id: true },
-    });
-    if (zone === null) {
-      throw new BadRequestException(
-        'We do not deliver to this pincode yet. Please choose a different address.',
-      );
-    }
   }
 
   // -------------------------------------------------------------------------

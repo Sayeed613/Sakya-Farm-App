@@ -1,11 +1,11 @@
 # Sakya Farms
 
-Production commerce platform for Sakya Farms. This repository currently contains
-the **backend foundation**: the monorepo, the REST API, the PostgreSQL schema and
-the infrastructure around them.
+Production commerce platform for Sakya Farms. This repository contains the
+**backend** (NestJS REST API + PostgreSQL) and the **customer app** (Expo /
+React Native), plus the shared packages they are both built from.
 
-The customer, store, delivery and admin apps are not built yet. The API is built
-first so the clients are written against a real contract instead of fixtures.
+The store, delivery and admin apps are not built yet — the API was built first
+so every client is written against a real contract instead of fixtures.
 
 ```
 Customer app ─┐
@@ -114,21 +114,30 @@ Prisma-specific, run in `apps/api`:
 ## Layout
 
 ```
-apps/api/            NestJS API — the only deployable today
+apps/api/            NestJS API — REST surface (/api/v1), background jobs
   prisma/schema.prisma   the domain, and the rules it enforces
   prisma/seed.ts         roles + permissions (system data only)
   prisma/import-catalog.ts  the controlled catalog importer
   src/config/            environment validation (Zod)
   src/common/            guards, filters, pipes, decorators, middleware
   src/database/          the single Prisma client
-  src/modules/           one module per domain, mostly scaffolds
+  src/modules/           one module per domain (auth, cart, orders, payments, …)
+apps/customer/       Expo customer app (React Native, Expo Router)
 packages/types/       shared roles, statuses, error codes, money type
 packages/validation/  Zod schemas, including the catalog contract
-packages/utils/       pure helpers (paise arithmetic, slugs, pagination)
+packages/utils/       pure helpers (paise arithmetic, slugs, delivery rules)
 migration/            scraped data pipeline — see migration/README.md
-docs/                 architecture, database and API conventions
+docs/                 architecture, database, API + payments docs, audits,
+                      and the full backend + customer flow diagrams (system-flow.md)
 infrastructure/       deployment assets (not built yet)
 ```
+
+## Documentation
+
+Start at [`docs/README.md`](docs/README.md) — it indexes every document,
+including [`docs/system-flow.md`](docs/system-flow.md) (the complete backend +
+customer-app flow diagrams: auth, cart, serviceability, checkout, payment
+confirmation and the expiry sweep).
 
 ## Importing the scraped catalog
 
@@ -147,17 +156,21 @@ the importer exits with an explanation rather than importing anything. See
 ## What exists today
 
 **Implemented:** pnpm workspace + Turborepo; NestJS 12 on TypeScript 6; the full
-PostgreSQL schema (22 tables) and its first migration; Zod-validated environment
-configuration; structured JSON logging with request correlation ids; a `/api/v1`
-versioned surface; global rate limiting, CORS allow-list, Helmet headers; one
-consistent error envelope; JWT authentication wiring (strategy, guards, decorators)
-and Argon2id password hashing; a health endpoint that probes the database; the
-migration pipeline; unit tests for all of the above.
+PostgreSQL schema and its migrations; Zod-validated environment configuration;
+structured JSON logging with request correlation ids; a `/api/v1` versioned
+surface; global rate limiting, CORS allow-list, Helmet headers; one consistent
+error envelope; phone-OTP + JWT authentication; Argon2id hashing; a health
+endpoint that probes the database; catalog, cart + coupons, addresses,
+serviceability, orders with stock reservations, payments (Razorpay test mode:
+webhook + pull-based reconciliation + explicit capture), the pending-order
+expiry sweep, customer journey features (wishlist, returns, invoices) — and the
+Expo customer app that drives all of it. Unit + e2e tests cover the above.
 
-**Not implemented, on purpose:** payment integration, delivery tracking,
-notification sending, background workers, deployment assets, and every business
-endpoint. Each domain module documents the endpoints it will expose in its module
-file (for example `apps/api/src/modules/orders/orders.module.ts`).
+**Not implemented, on purpose:** store/delivery/admin apps, delivery tracking
+beyond the status machine, notification *sending* beyond push plumbing,
+background workers beyond the payment/expiry jobs, and deployment assets. Each
+domain module documents the endpoints it exposes in its module file (for
+example `apps/api/src/modules/orders/orders.module.ts`).
 
 ## Notes
 

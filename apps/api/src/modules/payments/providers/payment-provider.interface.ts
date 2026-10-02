@@ -95,4 +95,19 @@ export interface PaymentProvider {
    * or only a failed attempt); throwing signals "gateway unreachable".
    */
   fetchPaymentStatus?(providerOrderId: string): Promise<ProviderWebhookEvent | null>;
+
+  /**
+   * Capture money the gateway has only AUTHORIZED. Gateways such as Razorpay
+   * leave payments authorized until captured (when the account's auto-capture
+   * is off), and an authorization that is never captured auto-releases — the
+   * order would be stuck forever with no capture and no refund. Reconciliation
+   * calls this after `fetchPaymentStatus` reports `authorized`, then re-reads
+   * the status. Throwing signals the capture could not be issued; the caller
+   * keeps the authorization and retries on the next reconcile.
+   */
+  capturePayment?(input: {
+    providerPaymentId: string;
+    amountInPaise: number;
+    currency: string;
+  }): Promise<void>;
 }

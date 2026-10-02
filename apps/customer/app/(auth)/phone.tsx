@@ -122,7 +122,8 @@ export default function PhoneLoginScreen() {
               <Image
                 // eslint-disable-next-line @typescript-eslint/no-require-imports
                 source={require('../../src/images/sakya-logo-white.png')}
-                style={{ width: 132, height: 66, tintColor: BRAND }}
+                style={{ width: 132, height: 66 }}
+                tintColor={BRAND}
                 resizeMode="contain"
                 accessibilityLabel="Sakya Farms"
               />

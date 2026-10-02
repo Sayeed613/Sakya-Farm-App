@@ -18,18 +18,23 @@ import { releaseOrderReservations } from '../inventory/order-reservations';
  *  1. COD orders are skipped outright. They are PENDING_PAYMENT by design
  *     until delivery — and the exclusion matches on the payment METHOD, not
  *     just the presence of a row.
- *  2. Any order holding a CAPTURED / AUTHORIZED payment is skipped, and if
+ *  2. Any order holding a CAPTURED payment is skipped, and if
  *     the order is somehow still PENDING_PAYMENT with money attached (a
  *     webhook that landed between states), the sweep AUTO-HEALS it: the
  *     order is advanced through the same payment-captured transition the
  *     webhook uses. This is the belt to the webhook's braces.
  *  3. Before cancelling a gateway order (Razorpay), the sweep ASKS THE
  *     GATEWAY. The database cannot see a capture whose webhook is still in
- *     flight, so `reconcilePayment` queries Razorpay authoritatively; if
- *     money is found, the event is applied through the real state machine
- *     and the order is left alone. An unreachable gateway skips the order
+ *     flight, so `reconcilePayment` queries Razorpay authoritatively — and
+ *     CAPTURES an authorization only the gateway knows about, so an
+ *     almost-paid order is driven to captured instead of stranded. If money
+ *     is found, the event is applied through the real state machine and the
+ *     order is left alone. An unreachable gateway skips the order
  *     this run — a stale order sweeps next tick, a wrongly cancelled paid
  *     order cannot be undone by waiting.
+ *  4. If the gateway was unreachable but the database itself holds
+ *     AUTHORIZED money, the order still survives this run: an authorization
+ *     is real money in flight, and the next sweep retries the reconcile.
  *
  * Interval-based `Cron` from @nestjs/schedule; the reservation ledger's
  * idempotency makes overlapping runs harmless.
@@ -84,17 +89,17 @@ export class OrderExpiryService implements OnModuleInit {
 
     for (const order of stale) {
       try {
-        const decisive = order.payments.find(
-          (payment) => payment.status === 'CAPTURED' || payment.status === 'AUTHORIZED',
-        );
+        // 1. CAPTURED money recorded locally: auto-heal through the real
+        //    state machine and never cancel.
+        const captured = order.payments.find((payment) => payment.status === 'CAPTURED');
 
-        if (decisive !== undefined) {
+        if (captured !== undefined) {
           // Money already reached us after the query snapshot (or a webhook
           // landed between states). Auto-heal: advance the order exactly the
           // way a captured webhook would, and never cancel it.
-          await this.paymentsService.processWebhookEvent(decisive.provider, {
-            type: decisive.status === 'CAPTURED' ? 'captured' : 'authorized',
-            providerPaymentId: decisive.providerPaymentId ?? `reconciled-${decisive.id}`,
+          await this.paymentsService.processWebhookEvent(captured.provider, {
+            type: 'captured',
+            providerPaymentId: captured.providerPaymentId ?? `reconciled-${captured.id}`,
             amountInPaise: undefined,
             currency: undefined,
             rawPayload: { reconciled: true, orderId: order.id },
@@ -106,8 +111,11 @@ export class OrderExpiryService implements OnModuleInit {
           continue;
         }
 
-        // Before cancelling a gateway order, ask the gateway. The DB cannot
-        // see a capture whose webhook is still in flight.
+        // 2. Before cancelling a gateway order, ask the gateway. The DB
+        //    cannot see a capture whose webhook is still in flight — and
+        //    reconcile also CAPTURES an authorization only the gateway knows
+        //    about, so an almost-paid order is driven to captured instead of
+        //    being left authorized-but-unconfirmed.
         const gatewayOrder = order.payments.find(
           (payment) => payment.providerOrderId !== null && payment.providerOrderId !== '',
         );
@@ -122,6 +130,26 @@ export class OrderExpiryService implements OnModuleInit {
             );
             continue;
           }
+        }
+
+        // 3. Gateway unreachable, but the DB already holds AUTHORIZED money:
+        //    never cancel it. Re-apply the authorization event (a no-op when
+        //    already mirrored) so the order survives this run and the next
+        //    sweep retries the reconcile/capture.
+        const authorized = order.payments.find((payment) => payment.status === 'AUTHORIZED');
+        if (authorized !== undefined) {
+          await this.paymentsService.processWebhookEvent(authorized.provider, {
+            type: 'authorized',
+            providerPaymentId: authorized.providerPaymentId ?? `reconciled-${authorized.id}`,
+            amountInPaise: undefined,
+            currency: undefined,
+            rawPayload: { reconciled: true, orderId: order.id },
+          });
+          this.logger.log(
+            { orderId: order.id },
+            'aged pending order holds authorized money; not cancelled',
+          );
+          continue;
         }
 
         await this.prisma.$transaction(async (tx) => {

@@ -13,7 +13,8 @@ export const journeyApi = {
   // --- Serviceability --------------------------------------------------------
 
   /** Can we deliver to this pincode, and with what ETA? Public endpoint. */
-  checkServiceability: (pincode: string) => requireApiClient().journey.checkServiceability(pincode),
+  checkServiceability: (pincode: string, containsFreshProduce = false) =>
+    requireApiClient().journey.checkServiceability(pincode, containsFreshProduce),
 
   // --- Wishlist ------------------------------------------------------------
 

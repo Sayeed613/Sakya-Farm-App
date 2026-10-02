@@ -242,4 +242,29 @@ describe('OrderExpiryService', () => {
       'Payment window expired',
     );
   });
+
+  it('never cancels AUTHORIZED money: reconcile runs first, the authorization guard then keeps the order', async () => {
+    const order = unpaidOnlineOrder();
+    order.payments[1] = {
+      id: 'p2',
+      provider: 'RAZORPAY',
+      method: 'UPI',
+      providerPaymentId: 'pay_1',
+      providerOrderId: 'order_1',
+      status: 'AUTHORIZED',
+    };
+    // Default reconcile mock answers "no decisive outcome" (gateway
+    // unreachable or nothing to capture this tick).
+    const { service, orders, reconcilePayment, processWebhookEvent } = setup([order]);
+
+    await service.expireStalePendingOrders();
+
+    expect(reconcilePayment).toHaveBeenCalledOnce();
+    expect(processWebhookEvent).toHaveBeenCalledWith(
+      'RAZORPAY',
+      expect.objectContaining({ type: 'authorized', providerPaymentId: 'pay_1' }),
+    );
+    expect(orders.find(({ id }) => id === 'online-order')?.status).toBe('PENDING_PAYMENT');
+    expect(releaseOrderReservations).not.toHaveBeenCalled();
+  });
 });

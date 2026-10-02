@@ -2,11 +2,11 @@
 // Customer journey: serviceability, wishlist, returns, alerts, settings
 // ---------------------------------------------------------------------------
 
-/** Result of checking a pincode against the serviceability zones. */
+/** Result of checking a pincode against the current delivery policy. */
 export interface ServiceabilityResponse {
   serviceable: boolean;
   pincode: string;
-  /** Present only when serviceable. */
+  /** Null for nationwide policy checks that are not tied to a named zone. */
   zone: {
     id: string;
     name: string;
@@ -17,7 +17,7 @@ export interface ServiceabilityResponse {
     shippingFeeInPaise: number;
     freeShippingThresholdInPaise: number | null;
   } | null;
-  /** Copy-ready promise, e.g. "Delivers in 2–9 days". Null when unserviceable. */
+  /** Copy-ready promise. Null when the selected cart cannot ship there. */
   etaLabel: string | null;
 }
 

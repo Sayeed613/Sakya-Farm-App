@@ -23,6 +23,8 @@ export interface CartItemResponse {
   productImageUrl: string | null;
   /** The product's slug, so the cart can link back to the detail page. */
   productSlug: string;
+  /** Category slugs, used to enforce delivery rules for fresh produce. */
+  categorySlugs: string[];
   sku: string | null;
   quantity: number;
   /** Server-computed line total, in paise. */
