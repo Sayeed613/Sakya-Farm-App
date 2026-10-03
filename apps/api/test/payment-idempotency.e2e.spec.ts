@@ -238,7 +238,7 @@ describe.skipIf(!runDatabaseE2e)('Payment idempotency scoping (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey,
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),

@@ -36,9 +36,9 @@ import { navBarVisibility, navVisibleFromScroll } from '../../../src/lib/nav-vis
 import { headerCollapse, headerCollapsedFromScroll } from '../../../src/lib/header-collapse';
 
 // Import extracted components
-import { HomeFooter } from './components/HomeFooter';
-import { BrandPhilosophy } from './components/BrandPhilosophy';
-import { WelcomeBanner } from './components/WelcomeBanner';
+import HomeFooter from './components/HomeFooter';
+import BrandPhilosophy from './components/BrandPhilosophy';
+import WelcomeBanner from './components/WelcomeBanner';
 
 const BOTTOM_NAV_CLEARANCE = 120;
 
@@ -384,12 +384,14 @@ function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant 
     },
     [contentWidth, screenPadding],
   );
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    home.refetch();
-    discovery.refetch();
-    setRefreshing(false);
-  }, [home.refetch, discovery.refetch]);
+    try {
+      await Promise.all([home.refetch(), discovery.refetch()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [home, discovery]);
   const contentContainerStyle = useMemo(
     () => ({ paddingTop: headerHeight, paddingBottom: BOTTOM_NAV_CLEARANCE }),
     [headerHeight],

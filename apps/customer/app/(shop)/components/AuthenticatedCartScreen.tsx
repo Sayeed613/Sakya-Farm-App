@@ -10,10 +10,10 @@ import { LoadingState } from '../../../src/components/LoadingState';
 import { formatMoney } from '../../../src/lib/format';
 import { useAuthStore } from '../../../src/stores/auth-store';
 
-import { CartBackdrop } from './CartBackdrop';
-import { CartHeaderBar } from './CartHeaderBar';
-import { CartItemCard } from './CartItemCard';
-import { EmptyCart } from './EmptyCart';
+import CartBackdrop from './CartBackdrop';
+import CartHeaderBar from './CartHeaderBar';
+import CartItemCard from './CartItemCard';
+import EmptyCart from './EmptyCart';
 
 const SUBTLE = '#8C8A80';
 const BRAND = '#0B594C';
@@ -227,9 +227,9 @@ export default function AuthenticatedCartScreen() {
                   />
                 </View>
 
-                {data.shipingInPaise > 0 ? (
+                {data.shippingInPaise > 0 ? (
                   <RNText className="text-[12.5px] font-semibold text-ink">
-                    {formatMoney(data.shipingInPaise)}
+                    {formatMoney(data.shippingInPaise)}
                   </RNText>
                 ) : (
                   <RNText

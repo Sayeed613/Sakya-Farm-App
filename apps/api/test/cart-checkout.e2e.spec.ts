@@ -438,7 +438,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-1',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: 'Test order',
       }),
@@ -516,7 +516,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-2',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),
@@ -534,7 +534,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-2',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),
@@ -588,7 +588,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-3',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),
@@ -631,7 +631,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-4',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),
@@ -697,7 +697,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-5',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),
@@ -752,7 +752,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-short',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),
@@ -807,7 +807,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         idempotencyKey: 'checkout-key-nostock',
-        shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+        shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
         billingAddress: null,
         notes: null,
       }),
@@ -848,7 +848,7 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
         },
         body: JSON.stringify({
           idempotencyKey: key,
-          shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+          shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
           billingAddress: null,
           notes: null,
         }),

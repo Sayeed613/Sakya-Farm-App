@@ -16,5 +16,21 @@ export default defineConfig({
   test: {
     testTimeout: 30_000,
     hookTimeout: 90_000,
+    /**
+     * Hermetic commerce/auth config for the whole suite.
+     *
+     * The DB e2e specs boot the real app, which reads `.env` — and a
+     * developer's local values (a flat shipping fee, OTP demo mode) silently
+     * change the numbers and codes the tests assert on. Vitest sets these
+     * BEFORE the test files import, and dotenv never overwrites existing
+     * `process.env` keys, so the suite asserts on fixed config regardless of
+     * which `.env` the machine carries.
+     */
+    env: {
+      SHIPPING_FEE_IN_PAISE: '0',
+      TAX_RATE_PERCENT: '0',
+      COD_FEE_IN_PAISE: '0',
+      OTP_DEMO_MODE: 'false',
+    },
   },
 });

@@ -29,7 +29,33 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
     const connectionString = configService.getOrThrow<string>('database.url');
     const poolMax = configService.getOrThrow<number>('database.poolMax');
 
-    super({ adapter: new PrismaPg({ connectionString, max: poolMax }) });
+    // TCP keepalive on every pooled connection.
+    //
+    // Without it, a connection that goes idle (quiet period between requests,
+    // or a long-lived process behind a firewall/NAT that silently drops the
+    // socket) is closed by the peer without either side noticing. The next
+    // query on that dead socket then fails with P1017 ("Server has closed the
+    // connection") — reported historically against this service. With
+    // keepalive the kernel probes the socket, so a dead connection is detected
+    // and torn down *before* Prisma hands it to a query, and pg's pool
+    // replaces it transparently instead of surfacing an error to a request.
+    //
+    // 30s idle delay probes well inside the common 5-minute idle-connection
+    // cut of cloud load balancers and PostgreSQL's own idle limits.
+    super({
+      adapter: new PrismaPg({
+        connectionString,
+        max: poolMax,
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 30_000,
+        // Fail fast when the server is unreachable rather than queueing a
+        // request for the driver's default (long) connect timeout.
+        connectionTimeoutMillis: 10_000,
+        // Bound how long a query waits for a free pool slot before erroring
+        // with a retryable SERVICE_UNAVAILABLE instead of hanging a request.
+        idleTimeoutMillis: 30_000,
+      }),
+    });
   }
 
   /**

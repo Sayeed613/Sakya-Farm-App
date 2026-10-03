@@ -263,7 +263,7 @@ async function placeOrder(ctx: TestContext, idempotencyKey: string) {
 
   const placed = await http.customer.post('/orders', {
     idempotencyKey,
-    shippingAddress: { line1: 'Home', city: 'Bengaluru' },
+    shippingAddress: { line1: 'Home', city: 'Bengaluru', postalCode: '560001' },
     billingAddress: null,
     notes: 'Fulfilment test',
   });

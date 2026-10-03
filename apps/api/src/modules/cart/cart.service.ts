@@ -493,8 +493,19 @@ export class CartService {
   }
 
   private async assertCouponUsable(code: string, cartId: string) {
+    // The active window is part of "usable": a coupon whose startsAt has not
+    // arrived or whose endsAt has passed must not attach to a cart (checkout
+    // re-checks the window atomically, but the cart preview must not show a
+    // discount that checkout would then reject). now() is evaluated in the
+    // WHERE clause via Prisma filters, not trusted from the client.
+    const now = new Date();
     const coupon = await this.prisma.coupon.findFirst({
-      where: { code, isActive: true },
+      where: {
+        code,
+        isActive: true,
+        OR: [{ startsAt: null }, { startsAt: { lte: now } }],
+        AND: [{ OR: [{ endsAt: null }, { endsAt: { gte: now } }] }],
+      },
       select: { id: true, code: true, type: true, value: true, minOrderInPaise: true, usageLimit: true, redeemedCount: true, perUserLimit: true },
     });
 

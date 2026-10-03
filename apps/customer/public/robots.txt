@@ -1,0 +1,20 @@
+# Sakya Farms — crawler rules.
+# Public shopping surfaces are open; everything behind a session is closed
+# to crawlers so cart/account/order state can never surface in search results.
+User-agent: *
+Allow: /
+Disallow: /cart
+Disallow: /checkout
+Disallow: /orders
+Disallow: /settings
+Disallow: /edit-profile
+Disallow: /delete-account
+Disallow: /address-book
+Disallow: /notifications
+Disallow: /wishlist
+
+# Aggregators may fetch product metadata for shopping surfaces.
+User-agent: Googlebot
+Allow: /
+
+Sitemap: https://sakya.farm/sitemap.xml

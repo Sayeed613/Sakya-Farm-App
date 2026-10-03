@@ -2,8 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, Text as RNText, View } from 'react-native';
 import type { OnlinePaymentMethod } from '../../../src/api/checkout';
 
-import { DetailCard } from './DetailCard';
-import { paymentCopy } from './paymentCopy';
+import DetailCard from './DetailCard';
+import { paymentCopy } from '../../../src/lib/paymentCopy';
 
 const INK = '#171A18';
 const MUTED = '#6F6C63';

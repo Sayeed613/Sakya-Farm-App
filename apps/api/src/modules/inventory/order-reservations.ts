@@ -114,9 +114,13 @@ export async function releaseOrderReservations(
   // No order, or an order placed before store fulfilment existed: nothing held.
   if (order === null || order.storeId === null) return;
 
-  for (const item of order.items) {
-    if (item.variantId === null) continue;
+  // Same (variantId) lock order checkout reserves in — two overlapping
+  // release/reserve transactions can then never deadlock on inventory rows.
+  const items = order.items
+    .filter((item): item is { variantId: string; quantity: number } => item.variantId !== null)
+    .sort((a, b) => a.variantId.localeCompare(b.variantId));
 
+  for (const item of items) {
     const inventory = await tx.inventory.findUnique({
       where: {
         variantId_storeId: { variantId: item.variantId, storeId: order.storeId },
@@ -198,9 +202,12 @@ export async function deductOrderReservations(
 
   if (order === null || order.storeId === null) return;
 
-  for (const item of order.items) {
-    if (item.variantId === null) continue;
+  // Same sorted (variantId) lock order as checkout and release.
+  const items = order.items
+    .filter((item): item is { variantId: string; quantity: number } => item.variantId !== null)
+    .sort((a, b) => a.variantId.localeCompare(b.variantId));
 
+  for (const item of items) {
     const inventory = await tx.inventory.findUnique({
       where: {
         variantId_storeId: { variantId: item.variantId, storeId: order.storeId },

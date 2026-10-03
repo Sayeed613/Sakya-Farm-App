@@ -130,8 +130,21 @@ export class OrdersService {
       include: { order: true },
     });
 
-    if (existing !== null && existing.order.status !== 'CANCELLED' && existing.order.status !== 'REFUNDED') {
-      return this.getOrderById(existing.order.id, userId);
+    if (existing !== null) {
+      if (
+        existing.order.status !== 'CANCELLED' &&
+        existing.order.status !== 'REFUNDED'
+      ) {
+        return this.getOrderById(existing.order.id, userId);
+      }
+      // The key is attached to a payment row and the schema enforces
+      // (userId, idempotencyKey) uniqueness, so a cancelled/refunded order's
+      // key can never seed a second order — the insert below would lose a
+      // P2002 anyway. Fail here with a message that says what to do instead
+      // of surfacing a raw column conflict.
+      throw new ConflictException(
+        'This checkout attempt was already used. Start checkout again to place a new order.',
+      );
     }
 
     const cart = await this.cartService.getCurrentCart(userId);
@@ -179,6 +192,42 @@ export class OrdersService {
     // happened at all. That is what stops a failed checkout leaking a
     // reservation, and a successful one from overselling.
     const order = await this.prisma.$transaction(async (tx) => {
+      // Serialize concurrent checkouts of the SAME cart: `FOR UPDATE` makes a
+      // second request (double tap, retry storm, scripted duplicate) wait here
+      // until the first commits. Everything after this lock sees the winner's
+      // committed cart, so one cart can only ever produce one order — the
+      // idempotency-key pre-check above alone does NOT stop a duplicate that
+      // uses a different key.
+      await tx.$queryRaw`SELECT "id" FROM "carts" WHERE "id" = ${cart.id}::uuid FOR UPDATE`;
+
+      // Replay check AGAIN under the lock: a concurrent attempt with the same
+      // key commits its payment row while we waited, and its order is the one
+      // this request must return.
+      const winner = await tx.payment.findFirst({
+        where: { userId, idempotencyKey: parsed.idempotencyKey },
+        select: { order: { select: { id: true, status: true } } },
+      });
+      if (
+        winner !== null &&
+        winner.order.status !== 'CANCELLED' &&
+        winner.order.status !== 'REFUNDED'
+      ) {
+        return winner.order;
+      }
+
+      // The lock is only held for the duration of this transaction, so re-read
+      // the cart's line count here: if a concurrent checkout (different key)
+      // consumed the cart while we waited, the snapshot `items` above is stale
+      // and must not be turned into a second order.
+      const remainingItems = await tx.cartItem.count({
+        where: { cartId: cart.id, quantity: { gt: 0 } },
+      });
+      if (remainingItems === 0) {
+        throw new ConflictException(
+          'This cart was just checked out. Refresh to review your orders.',
+        );
+      }
+
       // The fulfillment store is taken from the cart row — the cart is scoped to
       // a store when its first item is added — and re-validated here. It is never
       // accepted from the client, and it must be an active store.
@@ -200,6 +249,79 @@ export class OrdersService {
         throw new BadRequestException(
           'A valid fulfilment store must be selected before checkout',
         );
+      }
+
+      /*
+       * Claim the coupon redemption atomically WITH the order. Apply-time
+       * checks (usageLimit, perUserLimit, active window) are reads that can
+       * go stale between apply and checkout, so every one of them is
+       * re-enforced HERE, inside the transaction, BEFORE any order row is
+       * written:
+       *
+       * - the active window and isActive are re-checked by a conditional
+       *   UPDATE that also guards usageLimit — the increment only happens
+       *   while the coupon is still valid AND still under its limit, so two
+       *   concurrent checkouts can never take the last allowed redemption
+       *   twice (a read-then-increment would);
+       * - perUserLimit is re-counted against this user's committed
+       *   redemptions before the insert.
+       *
+       * Any failure throws BEFORE the order insert: nothing is created, and
+       * the transaction rollback also undoes the claimed increment.
+       */
+      let claimedCouponId: string | null = null;
+      if (cartRecord.couponId !== null) {
+        const coupon = await tx.coupon.findUnique({
+          where: { id: cartRecord.couponId },
+          select: {
+            id: true,
+            isActive: true,
+            startsAt: true,
+            endsAt: true,
+            usageLimit: true,
+            perUserLimit: true,
+          },
+        });
+        const now = new Date();
+        if (
+          coupon === null ||
+          !coupon.isActive ||
+          (coupon.startsAt !== null && coupon.startsAt > now) ||
+          (coupon.endsAt !== null && coupon.endsAt < now)
+        ) {
+          throw new ConflictException(
+            'The applied coupon is no longer valid. Remove it and try again.',
+          );
+        }
+
+        const userRedemptions = await tx.couponRedemption.count({
+          where: { couponId: coupon.id, userId },
+        });
+        if (userRedemptions >= coupon.perUserLimit) {
+          throw new ConflictException(
+            'The applied coupon has already been used by you. Remove it and try again.',
+          );
+        }
+
+        // Atomic claim: check and increment in ONE statement. `claimed !== 1`
+        // means the window closed or the global limit was taken by a
+        // concurrent checkout between apply and now.
+        const claimed = await tx.$executeRaw`
+          UPDATE "coupons"
+          SET "redeemed_count" = "redeemed_count" + 1,
+              "updated_at" = now()
+          WHERE "id" = ${coupon.id}::uuid
+            AND "is_active" = true
+            AND ("usage_limit" IS NULL OR "redeemed_count" < "usage_limit")
+            AND ("starts_at" IS NULL OR "starts_at" <= now())
+            AND ("ends_at" IS NULL OR "ends_at" >= now())
+        `;
+        if (claimed !== 1) {
+          throw new ConflictException(
+            'This coupon has reached its usage limit. Remove it and try again.',
+          );
+        }
+        claimedCouponId = coupon.id;
       }
 
       const created = await tx.order.create({
@@ -241,7 +363,11 @@ export class OrdersService {
 
       // Hold stock for every line before the order is committed. Throwing here
       // rolls the whole transaction back, including the order row above.
-      for (const item of items) {
+      // Lines reserve in (variantId) order so two concurrent checkouts that
+      // share variants always take the inventory row locks in the same order
+      // and cannot deadlock against each other.
+      const reservationOrder = [...items].sort((a, b) => a.variantId.localeCompare(b.variantId));
+      for (const item of reservationOrder) {
         await reserveOrderLine(tx, created.id, cartRecord.storeId, {
           variantId: item.variantId,
           variantTitle: item.variantTitle,
@@ -275,29 +401,20 @@ export class OrdersService {
       });
 
       /*
-       * Record the coupon redemption atomically with the order: usageLimit and
-       * perUserLimit were checked at apply time, but the count only moves when
-       * an order actually consumes it. Unique (orderId) keeps retries safe.
+       * Record the redemption against the order created above. The global
+       * count was already CLAIMED atomically before the insert (see the
+       * conditional UPDATE); this row is what ties the claim to this order
+       * and enforces one redemption per order (unique (orderId)).
        */
-      if (cartRecord.couponId !== null) {
-        const alreadyRedeemed = await tx.couponRedemption.findUnique({
-          where: { orderId: created.id },
-          select: { id: true },
+      if (claimedCouponId !== null) {
+        await tx.couponRedemption.create({
+          data: {
+            couponId: claimedCouponId,
+            userId,
+            orderId: created.id,
+            discountInPaise: totals.discountInPaise,
+          },
         });
-        if (alreadyRedeemed === null) {
-          await tx.couponRedemption.create({
-            data: {
-              couponId: cartRecord.couponId,
-              userId,
-              orderId: created.id,
-              discountInPaise: totals.discountInPaise,
-            },
-          });
-          await tx.coupon.update({
-            where: { id: cartRecord.couponId },
-            data: { redeemedCount: { increment: 1 } },
-          });
-        }
       }
 
       // The server cart is consumed by this checkout: empty its lines and

@@ -14,6 +14,7 @@ import { useAuthStore } from '../src/stores/auth-store';
 import { useConnectivity } from '../src/hooks/use-connectivity';
 import { OfflineBanner } from '../src/components/OfflineBanner';
 import { RazorpaySheetHost } from '../src/components/RazorpaySheetHost';
+import { SeoRobots } from '../src/components/Seo';
 
 /**
  * Push support loads lazily and natively only. Merely importing
@@ -116,6 +117,10 @@ export default function RootLayout() {
               pretend the network is fine. Mutations are gated in the http
               layer; React Query keeps serving cached reads. */}
           {offline ? <OfflineBanner /> : null}
+          {/* Web-only: private routes (cart, checkout, orders, account) carry
+              a noindex meta tag so search results never surface session
+              screens. No-op on native. */}
+          <SeoRobots />
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="(auth)" />
             <Stack.Screen name="(shop)" />

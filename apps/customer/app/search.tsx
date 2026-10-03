@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text as RNText, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,8 +27,15 @@ import { colors } from '../src/theme';
  */
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
-  const [rawQuery, setRawQuery] = useState('');
-  const [query, setQuery] = useState('');
+  // `?q=` seeds the box: the site's SearchAction structured data promises
+  // https://sakya.farm/search?q={query}, so the route must honour it (the
+  // structured data and the screen cannot disagree). Local typing still owns
+  // the box afterwards.
+  const { q } = useLocalSearchParams<{ q?: string }>();
+  const [rawQuery, setRawQuery] = useState(() =>
+    typeof q === 'string' ? q : '',
+  );
+  const [query, setQuery] = useState(() => (typeof q === 'string' ? q.trim() : ''));
   const [quickViewSlug, setQuickViewSlug] = useState<string | null>(null);
   const [variantPick, setVariantPick] = useState<VariantPickerState | null>(null);
 

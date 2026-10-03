@@ -1,4 +1,4 @@
-import type { OnlinePaymentMethod } from '../../../src/api/checkout';
+import type { OnlinePaymentMethod } from '../api/checkout';
 
 /**
  * Copy for the collapsed Payment Method row (mirrors the method radios).

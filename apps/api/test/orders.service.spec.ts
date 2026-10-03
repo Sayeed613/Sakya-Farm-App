@@ -259,10 +259,27 @@ describe('OrdersService', () => {
     // cart-clearing writes the checkout must perform.
     const tx = {
       ...prisma,
-      cartItem: { deleteMany: vi.fn(async () => ({ count: 1 })) },
+      cartItem: {
+        deleteMany: vi.fn(async () => ({ count: 1 })),
+        count: vi.fn(async () => 5),
+      },
       cart: { ...prisma.cart, update: vi.fn(async () => ({})) },
-      coupon: { update: vi.fn(async () => ({})) },
-      couponRedemption: { ...prisma.couponRedemption, create: vi.fn(async () => ({})) },
+      coupon: {
+        findUnique: vi.fn(async () => ({
+          id: 'coupon-1',
+          isActive: true,
+          startsAt: null,
+          endsAt: null,
+          usageLimit: null,
+          perUserLimit: 1,
+        })),
+        update: vi.fn(async () => ({})),
+      },
+      couponRedemption: {
+        ...prisma.couponRedemption,
+        count: vi.fn(async () => 0),
+        create: vi.fn(async () => ({})),
+      },
     };
     prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(tx));
     prisma.cart.findUnique.mockResolvedValue({
@@ -644,6 +661,269 @@ describe('OrdersService', () => {
         }),
       }),
     );
+  });
+
+  // ---------------------------------------------------------------------
+  // Concurrency regressions: one cart must never produce two orders, and a
+  // coupon claim must be atomic with the order that consumes it.
+  // ---------------------------------------------------------------------
+
+  it('locks the cart row before creating the order', async () => {
+    cartService.getCurrentCart.mockResolvedValue(
+      cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+    );
+    prisma.payment.findFirst.mockResolvedValue(null);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    prisma.cart.findUnique.mockResolvedValue({
+      storeId: 'store-1',
+      couponId: null,
+      store: { id: 'store-1', isActive: true },
+    });
+    prisma.inventory.findUnique.mockResolvedValue({
+      id: 'inv-1',
+      variantId: 'v1',
+      storeId: 'store-1',
+      quantityOnHand: 10,
+    });
+    prisma.order.create.mockResolvedValue({ id: 'order-lock' } as any);
+    prisma.order.findFirst.mockResolvedValue({
+      id: 'order-lock',
+      orderNumber: 'ORD-LOCK',
+      status: 'PENDING_PAYMENT',
+      paymentStatus: 'PENDING',
+      currency: 'INR',
+      subtotalInPaise: 2400,
+      discountInPaise: 0,
+      taxInPaise: 0,
+      shippingInPaise: 0,
+      totalInPaise: 2400,
+      shippingAddress: {},
+      billingAddress: null,
+      notes: null,
+      placedAt: null,
+      cancelledAt: null,
+      deliveredAt: null,
+      cancelReason: null,
+      createdAt: new Date('2026-09-12T00:00:00Z'),
+      updatedAt: new Date('2026-09-12T00:00:00Z'),
+      items: [],
+      payments: [],
+      statusHistory: [],
+      coupon: null,
+    } as any);
+
+    await service.checkout('user-1', {
+      idempotencyKey: 'key-lock',
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      notes: null,
+    });
+
+    // `SELECT ... FOR UPDATE` on the cart row is what serialises concurrent
+    // checkouts of the same cart — without it a double tap with two different
+    // idempotency keys can create two orders from one cart.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.cartItem.count).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a second checkout when a concurrent request already emptied the cart', async () => {
+    cartService.getCurrentCart.mockResolvedValue(
+      cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+    );
+    // Pre-check sees no payment for this key (the winner used a different one).
+    prisma.payment.findFirst.mockResolvedValue(null);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    // But by the time the lock is granted, the cart has been consumed.
+    prisma.cartItem.count.mockResolvedValue(0);
+
+    await expect(
+      service.checkout('user-1', {
+        idempotencyKey: 'key-loser',
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
+        notes: null,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it('returns the concurrent winner under the lock instead of placing twice', async () => {
+    cartService.getCurrentCart.mockResolvedValue(
+      cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+    );
+    // First lookup (before the transaction) misses; the second (after the
+    // lock) finds the payment the winning request committed while we waited.
+    prisma.payment.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ order: { id: 'order-won', status: 'PENDING_PAYMENT' } });
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    prisma.order.findFirst.mockResolvedValue({
+      id: 'order-won',
+      orderNumber: 'ORD-WON',
+      status: 'PENDING_PAYMENT',
+      paymentStatus: 'PENDING',
+      currency: 'INR',
+      subtotalInPaise: 2400,
+      discountInPaise: 0,
+      taxInPaise: 0,
+      shippingInPaise: 0,
+      totalInPaise: 2400,
+      shippingAddress: {},
+      billingAddress: null,
+      notes: null,
+      placedAt: null,
+      cancelledAt: null,
+      deliveredAt: null,
+      cancelReason: null,
+      createdAt: new Date('2026-09-12T00:00:00Z'),
+      updatedAt: new Date('2026-09-12T00:00:00Z'),
+      items: [],
+      payments: [],
+      statusHistory: [],
+      coupon: null,
+    } as any);
+
+    const result = await service.checkout('user-1', {
+      idempotencyKey: 'key-race',
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      notes: null,
+    });
+
+    expect(result.id).toBe('order-won');
+    expect(prisma.order.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an idempotency key whose order was cancelled instead of double-placing', async () => {
+    // The key already exists on a payment row, but its order ended CANCELLED.
+    // (userId, idempotencyKey) is unique, so a second payment insert would
+    // fail with P2002 anyway — surface an actionable conflict up front.
+    prisma.payment.findFirst.mockResolvedValue({
+      order: { id: 'order-cancelled', status: 'CANCELLED' },
+    });
+
+    await expect(
+      service.checkout('user-1', {
+        idempotencyKey: 'key-cancelled',
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
+        notes: null,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects checkout when the applied coupon expired after apply time', async () => {
+    cartService.getCurrentCart.mockResolvedValue({
+      ...cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+      coupon: { id: 'coupon-1', code: 'EXPIRED', type: 'FIXED_AMOUNT', valueInPaise: 500 } as any,
+    });
+    prisma.payment.findFirst.mockResolvedValue(null);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    prisma.cart.findUnique.mockResolvedValue({
+      storeId: 'store-1',
+      couponId: 'coupon-1',
+      store: { id: 'store-1', isActive: true },
+    });
+    // Re-validated inside the transaction: window already closed.
+    prisma.coupon.findUnique.mockResolvedValue({
+      id: 'coupon-1',
+      isActive: true,
+      startsAt: null,
+      endsAt: new Date(Date.now() - 60_000),
+      usageLimit: null,
+      perUserLimit: 1,
+    });
+
+    await expect(
+      service.checkout('user-1', {
+        idempotencyKey: 'key-expired-coupon',
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
+        notes: null,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.order.create).not.toHaveBeenCalled();
+    expect(prisma.couponRedemption.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects checkout when the coupon per-user limit was reached concurrently', async () => {
+    cartService.getCurrentCart.mockResolvedValue({
+      ...cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+      coupon: { id: 'coupon-1', code: 'ONCE', type: 'FIXED_AMOUNT', valueInPaise: 500 } as any,
+    });
+    prisma.payment.findFirst.mockResolvedValue(null);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    prisma.cart.findUnique.mockResolvedValue({
+      storeId: 'store-1',
+      couponId: 'coupon-1',
+      store: { id: 'store-1', isActive: true },
+    });
+    prisma.coupon.findUnique.mockResolvedValue({
+      id: 'coupon-1',
+      isActive: true,
+      startsAt: null,
+      endsAt: null,
+      usageLimit: null,
+      perUserLimit: 1,
+    });
+    // Another of this customer's orders already consumed the only redemption.
+    prisma.couponRedemption.count.mockResolvedValue(1);
+
+    await expect(
+      service.checkout('user-1', {
+        idempotencyKey: 'key-peruser',
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
+        notes: null,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.order.create).not.toHaveBeenCalled();
+    expect(prisma.couponRedemption.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects checkout when the coupon global usage limit is taken atomically', async () => {
+    cartService.getCurrentCart.mockResolvedValue({
+      ...cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+      coupon: { id: 'coupon-1', code: 'LAST', type: 'FIXED_AMOUNT', valueInPaise: 500 } as any,
+    });
+    prisma.payment.findFirst.mockResolvedValue(null);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    prisma.cart.findUnique.mockResolvedValue({
+      storeId: 'store-1',
+      couponId: 'coupon-1',
+      store: { id: 'store-1', isActive: true },
+    });
+    prisma.coupon.findUnique.mockResolvedValue({
+      id: 'coupon-1',
+      isActive: true,
+      startsAt: null,
+      endsAt: null,
+      usageLimit: 1,
+      perUserLimit: 5,
+    });
+    prisma.inventory.findUnique.mockResolvedValue({
+      id: 'inv-1',
+      variantId: 'v1',
+      storeId: 'store-1',
+      quantityOnHand: 10,
+    });
+    prisma.order.create.mockResolvedValue({ id: 'order-claim' } as any);
+    // The FIRST raw UPDATE is the coupon claim (it now runs before the order
+    // insert); it matches NO row because a concurrent checkout took the last
+    // allowed redemption between apply time and now.
+    prisma.$executeRaw.mockResolvedValueOnce(0);
+
+    await expect(
+      service.checkout('user-1', {
+        idempotencyKey: 'key-claim',
+        shippingAddress: { line1: 'Home', postalCode: '500001' },
+        notes: null,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    // The claim failed before any order row was written.
+    expect(prisma.order.create).not.toHaveBeenCalled();
+    expect(prisma.couponRedemption.create).not.toHaveBeenCalled();
+    expect(prisma.cartItem.deleteMany).not.toHaveBeenCalled();
   });
 
   it('releases the reservation exactly once when an order is cancelled', async () => {
@@ -1111,6 +1391,9 @@ function createPrismaMock() {
     },
     cartItem: {
       deleteMany: vi.fn(async () => ({ count: 0 })),
+      // Checkout re-counts the cart's lines AFTER taking the row lock so a
+      // concurrent checkout that emptied it cannot place a second order.
+      count: vi.fn(async () => 5),
     },
     order: {
       create: vi.fn(),
@@ -1132,10 +1415,18 @@ function createPrismaMock() {
       // checkout; the store lookup is what proves the store is active.
       findUnique: vi.fn(),
     },
+    coupon: {
+      // Checkout re-validates the applied coupon inside the transaction
+      // (window + usage limit) before claiming a redemption.
+      findUnique: vi.fn().mockResolvedValue(null),
+      update: vi.fn(),
+    },
     couponRedemption: {
       // Checkout's redemption guard reads this before recording the coupon;
       // null keeps the no-coupon specs on the plain path.
       findUnique: vi.fn().mockResolvedValue(null),
+      // perUserLimit re-count inside the checkout transaction.
+      count: vi.fn().mockResolvedValue(0),
       create: vi.fn(),
     },
     inventory: {
@@ -1146,9 +1437,12 @@ function createPrismaMock() {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn(),
     },
-    // Conditional reserve is a raw `UPDATE ... WHERE` so the check and the
-    // increment are atomic. `1` means the row was reserved.
+    // Conditional reserve (and the atomic coupon claim) are raw `UPDATE ...
+    // WHERE` so check and increment are atomic. `1` means the row changed.
     $executeRaw: vi.fn().mockResolvedValue(1),
+    // Checkout locks the cart row (`SELECT ... FOR UPDATE`) before creating
+    // the order so concurrent checkouts of one cart serialise.
+    $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
   };
 }

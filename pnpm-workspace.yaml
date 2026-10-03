@@ -30,6 +30,24 @@ allowBuilds:
   unrs-resolver: true
   '@sentry/cli': true
 
+# --- Security overrides (transitive pins from `pnpm audit`) ----------------
+# Patch/minor-level bumps only; each is verified by the full test suite after
+# install. Major-version jumps (deepmerge-ts 8, uuid 11, basic-ftp 6) are NOT
+# forced here — they only reach dev tooling (Prisma Studio, Expo CLI) and an
+# override that breaks the CLI is worse than the advisory it fixes.
+#   multer            2.2.0 -> 2.4.0   PRODUCTION: avatar upload (FileInterceptor)
+#   js-yaml           4.3.1 -> 4.3.2   advisory GHSA CPU exhaustion
+#   brace-expansion   5.0.9 -> 5.0.12  advisory stack exhaustion
+#   fast-uri          3.1.7 -> 3.1.8   advisory host-case normalization
+#   mysql2            3.15.3 -> 3.23.1 dev-only (Prisma CLI's bundled MySQL
+#                                       driver; this platform runs PostgreSQL)
+overrides:
+  multer: 2.4.0
+  js-yaml: 4.3.2
+  brace-expansion: 5.0.12
+  fast-uri: 3.1.8
+  mysql2: 3.23.1
+
 # zod 4.6.2 is deliberately pinned and was published inside the default
 # minimum-release-age window; approving it here keeps the pin reproducible.
 minimumReleaseAgeExclude:

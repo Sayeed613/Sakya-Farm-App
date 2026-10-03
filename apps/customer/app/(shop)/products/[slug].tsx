@@ -338,6 +338,49 @@ export default function ProductDetailScreen() {
   const selectorLabel =
     variantSelectorLabelOf(variants);
 
+  /*
+   * JSON-LD (structured data) for crawlers and answer engines.
+   *
+   * STRICT RULE: every field below is copied from the API response the page
+   * already renders — no invented ratings, reviews, guarantees or prices.
+   * `offers` are derived from the real variant rows (price, availability),
+   * so the structured data always agrees with what a shopper sees.
+   * Rendered only on web; native ignores <Head> children.
+   */
+  const productJsonLd = (() => {
+    if (detailData === null || typeof window === 'undefined') return null;
+    const siteUrl = window.location.origin;
+    const canonical = `${siteUrl}/products/${encodeURIComponent(detailData.slug)}`;
+    const price = detailData.price;
+    const offerVariants = detailData.variants.filter(
+      (variant) => variant.isAvailable && variant.priceInPaise > 0,
+    );
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: detailData.title,
+      ...(detailData.description ? { description: detailData.description } : {}),
+      ...(imageUrls.length > 0 ? { image: imageUrls } : {}),
+      url: canonical,
+      ...(detailData.vendor ? { brand: { '@type': 'Brand', name: detailData.vendor } } : {}),
+      ...(offerVariants.length > 0 && price !== null
+        ? {
+            offers: {
+              '@type': 'AggregateOffer',
+              priceCurrency: price.currency,
+              lowPrice: (price.minInPaise / 100).toFixed(2),
+              highPrice: (price.maxInPaise / 100).toFixed(2),
+              offerCount: offerVariants.length,
+              availability: detailData.isAvailable
+                ? 'https://schema.org/InStock'
+                : 'https://schema.org/OutOfStock',
+              url: canonical,
+            },
+          }
+        : {}),
+    };
+  })();
+
   return (
     <View
       className="flex-1"
@@ -345,14 +388,43 @@ export default function ProductDetailScreen() {
         backgroundColor: CANVAS,
       }}
     >
-      {/* Web document title + social meta for the product page — the title
-          tracks the loaded product; the description is the real listing
-          intro, not fabricated copy. */}
+      {/* Web document title + social/SEO meta for the product page — the
+          title tracks the loaded product; the description is the real
+          listing intro, not fabricated copy. */}
       <Head>
         <title>{detailData ? `${detailData.title} — Sakya Farms` : 'Product — Sakya Farms'}</title>
+        {detailData ? (
+          <meta
+            name="description"
+            content={
+              detailData.description?.trim().slice(0, 160) ||
+              `Buy ${detailData.title} from Sakya Farms. Farm-fresh, delivered.`
+            }
+          />
+        ) : null}
+        {detailData ? (
+          <link
+            rel="canonical"
+            href={`${typeof window !== 'undefined' ? window.location.origin : 'https://sakya.farm'}/products/${encodeURIComponent(detailData.slug)}`}
+          />
+        ) : null}
         <meta property="og:title" content={detailData?.title ?? 'Sakya Farms'} />
+        <meta property="og:type" content="product" />
+        {detailData?.description ? (
+          <meta property="og:description" content={detailData.description.slice(0, 200)} />
+        ) : null}
         {detailData?.primaryImageUrl ? (
           <meta property="og:image" content={detailData.primaryImageUrl} />
+        ) : null}
+        {productJsonLd !== null ? (
+          <script
+            type="application/ld+json"
+            // JSON is stringified with every `<` escaped so product text can
+            // never terminate the script element (HTML-injection-safe JSON-LD).
+            dangerouslySetInnerHTML={{
+              __html: JSON.stringify(productJsonLd).replace(/</g, '\\u003c'),
+            }}
+          />
         ) : null}
       </Head>
       {/* ============================================================

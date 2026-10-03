@@ -29,13 +29,18 @@ import { useLastPaymentMethodStore } from '../../src/stores/last-payment-method-
 import { openRazorpayWebCheckout, reserveRazorpayPopup } from '../../src/lib/razorpay-checkout';
 import { softShadow } from '../../src/lib/shadows';
 
-import { AddressSelection } from './components/AddressSelection';
-import { ApplyCouponCard } from './components/ApplyCouponCard';
-import { PaymentMethodSelection } from './components/PaymentMethodSelection';
-import { OrderReview } from './components/OrderReview';
-import { CheckoutProgress } from './components/CheckoutProgress';
-import { addressLine, addressLabel } from './components/addressHelpers';
-import { EmptyCart } from './components/EmptyCart';
+import AddressSelection from './components/AddressSelection';
+import ApplyCouponCard from './components/ApplyCouponCard';
+import PaymentMethodSelection from './components/PaymentMethodSelection';
+import OrderReview from './components/OrderReview';
+import CheckoutProgress from './components/CheckoutProgress';
+import {
+  addressLabel,
+  addressLine,
+  sameAddress,
+  savedRowToAddress,
+} from '../../src/lib/addressHelpers';
+import EmptyCart from './components/EmptyCart';
 
 const BRAND = '#0B594C';
 const BRAND_DARK = '#08483E';
@@ -161,20 +166,11 @@ export default function CheckoutScreen() {
 
   const [address, setAddress] = useState<CheckoutAddress | null>(() => {
     if (lastAddress === null) return null;
-    if (matchedSaved) {
-      const newAddress = {
-        fullName: matchedSaved.recipientName,
-        phone: matchedSaved.phone,
-        line1: matchedSaved.line1,
-        line2: matchedSaved.line2 ?? '',
-        landmark: matchedSaved.landmark ?? '',
-        city: matchedSaved.city,
-        state: matchedSaved.state,
-        postalCode: matchedSaved.pincode,
-      };
-      rememberAddress(newAddress);
-      return newAddress;
-    }
+    // PURE adoption: the store is synced in the effect below, never during
+    // render — a Zustand `set` here would update HomeHeader while
+    // CheckoutScreen is rendering (and, because the effect rebuilt the
+    // object each pass, loop until "Maximum update depth exceeded").
+    if (matchedSaved) return savedRowToAddress(matchedSaved);
     return lastAddress;
   });
 
@@ -186,24 +182,18 @@ export default function CheckoutScreen() {
   // the provisional last-address for its saved twin so the picker highlights
   // the right row without any extra tap.
   useEffect(() => {
-    if (pickerConfirmedRef.current || matchedSaved === null) return;
-    setAddress((current) => {
-      if (current === null || current !== lastAddress) return current;
-      const newAddress = {
-        fullName: matchedSaved.recipientName,
-        phone: matchedSaved.phone,
-        line1: matchedSaved.line1,
-        line2: matchedSaved.line2 ?? '',
-        landmark: matchedSaved.landmark ?? '',
-        city: matchedSaved.city,
-        state: matchedSaved.state,
-        postalCode: matchedSaved.pincode,
-      };
-      // Update the lastAddress store to keep the cart card in sync
-      rememberAddress(newAddress);
-      return newAddress;
-    });
-  }, [matchedSaved, lastAddress, pickerConfirmedRef]);
+    if (pickerConfirmedRef.current || matchedSaved === null || lastAddress === null) return;
+    const adopted = savedRowToAddress(matchedSaved);
+    // Only act while the VISIBLE address is still derived from the stored
+    // last-address (the raw value or its adopted saved twin) — never
+    // something the customer entered themselves this visit.
+    if (address === null || (address !== lastAddress && !sameAddress(address, adopted))) return;
+    // Value-equality guards make this effect convergent: once the store and
+    // the form both hold the adopted twin, both calls below are no-ops, no
+    // state identity changes, and the effect stops re-firing.
+    if (!sameAddress(lastAddress, adopted)) rememberAddress(adopted);
+    if (!sameAddress(address, adopted)) setAddress(adopted);
+  }, [matchedSaved, lastAddress, address, pickerConfirmedRef]);
 
   useEffect(() => {
     if (pickerConfirmedRef.current || lastAddress !== null || address !== null || book.data === undefined) {
@@ -1069,7 +1059,7 @@ function CheckoutHeaderBar() {
    COPY FOR THE COLLAPSED PAYMENT METHOD ROW (mirrors the method radios).
    =========================================================================== */
 
-/* This function has been moved to ./components/paymentCopy.ts */
+/* This function has been moved to src/lib/paymentCopy.ts */
 
 /* ===========================================================================
    METHOD ROW — removed: the payment choices are now three side-by-side
@@ -1081,7 +1071,7 @@ function CheckoutHeaderBar() {
    ADDRESS LINE AND LABEL HELPERS
    =========================================================================== */
 
-/* These functions have been moved to ./components/addressHelpers.tsx */
+/* These functions have been moved to src/lib/addressHelpers.ts */
 
 /* ===========================================================================
    STYLES

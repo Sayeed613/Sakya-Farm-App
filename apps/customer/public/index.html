@@ -23,6 +23,32 @@
     <meta property="og:image" content="https://sakya.farm/icon-192.png" />
     <meta name="twitter:card" content="summary" />
 
+    <!-- AEO: site identity for answer engines. Static and truthful — name,
+        URL and logo only; no fabricated ratings, reviews or promises. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Sakya Farms",
+        "url": "https://sakya.farm",
+        "description": "Farm-fresh fruits, vegetables, ghee, pickles and cold-pressed oils, delivered.",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://sakya.farm/search?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Sakya Farms",
+        "url": "https://sakya.farm",
+        "logo": "https://sakya.farm/icon-192.png"
+      }
+    </script>
+
     <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
     <style id="expo-reset">
       /* These styles make the body full-height */

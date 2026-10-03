@@ -1,7 +1,7 @@
 import { useAuthStore } from '../../src/stores/auth-store';
 
-import { AuthenticatedCartScreen } from './components/AuthenticatedCartScreen';
-import { GuestCartScreen } from './components/GuestCartScreen';
+import AuthenticatedCartScreen from './components/AuthenticatedCartScreen';
+import GuestCartScreen from './components/GuestCartScreen';
 
 /**
  * Cart route.

@@ -9,8 +9,8 @@ import { formatMoney } from '../../../src/lib/format';
 import { useAuthStore } from '../../../src/stores/auth-store';
 import { useGuestCartStore } from '../../../src/stores/guest-cart-store';
 
-import { CartBackdrop } from './CartBackdrop';
-import { CartHeaderBar } from './CartHeaderBar';
+import CartBackdrop from './CartBackdrop';
+import CartHeaderBar from './CartHeaderBar';
 
 const SUBTLE = '#8C8A80';
 /** Filled stepper + savings rows. Deliberately lighter than BRAND. */

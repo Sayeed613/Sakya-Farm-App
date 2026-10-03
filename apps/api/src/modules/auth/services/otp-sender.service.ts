@@ -52,8 +52,12 @@ export class OtpSenderService {
     }
 
     this.lastDevCode = code;
+    // Do NOT log the code or the full number: the response body already
+    // carries `devCode` for local development, and a log line that ships to
+    // any centralized collector would hand both the OTP and the customer's
+    // phone number to whoever can read the logs. Mask to last 4 digits.
     this.logger.log(
-      `OTP for ${phone}: ${code} (development delivery — not sent to any provider)`,
+      `OTP issued for •••${phone.slice(-4)} (development delivery — not sent to any provider)`,
     );
 
     return { accepted: true };

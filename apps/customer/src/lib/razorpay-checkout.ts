@@ -142,7 +142,7 @@ export function buildRazorpayCheckoutHtml(options: RazorpayCheckoutOptions): str
     '</head><body style="margin:0;font-family:sans-serif">' +
     '<p id="payment-status" style="padding:24px;color:#6F6C63">Opening secure payment\u2026</p>' +
     '<script>' +
-    'function relay(m){try{if(window.ReactNativeWebView&&window.ReactNativeWebView.postMessage){window.ReactNativeWebView.postMessage(JSON.stringify(m));return;}if(window.opener){window.opener.postMessage(m,"*");}}catch(e){}}' +
+    'function relay(m){try{if(window.ReactNativeWebView&&window.ReactNativeWebView.postMessage){window.ReactNativeWebView.postMessage(JSON.stringify(m));return;}if(window.opener){window.opener.postMessage(m,window.location.origin);}}catch(e){}}' +
     'if (typeof Razorpay !== "function") { document.getElementById("payment-status").textContent = "Secure checkout could not load. Close this tab and try again."; } else {' +
     'var rzp = new Razorpay({' +
     `key: ${JSON.stringify(options.key)},` +
@@ -227,6 +227,13 @@ function openRazorpayBrowserSheet(
     }
 
     const messageHandler = (event: MessageEvent): void => {
+      // Only our own popup may report an outcome, and only from this exact
+      // origin: a message from another tab/frame (or an attacker-controlled
+      // page that learned the message shape) must never reach the handlers.
+      // The message is still only a HINT — success is confirmed from the
+      // server's payment rows — but the hint itself is origin-locked.
+      if (event.origin !== window.location.origin) return;
+      if (event.source !== popup) return;
       if (typeof event.data !== 'object' || event.data === null) return;
       const data = event.data as Record<string, unknown>;
       if (data.source !== 'sakya-razorpay') return;
