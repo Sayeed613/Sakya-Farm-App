@@ -26,40 +26,43 @@ export interface OtpDeliveryResult {
 @Injectable()
 export class OtpSenderService {
   private readonly logger = new Logger(OtpSenderService.name);
-  private readonly isProduction: boolean;
-  /** Last code delivered this process, for development response bodies only. */
+private readonly isProduction: boolean;
+private readonly demoMode: boolean;  /** Last code delivered this process, for development response bodies only. */
   lastDevCode: string | null = null;
 
   constructor(
     config: ConfigService,
     private readonly msg91: Msg91SmsService,
   ) {
-    this.isProduction = config.getOrThrow<boolean>('app.isProduction');
-  }
+this.isProduction = config.getOrThrow<boolean>('app.isProduction');
+this.demoMode = config.get<boolean>('sms.demoMode') === true;  }
 
   async send(phone: string, code: string): Promise<OtpDeliveryResult> {
-    // Real delivery whenever MSG91 is configured, in any environment — this
-    // lets staging exercise the production path end-to-end.
-    if (this.msg91.configured) {
-      const accepted = await this.msg91.send(phone, code);
-      return { accepted };
-    }
-
-    if (this.isProduction) {
-      // No provider configured: fail closed rather than silently pretending a
-      // code went out. Boot-time env validation makes this visible early.
-      throw new Error('SMS provider is not configured');
-    }
-
-    this.lastDevCode = code;
-    // Do NOT log the code or the full number: the response body already
-    // carries `devCode` for local development, and a log line that ships to
-    // any centralized collector would hand both the OTP and the customer's
-    // phone number to whoever can read the logs. Mask to last 4 digits.
+  if (this.demoMode) {
     this.logger.log(
-      `OTP issued for •••${phone.slice(-4)} (development delivery — not sent to any provider)`,
+      `OTP demo mode active for •••${phone.slice(-4)} (code not sent to any provider)`,
     );
-
     return { accepted: true };
   }
+
+  // Real delivery whenever MSG91 is configured, in any environment.
+  if (this.msg91.configured) {
+    const accepted = await this.msg91.send(phone, code);
+    return { accepted };
+  }
+
+  if (this.isProduction) {
+    // No provider configured: fail closed rather than silently pretending a
+    // code went out.
+    throw new Error('SMS provider is not configured');
+  }
+
+  this.lastDevCode = code;
+
+  this.logger.log(
+    `OTP issued for •••${phone.slice(-4)} (development delivery — not sent to any provider)`,
+  );
+
+  return { accepted: true };
+}
 }

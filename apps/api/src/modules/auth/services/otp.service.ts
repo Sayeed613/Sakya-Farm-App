@@ -45,7 +45,7 @@ export class OtpService {
     config: ConfigService,
   ) {
     this.isProduction = config.getOrThrow<boolean>('app.isProduction');
-    this.demoMode = !this.isProduction && config.get<boolean>('sms.demoMode') === true;
+this.demoMode = config.get<boolean>('sms.demoMode') === true;
     this.demoCode = config.get<string>('sms.demoCode') ?? '1234';
   }
 
