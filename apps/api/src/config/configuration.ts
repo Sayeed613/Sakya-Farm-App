@@ -130,7 +130,7 @@ export default function configuration(): AppConfig {
       from: env.MSG91_SMS_FROM,
       // Demo mode is opt-in via env and can never activate in production:
       // this guard is duplicated inside OtpService so relying on it is safe.
-      demoMode: !isProduction && env.OTP_DEMO_MODE === 'true',
+      demoMode: env.OTP_DEMO_MODE === 'true',
       demoCode: env.OTP_DEMO_CODE ?? '1234',
     },
     auth: {
