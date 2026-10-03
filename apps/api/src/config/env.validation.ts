@@ -143,7 +143,7 @@ export const environmentSchema = z
     /** The fixed 4-digit code used when OTP_DEMO_MODE is on. */
     OTP_DEMO_CODE: z
       .string()
-      .regex(/^\d{4}$/, 'OTP_DEMO_CODE must be exactly 4 digits')
+      .regex(/^\d{4}$/, 'OTP_DEMO_CODE must be exactly 6 digits')
       .optional(),
     /**
      * MSG91 credentials for production OTP delivery. Optional as a pair: when
