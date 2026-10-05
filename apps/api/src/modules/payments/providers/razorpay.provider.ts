@@ -6,6 +6,8 @@ import type {
   ProviderWebhookEvent,
 } from './payment-provider.interface';
 
+import { timeExternal } from '../../../observability/request-metrics';
+
 const RAZORPAY_API = 'https://api.razorpay.com/v1';
 
 /** Every gateway round-trip fails fast: a hung provider must not hang checkout. */
@@ -30,17 +32,21 @@ export class RazorpayProvider implements PaymentProvider {
   }): Promise<{ providerOrderId: string; providerPayload: Record<string, unknown> }> {
     let response: Response;
     try {
-      response = await fetch(`${RAZORPAY_API}/orders`, {
-        method: 'POST',
-        headers: this.apiHeaders(),
-        body: JSON.stringify({
-          amount: input.amountInPaise,
-          currency: input.currency,
-          receipt: input.paymentId,
-          notes: { orderId: input.orderId, paymentId: input.paymentId },
+      // Timed for baseline instrumentation only: same call, same 8s cap,
+      // same errors — see observability/request-metrics.ts.
+      response = await timeExternal('razorpay', () =>
+        fetch(`${RAZORPAY_API}/orders`, {
+          method: 'POST',
+          headers: this.apiHeaders(),
+          body: JSON.stringify({
+            amount: input.amountInPaise,
+            currency: input.currency,
+            receipt: input.paymentId,
+            notes: { orderId: input.orderId, paymentId: input.paymentId },
+          }),
+          signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
         }),
-        signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
-      });
+      );
     } catch (error) {
       throw new Error(
         error instanceof DOMException && error.name === 'TimeoutError'
@@ -114,10 +120,12 @@ export class RazorpayProvider implements PaymentProvider {
   async fetchPaymentStatus(providerOrderId: string): Promise<ProviderWebhookEvent | null> {
     let response: Response;
     try {
-      response = await fetch(`${RAZORPAY_API}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
-        headers: this.apiHeaders(),
-        signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
-      });
+      response = await timeExternal('razorpay', () =>
+        fetch(`${RAZORPAY_API}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
+          headers: this.apiHeaders(),
+          signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
+        }),
+      );
     } catch (error) {
       throw new Error(
         error instanceof DOMException && error.name === 'TimeoutError'
@@ -171,14 +179,16 @@ export class RazorpayProvider implements PaymentProvider {
   }): Promise<void> {
     let response: Response;
     try {
-      response = await fetch(
-        `${RAZORPAY_API}/payments/${encodeURIComponent(input.providerPaymentId)}/capture`,
-        {
-          method: 'POST',
-          headers: this.apiHeaders(),
-          body: JSON.stringify({ amount: input.amountInPaise, currency: input.currency }),
-          signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
-        },
+      response = await timeExternal('razorpay', () =>
+        fetch(
+          `${RAZORPAY_API}/payments/${encodeURIComponent(input.providerPaymentId)}/capture`,
+          {
+            method: 'POST',
+            headers: this.apiHeaders(),
+            body: JSON.stringify({ amount: input.amountInPaise, currency: input.currency }),
+            signal: AbortSignal.timeout(RAZORPAY_TIMEOUT_MS),
+          },
+        ),
       );
     } catch (error) {
       throw new Error(

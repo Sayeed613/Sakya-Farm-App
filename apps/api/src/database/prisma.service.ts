@@ -3,6 +3,19 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 
 import { PrismaClient } from '../generated/prisma/client';
+import { recordDbDuration } from '../observability/request-metrics';
+
+/**
+ * Exactly the subscription the constructor's `log` option enables.
+ *
+ * `PrismaService extends PrismaClient`, whose `LogOpts` type parameter
+ * defaults to `never`, so the event name cannot be inferred through `extends`.
+ * This local interface asserts that one event and its one field — nothing
+ * wider — and keeps the handler fully typed.
+ */
+interface QueryEventSubscriber {
+  $on(event: 'query', handler: (event: { duration: number }) => void): unknown;
+}
 
 /**
  * The single Prisma client for the process.
@@ -15,11 +28,11 @@ import { PrismaClient } from '../generated/prisma/client';
  * client go through REST; a database connection is never shipped to a client.
  *
  * Database failures surface as exceptions and are logged with the request's
- * correlation id by the global exception filter. Prisma's own query/warn event
- * stream is deliberately not subscribed to here: the generated `PrismaClient` is
- * a const with a generic *type* rather than an extendable class, so event names
- * cannot be inferred through `extends`. If query logging is needed later, add it
- * where the client is constructed with inference intact.
+ * correlation id by the global exception filter. Prisma's `query` events are
+ * subscribed to with `emit: 'event'` below — they are never printed, only read
+ * for their duration, which is attributed to the request that ran the query
+ * (`observability/request-metrics.ts`) so every request line carries its
+ * database time.
  */
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleDestroy {
@@ -55,6 +68,21 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
         // with a retryable SERVICE_UNAVAILABLE instead of hanging a request.
         idleTimeoutMillis: 30_000,
       }),
+      // Baseline instrumentation: emit one event per query carrying its
+      // duration, and subscribe below to read it. Events are NOT written to
+      // stdout (`emit: 'event'`), so log volume is unchanged.
+      log: [{ level: 'query', emit: 'event' }],
+    });
+
+    // Prisma raises this inside the query's own async context, so the store
+    // read here is the bucket of the request that issued the query — no
+    // request id has to be threaded through the client. Queries started
+    // outside a request (the expiry sweep) find no bucket and are dropped.
+    //
+    // The cast re-asserts what `log: [{ level: 'query', emit: 'event' }]`
+    // above just turned on; see `QueryEventSubscriber`.
+    (this as unknown as QueryEventSubscriber).$on('query', (event) => {
+      recordDbDuration(event.duration);
     });
   }
 

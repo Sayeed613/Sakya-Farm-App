@@ -3,7 +3,7 @@ import type { HealthCheckResult } from '@sakya/types';
 import type { Response } from 'express';
 
 import { Public } from '../../common/decorators/public.decorator';
-import { HealthService } from './health.service';
+import { HealthService, type LivenessResult } from './health.service';
 
 /**
  * `GET /api/v1/health`
@@ -24,5 +24,20 @@ export class HealthController {
     response.status(result.status === 'ok' ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);
 
     return result;
+  }
+
+  /**
+   * `GET /api/v1/health/live`
+   *
+   * Public and dependency-free: the process answers for itself. It exists for
+   * liveness probes and keep-alive pings, which must succeed purely because the
+   * Node/Nest process is running — a database outage must not make an
+   * orchestrator restart instances that are otherwise fine (that is `/health`'s
+   * 503 to report, and a restart would not fix it).
+   */
+  @Public()
+  @Get('live')
+  liveness(): LivenessResult {
+    return this.healthService.liveness();
   }
 }

@@ -63,6 +63,12 @@ async function refreshSessionOnce(): Promise<boolean> {
     })();
   }
 
+  // Sharing the round with parallel 401s is safe only because the refresh
+  // request itself can never re-enter this function: `authApi.refresh` is
+  // sent with `auth: 'none'` (public route, see resources/auth-api.ts), so a
+  // 401 on the refresh exchange does not fire `onUnauthorized`. If it ever
+  // did, this return would hand that request its own pending promise and the
+  // round would await itself forever.
   return refreshInFlight;
 }
 

@@ -29,7 +29,15 @@ export function createAuthApiResource(http: HttpClient): AuthApiResource {
       return http.request('/auth/register', { method: 'POST', body: parseInput(registerSchema, input, 'Registration') });
     },
     refresh(input) {
-      return http.request('/auth/refresh', { method: 'POST', body: parseInput(refreshSchema, input, 'Refresh token') });
+      // The refresh exchange IS the 401 recovery, so it must not take part in
+      // it: `POST /auth/refresh` is a public route (no bearer required), and
+      // sending the access token here would let a 401 on this very request
+      // re-enter `onUnauthorized` while the single-flight refresh is pending —
+      // the hook returns that pending promise, so the request would await itself
+      // and never settle. `auth: 'none'` omits the bearer, so a rejected refresh
+      // (expired/revoked token) surfaces as a plain error to the caller instead.
+      // Rotation and replay detection stay server-side, keyed on the body.
+      return http.request('/auth/refresh', { method: 'POST', body: parseInput(refreshSchema, input, 'Refresh token'), auth: 'none' });
     },
     logout(input) {
       return http.request('/auth/logout', { method: 'POST', body: parseInput(logoutSchema, input, 'Logout') });

@@ -9,6 +9,7 @@ import type {
 import type { RegisterDeviceRequest } from '@sakya/validation';
 
 import { PrismaService } from '../../database/prisma.service';
+import { timeExternal } from '../../observability/request-metrics';
 
 /**
  * The Expo push API. Free, no credentials server-side; the token itself
@@ -232,15 +233,19 @@ export class NotificationsService {
   private async deliver(messages: ExpoPushMessage[]): Promise<boolean> {
     if (messages.length === 0) return true;
     try {
-      const response = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'accept-encoding': 'gzip, deflate',
-        },
-        body: JSON.stringify(messages),
-        signal: AbortSignal.timeout(10_000),
-      });
+      // Timed for baseline instrumentation only: the call, its 10s cap and its
+      // swallow-the-failure contract are untouched — see request-metrics.ts.
+      const response = await timeExternal('expo', () =>
+        fetch(EXPO_PUSH_URL, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'accept-encoding': 'gzip, deflate',
+          },
+          body: JSON.stringify(messages),
+          signal: AbortSignal.timeout(10_000),
+        }),
+      );
       if (!response.ok) {
         this.logger.warn(`Expo push API responded ${response.status}`);
         return false;

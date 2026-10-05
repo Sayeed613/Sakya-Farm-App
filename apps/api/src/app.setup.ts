@@ -4,6 +4,7 @@ import { json } from 'express';
 import helmet from 'helmet';
 
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
+import { requestMetricsMiddleware } from './common/middleware/request-metrics.middleware';
 
 /** Attribute carrying the exact request bytes for webhook signature checks. */
 export const RAW_BODY_ATTRIBUTE = 'rawBody';
@@ -49,6 +50,18 @@ export function configureApp(app: INestApplication): void {
   // Correlation ids must cover unmatched paths (404s) too, so this is attached to
   // the Express instance rather than to a route.
   app.use(requestIdMiddleware);
+
+  /**
+   * Baseline instrumentation: one performance bucket per request, opened
+   * BEFORE routing so the whole downstream handler — and every Prisma query
+   * and provider call it starts — records into this request's bucket. The
+   * bucket also hangs on `request.metrics`, which is where the pino completion
+   * hook reads it (that hook has the request, not the async context).
+   *
+   * Attached to the Express instance rather than the router, so 404s and 5xxs
+   * carry timings too. It reads nothing and changes no behaviour.
+   */
+  app.use(requestMetricsMiddleware);
 
   /**
    * Preserve the exact request bytes for webhook signature verification.

@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import { join } from 'node:path';
 
 import { Module } from '@nestjs/common';
@@ -12,6 +13,7 @@ import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { UserAwareThrottlerGuard } from './common/guards/user-aware-throttler.guard';
 import { resolveRequestId } from './common/middleware/request-id.middleware';
+import type { RequestMetrics } from './observability/request-metrics';
 import { CatalogCacheModule } from './cache/catalog-cache.module';
 import configuration from './config/configuration';
 import { PrismaModule } from './database/prisma.module';
@@ -33,6 +35,37 @@ import {
   StoresModule,
   UsersModule,
 } from './modules';
+
+/**
+ * The request shape the completion log reads instrumentation from.
+ *
+ * `metrics` is attached by `requestMetricsMiddleware`; `route` is Express'
+ * matched layer (`/api/v1/cart/items/:itemId`), which only exists once routing
+ * has happened — that is why it is read here, when the response finishes,
+ * instead of in the `req` serializer, whose bindings are frozen at request
+ * start.
+ */
+type InstrumentedRequest = IncomingMessage & {
+  metrics?: RequestMetrics;
+  route?: { path?: string | string[] };
+};
+
+/** Route template for grouping, or null when nothing matched (404). */
+function routeTemplate(request: InstrumentedRequest): string | null {
+  const path = request.route?.path;
+  if (path === undefined) return null;
+  if (Array.isArray(path)) return path[0] ?? null;
+  return path;
+}
+
+/** Round each external-service total for a compact log binding. */
+function roundDurations(durations: Record<string, number>): Record<string, number> {
+  const rounded: Record<string, number> = {};
+  for (const [label, milliseconds] of Object.entries(durations)) {
+    rounded[label] = Math.round(milliseconds);
+  }
+  return rounded;
+}
 
 /**
  * Resolve `.env` from the API directory itself. `__dirname` here is the source
@@ -101,7 +134,29 @@ const appRoot = join(__dirname, '..');
               }),
               res: (response: { statusCode?: number }) => ({ statusCode: response.statusCode }),
             },
-            customProps: () => ({ service: 'sakya-farms-api', env: environment }),
+            // Evaluated once for the per-request child at request start and
+            // AGAIN when the completion line is written — so the buckets
+            // filled during the request land on that line, alongside pino's
+            // own `responseTime` and the `res.statusCode`/`req` serializers
+            // (method, url, correlation id).
+            customProps: (request) => {
+              const instrumented = request as InstrumentedRequest;
+              const metrics = instrumented.metrics;
+              const route = routeTemplate(instrumented);
+              const external =
+                metrics === undefined ? {} : roundDurations(metrics.externalMs);
+              return {
+                service: 'sakya-farms-api',
+                env: environment,
+                ...(route === null ? {} : { route }),
+                ...(metrics === undefined
+                  ? {}
+                  : {
+                      db: { ms: Math.round(metrics.dbMs), queries: metrics.dbQueries },
+                      ...(Object.keys(external).length === 0 ? {} : { ext: external }),
+                    }),
+              };
+            },
             // Health probes fire every few seconds; logging them buries real traffic.
             autoLogging: {
               ignore: (request) => (request.url ?? '').includes('/health'),

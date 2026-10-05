@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { timeExternal } from '../../../observability/request-metrics';
+
 /**
  * SMS OTP delivery through MSG91's v5 OTP API.
  *
@@ -66,23 +68,27 @@ export class Msg91SmsService {
     // country code + number without the leading `+` (e.g. `919876543210`).
     const destination = phone.replace(/^\+/, '');
 
-    const response = await fetch(MSG91_OTP_URL, {
-      method: 'POST',
-      headers: {
-        authkey: this.authKey as string,
-        accept: 'application/json',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        template_id: this.otpTemplateId,
-        mobile: [destination],
-        otp: code,
-        otp_length: MSG91_OTP_LENGTH,
-        otp_expiry: MSG91_OTP_EXPIRY_MINUTES,
-        sender: this.from,
+    // Timed for baseline instrumentation only: the call, its 10s cap and its
+    // error behaviour are untouched — see observability/request-metrics.ts.
+    const response = await timeExternal('msg91', () =>
+      fetch(MSG91_OTP_URL, {
+        method: 'POST',
+        headers: {
+          authkey: this.authKey as string,
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          template_id: this.otpTemplateId,
+          mobile: [destination],
+          otp: code,
+          otp_length: MSG91_OTP_LENGTH,
+          otp_expiry: MSG91_OTP_EXPIRY_MINUTES,
+          sender: this.from,
+        }),
+        signal: AbortSignal.timeout(10_000),
       }),
-      signal: AbortSignal.timeout(10_000),
-    });
+    );
 
     if (!response.ok) {
       throw new Error(`MSG91 OTP API responded ${response.status}`);

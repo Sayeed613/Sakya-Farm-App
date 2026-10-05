@@ -1,0 +1,59 @@
+# STEP 3 — Render keep-alive (external scheduled request)
+#
+# What this is:
+#   A scheduled HTTP request run by GitHub Actions (GitHub's servers), waking the
+#   production Render API before its free instance spins down. Nothing inside the
+#   NestJS app runs this — there is no in-app cron and no monitoring platform.
+#
+# Target:
+#   GET https://sakya-farms-api.onrender.com/api/v1/health/live
+#   The liveness probe (added in Step 2), NOT /api/v1/health: /health/live does
+#   zero I/O and never opens a PostgreSQL connection, so the ping cannot wake or
+#   query the database.
+#
+# Cadence:
+#   Every 10 minutes (cron: */10 * * * *). Render's free tier sleeps an instance
+#   after ~15 minutes without traffic; 10-minute pings keep it permanently warm
+#   with margin for GitHub's schedule jitter (~144 requests/day, inside both
+#   Render's free-tier allowance and GitHub Actions' free minutes for a public
+#   repository).
+#
+# Credentials: none. The endpoint is public; the request is unauthenticated.
+#
+# Activation: takes effect once this file is on the default branch (main).
+# Note: GitHub automatically disables scheduled workflows after 60 days without
+# repository activity — re-enable from the Actions tab if that happens.
+
+name: Render keep-alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # manual trigger, e.g. right after a deploy
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Ping /api/v1/health/live
+        run: |
+          URL="https://sakya-farms-api.onrender.com/api/v1/health/live"
+          # A cold Render free instance takes ~60-90s to answer its first
+          # request; this first attempt both triggers the wake-up and waits
+          # for it. curl prints 000 when it cannot get a response.
+          code=$(curl -sS -o /tmp/keep-alive-body -w '%{http_code}' --max-time 100 "$URL" || true)
+          if [ "$code" != "200" ]; then
+            echo "first attempt: HTTP ${code:-none}; retrying once after warm-up"
+            sleep 20
+            code=$(curl -sS -o /tmp/keep-alive-body -w '%{http_code}' --max-time 100 "$URL" || true)
+          fi
+          echo "HTTP ${code:-none}"
+          cat /tmp/keep-alive-body 2>/dev/null || true
+          # Non-200 fails the run so it is visible in Actions. (Until the Step 2
+          # /health/live route is deployed this reports 404 — the request still
+          # warms the instance either way, because Render boots on any request.)
+          [ "$code" = "200" ]
