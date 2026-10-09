@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import { Modal, Pressable, ScrollView, Text as RNText, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text as RNText, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
 
 import { journeyApi } from '../../api/journey';
 import { formatMoney } from '../../lib/format';
+import { sheetMaxContentHeight } from '../../lib/layout-metrics';
 
 const BRAND = '#0B594C';
 const INK = '#171A18';
@@ -29,6 +30,7 @@ export function InvoiceSheet({
   onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const invoice = useQuery({
     queryKey: ['invoice', orderId],
     queryFn: () => journeyApi.getInvoice(orderId as string),
@@ -59,7 +61,13 @@ export function InvoiceSheet({
             </Pressable>
           </View>
 
-          <ScrollView className="px-5 pt-3" style={{ maxHeight: 480 }}>
+          {/* Responsive cap: a flat 480 clipped the sheet's header/actions on
+              short phones; this scales with the real screen so long invoices
+              still scroll to the total while the sheet always fits. */}
+          <ScrollView
+            className="px-5 pt-3"
+            style={{ maxHeight: sheetMaxContentHeight(windowHeight) }}
+          >
             {invoice.isPending ? (
               <RNText className="py-8 text-center text-[13px]" style={{ color: MUTED }}>
                 Loading invoice…

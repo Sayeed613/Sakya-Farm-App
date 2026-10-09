@@ -1249,6 +1249,17 @@ model Notification {
   readAt        DateTime? @map("read_at")
   failureReason String?   @map("failure_reason")
 
+  /// Background delivery lifecycle (NotificationWorkerService). The status
+  /// enum stays the project's QUEUED -> SENT/FAILED; the claim columns carry
+  /// the in-flight state: a QUEUED row with an unexpired `claimedAt` is being
+  /// sent by `claimedBy` right now (the SENDING equivalent), a lapsed lease is
+  /// reclaimable after a worker crash, and `attempts`/`nextAttemptAt` drive
+  /// the bounded retry schedule.
+  attempts       Int       @default(0)
+  claimedBy      String?   @map("claimed_by") @db.VarChar(128)
+  claimedAt      DateTime? @map("claimed_at")
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -1288,4 +1299,38 @@ model AuditLog {
   @@index([actorUserId, createdAt])
   @@index([action, createdAt])
   @@map("audit_logs")
+}
+
+/// Cross-instance lock for singleton background jobs.
+///
+/// One row per job name; the row IS the lock. A run claims it with a single
+/// conditional `UPDATE` that only matches while `expires_at` is in the past,
+/// so PostgreSQL's row-level locking serialises every concurrent claim and
+/// exactly one instance wins — the guarantee a process-local boolean can never
+/// give. The lease (`expires_at`) makes the lock self-healing: a holder that
+/// crashes before releasing frees itself when the lease lapses, and `owner`
+/// records the holder so an instance can only release its own claim.
+///
+/// A row lock is deliberate instead of `pg_advisory_lock`: connections are
+/// pooled through PgBouncer in transaction mode, where session state does not
+/// survive a pooled round trip, and a transaction-scoped advisory lock would
+/// have to be held for the whole sweep (blocking a connection across gateway
+/// calls). One conditional UPDATE works identically through any pooler.
+model JobLock {
+  /// Stable job identifier, e.g. `order-expiry`.
+  name String @id @db.VarChar(64)
+
+  /// Identifier of the instance/run currently holding the lock (diagnostics
+  /// and owner-scoped release; correctness never rests on it alone).
+  owner String @db.VarChar(128)
+
+  /// When the current holder claimed the lock.
+  acquiredAt DateTime @map("acquired_at")
+  /// Lease end: the lock becomes claimable again once this is in the past.
+  expiresAt DateTime @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("job_locks")
 }

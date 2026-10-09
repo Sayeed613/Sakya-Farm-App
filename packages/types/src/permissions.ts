@@ -58,6 +58,8 @@ export const PERMISSION_CODES = [
   // Oversight
   'audit:read',
   'admin:access',
+  // Observability
+  'observability:read',
 ] as const;
 
 export type PermissionCode = (typeof PERMISSION_CODES)[number];

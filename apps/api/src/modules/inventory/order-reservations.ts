@@ -2,6 +2,8 @@ import { ConflictException } from '@nestjs/common';
 
 import type { Prisma } from '../../generated/prisma/client';
 
+import { incrementMetric } from '../../observability/business-metrics';
+
 /**
  * Order-driven inventory reservations.
  *
@@ -23,7 +25,6 @@ import type { Prisma } from '../../generated/prisma/client';
  * - a release is recorded exactly once per (order, variant) in the ledger
  * - a sale is recorded exactly once per (order, variant) in the ledger
  */
-
 export interface OrderReservationLine {
   variantId: string;
   /** Only used to make the failure message readable. */
@@ -38,6 +39,9 @@ export interface OrderReservationLine {
  * enough stock is still unreserved. That makes the check-and-increment atomic in
  * PostgreSQL, so two concurrent checkouts for the same variant cannot both pass
  * and oversell it (a read-then-write would let them).
+ *
+ * Observability is a side effect only: if the counter itself misbehaves the
+ * reservation still fails exactly as before.
  */
 export async function reserveOrderLine(
   tx: Prisma.TransactionClient,
@@ -71,6 +75,7 @@ export async function reserveOrderLine(
   `;
 
   if (updated !== 1) {
+    incrementMetric('inventoryReservationFailures');
     throw new ConflictException(`Insufficient stock for "${line.variantTitle}"`);
   }
 

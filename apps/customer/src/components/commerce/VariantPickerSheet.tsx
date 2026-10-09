@@ -12,7 +12,7 @@ import Animated, {
   SlideOutDown,
 } from 'react-native-reanimated';
 
-import { catalogApi } from '../../api/catalog';
+import { productDetailQueryOptions } from '../../api/product-detail-query';
 import { useGuestCartStore } from '../../stores/guest-cart-store';
 import type { ProductDetail, ProductListItem } from '@sakya/types';
 import { formatMoney } from '../../lib/format';
@@ -50,10 +50,8 @@ export function VariantPickerSheet({
   const insets = useSafeAreaInsets();
   const slug = pick?.product.slug ?? '';
   const detail = useQuery({
-    queryKey: ['catalog', 'product', slug],
-    queryFn: () => catalogApi.getProduct(slug),
+    ...productDetailQueryOptions(slug),
     enabled: slug.length > 0,
-    staleTime: 120_000,
   });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);

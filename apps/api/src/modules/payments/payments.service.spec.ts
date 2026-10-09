@@ -2,10 +2,12 @@ import { BadRequestException, ConflictException, ForbiddenException, NotFoundExc
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PaymentsService, type PaymentRowView } from './payments.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ManualProvider } from './providers/manual.provider';
 import { MockProvider } from './providers/mock.provider';
 import { RazorpayProvider } from './providers/razorpay.provider';
 import type { PaymentProvider, ProviderWebhookEvent } from './providers/payment-provider.interface';
+import * as incrementMetricModule from '../../observability/business-metrics';
 
 function row(overrides: Partial<PaymentRowView> = {}): PaymentRowView {
   const now = new Date('2026-01-01T00:00:00.000Z');
@@ -28,7 +30,7 @@ function row(overrides: Partial<PaymentRowView> = {}): PaymentRowView {
   };
 }
 
-function setup(withRazorpay = false) {
+function setup(withRazorpay = false, options: { realNotifications?: boolean } = {}) {
   const orderFindFirst = vi.fn();
   const orderFindUnique = vi.fn();
   const orderUpdate = vi.fn();
@@ -40,10 +42,18 @@ function setup(withRazorpay = false) {
   const paymentUpdate = vi.fn();
   const paymentFindUniqueOrThrow = vi.fn();
 
+  // The outbox enqueue runs ON the transaction, so `tx` and `prisma` share
+  // the same spies: tests asserting on ctx.prisma.* observe tx-side calls.
+  const userFindUnique = vi.fn();
+  const notificationCreate = vi.fn();
+  const notificationUpdateMany = vi.fn();
+
   const tx = {
     payment: { create: paymentCreate, update: paymentUpdate, updateMany: vi.fn(async () => ({ count: 0 })) },
     order: { findUnique: orderFindUnique, update: orderUpdate },
     orderStatusHistory: { create: orderStatusHistoryCreate },
+    user: { findUnique: userFindUnique },
+    notification: { create: notificationCreate, updateMany: notificationUpdateMany },
   };
   const prisma = {
     order: { findFirst: orderFindFirst, findUnique: orderFindUnique, update: orderUpdate },
@@ -56,6 +66,11 @@ function setup(withRazorpay = false) {
       update: paymentUpdate,
       findUniqueOrThrow: paymentFindUniqueOrThrow,
     },
+    // Used by the real NotificationsService when Step 12 tests run the actual
+    // enqueue path instead of a stub (same fns the transaction exposes).
+    user: { findUnique: userFindUnique },
+    devicePushToken: { findMany: vi.fn(), updateMany: vi.fn() },
+    notification: { create: notificationCreate, updateMany: notificationUpdateMany },
     $transaction: vi.fn(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
   };
 
@@ -70,12 +85,15 @@ function setup(withRazorpay = false) {
   const service = new PaymentsService(
     prisma as never,
     configService as never,
-    { sendOrderStatusPush: vi.fn(async () => undefined) } as never,
+    (options.realNotifications === true
+      ? new NotificationsService(prisma as never, configService as never)
+      : { sendOrderStatusPush: vi.fn(async () => undefined) }) as never,
     providers as unknown as Map<string, never>,
   );
 
   return {
     service,
+    prisma,
     orderFindFirst,
     orderFindUnique,
     orderUpdate,
@@ -379,6 +397,242 @@ describe('PaymentsService webhooks', () => {
         rawPayload: {},
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  /**
+   * Step 12 — the webhook's business transition must not wait on (or be
+   * affected by) Expo push delivery, which now happens in the background
+   * worker. Signature verification, the state machine, capture/refund safety
+   * and idempotency are untouched — only the notification latency moved.
+   */
+  it('L. completes the captured transition while the push provider hangs', async () => {
+    const ctx = setup(false, { realNotifications: true });
+    ctx.paymentFindUnique.mockResolvedValue(
+      row({ providerPaymentId: 'mock_1', status: 'AUTHORIZED' }),
+    );
+    ctx.paymentUpdate.mockImplementation(async () =>
+      row({ providerPaymentId: 'mock_1', status: 'CAPTURED', capturedAt: new Date() }),
+    );
+    // 1st read: mirrorToOrder's pre-transition read inside the transaction;
+    // 2nd read: the outbox enqueue's read, after the mirror — production sees
+    // the CONFIRMED order there because the enqueue runs on the same tx.
+    ctx.orderFindUnique
+      .mockResolvedValueOnce({ id: 'order-id', status: 'PENDING_PAYMENT' })
+      .mockResolvedValueOnce({
+        id: 'order-id',
+        userId: 'user-id',
+        orderNumber: 'SKY-1',
+        status: 'CONFIRMED',
+      });
+    ctx.prisma.user.findUnique.mockResolvedValue({ firstName: 'Asha' });
+    ctx.prisma.notification.create.mockResolvedValue({ id: 'n-1' });
+
+    // A provider that never answers — if the webhook waited on it, this test
+    // would hang and fail its 30s budget.
+    const fetchSpy = vi.fn(() => new Promise(() => undefined));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    try {
+      const result = await ctx.service.processWebhookEvent('mock', {
+        type: 'captured',
+        providerPaymentId: 'mock_1',
+        amountInPaise: 49900,
+        currency: 'INR',
+        rawPayload: { type: 'captured' },
+      });
+
+      // Business state committed: payment captured, order confirmed, history written.
+      expect(result.status).toBe('CAPTURED');
+      expect(ctx.orderUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ paymentStatus: 'CAPTURED', status: 'CONFIRMED' }),
+        }),
+      );
+      expect(ctx.orderStatusHistoryCreate).toHaveBeenCalledOnce();
+      // The notification was only QUEUED — Expo was never contacted.
+      expect(ctx.prisma.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'QUEUED' }) }),
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('M. a durable-intent write failure propagates so the webhook transaction rolls back as one unit, and counts webhookFailures', async () => {
+    const ctx = setup(false, { realNotifications: true });
+    ctx.paymentFindUnique.mockResolvedValue(
+      row({ providerPaymentId: 'mock_1', status: 'AUTHORIZED' }),
+    );
+    ctx.paymentUpdate.mockImplementation(async () =>
+      row({ providerPaymentId: 'mock_1', status: 'CAPTURED', capturedAt: new Date() }),
+    );
+    // Same read pattern as L: mirror read inside the tx, enqueue read after it.
+    ctx.orderFindUnique
+      .mockResolvedValueOnce({ id: 'order-id', status: 'PENDING_PAYMENT' })
+      .mockResolvedValueOnce({
+        id: 'order-id',
+        userId: 'user-id',
+        orderNumber: 'SKY-1',
+        status: 'CONFIRMED',
+      });
+    ctx.prisma.user.findUnique.mockResolvedValue({ firstName: 'Asha' });
+    // The outbox INSERT itself fails — the ONE failure mode that must take the
+    // business state down with it. Swallowing here would commit the transition
+    // WITHOUT its durable intent, recreating the crash gap (report §A).
+    ctx.prisma.notification.create.mockRejectedValue(new Error('notification store exploded'));
+
+    const fetchSpy = vi.fn();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    try {
+      await expect(
+        ctx.service.processWebhookEvent('mock', {
+          type: 'captured',
+          providerPaymentId: 'mock_1',
+          amountInPaise: 49900,
+          currency: 'INR',
+          rawPayload: { type: 'captured' },
+        }),
+      ).rejects.toThrow('notification store exploded');
+
+      // The error propagated instead of being swallowed: in PostgreSQL the
+      // payment update, the order mirror AND the intent roll back together
+      // (proven at DB level in test/notification-outbox.e2e.spec.ts), so the
+      // provider retries a clean, un-transitioned state and everything
+      // converges — never a PAID order with a lost notification.
+      expect(ctx.prisma.notification.create).toHaveBeenCalledTimes(1);
+      // No external provider was ever contacted on this path.
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Observability: in-process business counters (side effects only).
+  // ---------------------------------------------------------------------
+
+  describe('webhookFailures counter at the real webhook failure path', () => {
+    it('increments webhookFailures exactly once for an unknown provider payment', async () => {
+      const incrementMetricSpy = vi.spyOn(incrementMetricModule, 'incrementMetric');
+
+      ctx3.paymentFindUnique.mockResolvedValue(null);
+
+      await expect(
+        ctx3.service.processWebhookEvent('mock', {
+          type: 'captured',
+          providerPaymentId: 'ghost',
+          rawPayload: {},
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(incrementMetricSpy).toHaveBeenCalledTimes(1);
+      expect(incrementMetricSpy).toHaveBeenCalledWith('webhookFailures');
+
+      vi.restoreAllMocks();
+    });
+
+    it('does not increment webhookFailures on a successful webhook transition', async () => {
+      const incrementMetricSpy = vi.spyOn(incrementMetricModule, 'incrementMetric');
+
+      ctx3.paymentFindUnique.mockResolvedValue(row({ providerPaymentId: 'mock_1', status: 'AUTHORIZED' }));
+      ctx3.paymentUpdate.mockImplementation(async () =>
+        row({ providerPaymentId: 'mock_1', status: 'CAPTURED', capturedAt: new Date() }),
+      );
+      ctx3.orderFindUnique.mockResolvedValue({ id: 'order-id', status: 'PENDING_PAYMENT' });
+
+      await ctx3.service.processWebhookEvent('mock', {
+        type: 'captured',
+        providerPaymentId: 'mock_1',
+        amountInPaise: 49900,
+        currency: 'INR',
+        rawPayload: { type: 'captured' },
+      });
+
+      expect(incrementMetricSpy).not.toHaveBeenCalledWith('webhookFailures');
+
+      vi.restoreAllMocks();
+    });
+  });
+
+  describe('paymentFailures counter at the real payment failure paths', () => {
+    // This block is intentionally self-contained: it builds its own service via
+    // `setup()` so it does not depend on the `ctx`/`ctx3` variables from the
+    // sibling describes above.
+    let ctx: ReturnType<typeof setup>;
+
+    beforeEach(() => {
+      ctx = setup();
+    });
+
+    it('increments paymentFailures exactly once when a payment intent creation fails with a non-race error', async () => {
+      const incrementMetricSpy = vi.spyOn(incrementMetricModule, 'incrementMetric');
+
+      ctx.orderFindFirst.mockResolvedValue(ORDER);
+      ctx.paymentFindUnique.mockResolvedValue(null);
+      ctx.paymentFindFirst.mockResolvedValue(null);
+      // A create that fails for a reason other than a unique violation.
+      ctx.paymentCreate.mockRejectedValue(new Error('provider gateway timed out'));
+
+      await expect(
+        ctx.service.createIntent('user-id', {
+          orderId: ORDER.id,
+          method: 'UPI',
+          idempotencyKey: 'key-fail',
+        }),
+      ).rejects.toThrow('provider gateway timed out');
+
+      expect(incrementMetricSpy).toHaveBeenCalledTimes(1);
+      expect(incrementMetricSpy).toHaveBeenCalledWith('paymentFailures');
+
+      vi.restoreAllMocks();
+    });
+
+    it('does not increment paymentFailures when an intent creation race is won by a concurrent request', async () => {
+      const incrementMetricSpy = vi.spyOn(incrementMetricModule, 'incrementMetric');
+
+      ctx.orderFindFirst.mockResolvedValue(ORDER);
+      ctx.paymentFindUnique.mockResolvedValue(null);
+      ctx.paymentFindFirst.mockResolvedValue(null);
+      // A unique-violation race is not a business payment failure — the winner
+      // is read back and returned.
+      ctx.paymentCreate.mockRejectedValue({ code: 'P2002' });
+      ctx.paymentFindUnique.mockResolvedValueOnce(row({ id: 'winner' }));
+
+      const result = await ctx.service.createIntent('user-id', {
+        orderId: ORDER.id,
+        method: 'UPI',
+        idempotencyKey: 'key-race',
+      });
+
+      expect(result.payment.id).toBe('winner');
+      expect(incrementMetricSpy).not.toHaveBeenCalledWith('paymentFailures');
+
+      vi.restoreAllMocks();
+    });
+
+    it('does not increment paymentFailures on a successful intent creation', async () => {
+      const incrementMetricSpy = vi.spyOn(incrementMetricModule, 'incrementMetric');
+
+      ctx.orderFindFirst.mockResolvedValue(ORDER);
+      ctx.paymentFindUnique.mockResolvedValue(null);
+      ctx.paymentFindFirst.mockResolvedValue(null);
+      ctx.paymentCreate.mockImplementation(async (args: { data: Record<string, unknown> }) =>
+        row({ id: 'new-payment', orderId: ORDER.id, ...(args.data as object) }),
+      );
+
+      const result = await ctx.service.createIntent('user-id', {
+        orderId: ORDER.id,
+        method: 'UPI',
+        idempotencyKey: 'key-ok',
+      });
+
+      expect(result.payment.id).toBe('new-payment');
+      expect(incrementMetricSpy).not.toHaveBeenCalledWith('paymentFailures');
+
+      vi.restoreAllMocks();
+    });
   });
 });
 

@@ -5,6 +5,7 @@ import helmet from 'helmet';
 
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
 import { requestMetricsMiddleware } from './common/middleware/request-metrics.middleware';
+import { slowRequestMiddleware } from './common/middleware/slow-request.middleware';
 
 /** Attribute carrying the exact request bytes for webhook signature checks. */
 export const RAW_BODY_ATTRIBUTE = 'rawBody';
@@ -62,6 +63,20 @@ export function configureApp(app: INestApplication): void {
    * carry timings too. It reads nothing and changes no behaviour.
    */
   app.use(requestMetricsMiddleware);
+
+  /**
+   * Slow-request detection: one structured `slow request` warn when a response
+   * takes at least `logging.slowRequestMs` (0 disables). Registered after the
+   * correlation-id and metrics middlewares so the warning can carry the
+   * requestId, route template and db time, and before routing so the
+   * `finish` listener observes the matched route. Purely observational: it
+   * never writes to the response and never throws.
+   */
+  app.use(
+    slowRequestMiddleware({
+      thresholdMs: configService.getOrThrow<number>('logging.slowRequestMs'),
+    }),
+  );
 
   /**
    * Preserve the exact request bytes for webhook signature verification.

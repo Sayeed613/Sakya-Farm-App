@@ -31,6 +31,11 @@ export default defineConfig({
       TAX_RATE_PERCENT: '0',
       COD_FEE_IN_PAISE: '0',
       OTP_DEMO_MODE: 'false',
+      // The notification worker's cron must never fire during tests: a tick
+      // would make REAL Expo calls and race suite-owned queue rows. Tests
+      // drive NotificationWorkerService.processQueuedNotifications() directly
+      // instead (production default: unset = enabled).
+      NOTIFICATIONS_WORKER_DISABLED: '1',
     },
   },
 });

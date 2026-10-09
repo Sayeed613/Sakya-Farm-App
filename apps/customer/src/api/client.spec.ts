@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthSessionResponse } from '@sakya/types';
 
 import { useAuthStore } from '../stores/auth-store';
@@ -58,6 +58,14 @@ vi.stubGlobal('fetch', (url: string, init: RecordedInit) => {
     headers: { get: () => null },
     text: () => Promise.resolve(text),
   });
+});
+
+beforeEach(() => {
+  // Reset auth store state to avoid cross-test pollution.
+  // In particular, logoutGeneration must be 0 for refresh tests to work.
+  const store = useAuthStore.getState();
+  store.session = null;
+  store.logoutGeneration = 0;
 });
 
 afterAll(() => {

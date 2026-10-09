@@ -51,6 +51,7 @@ function RelatedProductCardInner({
     increment,
     decrement,
     resolving,
+    mutating,
   } = useProductAdd(item);
 
   const [failed, setFailed] = useState(false);
@@ -166,7 +167,7 @@ function RelatedProductCardInner({
         ) : quantity > 0 ? (
           <QuantityStepper
             quantity={quantity}
-            disabled={resolving}
+            disabled={resolving || mutating}
             width={70}
             onAdd={() => void add()}
             onIncrement={() => void increment()}
@@ -175,13 +176,13 @@ function RelatedProductCardInner({
         ) : (
           <Pressable
             onPress={() => void add()}
-            disabled={resolving}
+            disabled={resolving || mutating}
             accessibilityRole="button"
             accessibilityLabel={`Add ${item.title}`}
             className="h-[32px] min-w-[43px] items-center justify-center rounded-[9px] border bg-white px-[9px]"
             style={{
               borderColor: GREEN,
-              opacity: resolving ? 0.5 : 1,
+              opacity: resolving || mutating ? 0.5 : 1,
             }}
           >
             <RNText

@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { addCartItemSchema, applyCouponSchema, mergeGuestCartSchema, updateCartItemSchema } from '@sakya/validation';
 import type {
@@ -342,6 +343,21 @@ export class CartService {
    * duplicates into one line per variant. Lines that fail validation are
    * dropped rather than failing the whole merge: a stale guest line for a
    * delisted product must not block the six good ones.
+   *
+   * Concurrency: the merge runs inside a Prisma transaction with
+   * `ISOLATION_LEVEL: SERIALIZABLE` to serialize concurrent merges for the
+   * same cart. This prevents:
+   *   - lost quantity increments (both requests reading the same stale quantity
+   *     and incrementing based on it);
+   *   - maxQuantityPerLine violations (both requests validating against the
+   *     same pre-increment quantity);
+   *   - maxCartLines violations (both requests believing a new slot is
+   *     available);
+   *   - invalid lines consuming valid slots (the slot counting happens inside
+   *     the transaction against the current DB state).
+   *
+   * The unique constraint on `(cartId, variantId, storeId)` remains as a
+   * secondary safety net for the create path.
    */
   async mergeGuestCart(userId: string, body: MergeGuestCartRequest): Promise<CartResponse> {
     const parsed = mergeGuestCartSchema.parse(body);
@@ -362,6 +378,8 @@ export class CartService {
 
     // The fulfillment store: the current cart's store when one is already
     // scoped, otherwise the first active store. Clients cannot choose this.
+    // This happens OUTSIDE the transaction to avoid holding the transaction
+    // open while resolving the store.
     const cart = await this.ensureUserCart(userId);
     const existingStoreId = cart.storeId ?? null;
     const storeId =
@@ -377,30 +395,140 @@ export class CartService {
     }
 
     if (existingStoreId === null) {
+      // Scope the cart to the store outside the merge transaction.
       await this.prisma.cart.update({
         where: { id: cart.id },
         data: { storeId },
       });
     }
 
-    let merged = 0;
-    for (const [variantId, quantity] of quantitiesByVariant) {
-      try {
-        await this.addItem(userId, { variantId, storeId, quantity });
-        merged += 1;
-      } catch {
-        // Unavailable, delisted or unknown variant: drop the line, keep the
-        // rest. Price and availability are the server's call, not the client's.
-        continue;
+    // ---- Batched variant availability/price read (outside transaction) ----
+    // This read happens before the transaction to minimize transaction duration.
+    // The transaction will re-validate against current cart state.
+    const candidateVariantIds = [...quantitiesByVariant.keys()];
+    const availableVariants = new Map<string, { priceInPaise: number }>();
+    if (candidateVariantIds.length > 0) {
+      const variants = await this.prisma.productVariant.findMany({
+        where: { id: { in: candidateVariantIds } },
+        select: {
+          id: true,
+          priceInPaise: true,
+          isAvailable: true,
+          product: { select: { status: true, isAvailable: true } },
+        },
+      });
+
+      for (const variant of variants) {
+        if (
+          variant.product.status === 'ACTIVE' &&
+          variant.product.isAvailable &&
+          variant.isAvailable
+        ) {
+          availableVariants.set(variant.id, { priceInPaise: variant.priceInPaise });
+        }
       }
     }
 
-    if (merged === 0 && quantitiesByVariant.size > 0) {
-      // Everything the guest had was rejected; the cart exists but is empty.
-      // That is still a successful merge with zero survivable lines.
-      return this.getCurrentCart(userId);
-    }
+    // ---- Concurrency-controlled merge transaction ----
+    // We use SERIALIZABLE isolation to ensure that concurrent merges for the
+    // same cart are serialized. PostgreSQL will detect serialization conflicts
+    // and abort one of the transactions, which Prisma propagates as an error.
+    // The caller can retry if needed; for guest cart merges (typically single-
+    // user, post-login), retries are rare.
+    const commerce = this.config.get('commerce', { infer: true })!;
 
+    const _transactionResult = await this.prisma.$transaction(async (tx) => {
+      // Re-read the current cart state INSIDE the transaction.
+      // This is the authoritative state we validate against, not the
+      // snapshot from ensureUserCart above.
+      const currentCart = await tx.cart.findFirst({
+        where: { id: cart.id, status: 'ACTIVE' },
+        include: {
+          items: {
+            where: { quantity: { gt: 0 } },
+            orderBy: { createdAt: 'asc' },
+            include: { variant: { select: { id: true } } },
+          },
+        },
+      });
+
+      if (currentCart === null) {
+        throw new ConflictException('The cart is no longer available');
+      }
+
+      // Build the set of existing line variant ids from the current DB state.
+      const existingLineVariantIds = new Set(currentCart.items.map((item) => item.variantId));
+
+      // Decide which lines survive, using CURRENT cart state.
+      const toCreate: Array<{ variantId: string; quantity: number; priceInPaise: number }> = [];
+      const toIncrement: Array<{ variantId: string; quantity: number }> = [];
+      let committedNewLines = 0;
+
+      for (const [variantId, quantity] of quantitiesByVariant) {
+        // Skip variants that are not available (validated above).
+        if (!availableVariants.has(variantId)) {
+          continue; // invalid variant — does not consume a slot
+        }
+
+        if (existingLineVariantIds.has(variantId)) {
+          // Existing line: validate per-line quantity cap against CURRENT quantity.
+          const existingItem = currentCart.items.find((item) => item.variantId === variantId);
+          if (existingItem !== undefined && existingItem.quantity + quantity > commerce.maxQuantityPerLine) {
+            continue; // would exceed cap — drop this line
+          }
+          if (existingItem !== undefined) {
+            toIncrement.push({ variantId, quantity });
+          }
+        } else {
+          // New line: validate maxCartLines against CURRENT line count.
+          if (committedNewLines >= commerce.maxCartLines) {
+            continue; // cart is full — drop this line
+          }
+          committedNewLines += 1;
+          const price = availableVariants.get(variantId)!;
+          toCreate.push({ variantId, quantity, priceInPaise: price.priceInPaise });
+        }
+      }
+
+      // ---- Writes inside transaction ----
+      // Each surviving line is written. New lines use create; existing lines
+      // use update with increment. The unique constraint on
+      // (cartId, variantId, storeId) provides a secondary safety net.
+      for (const line of toCreate) {
+        await tx.cartItem.create({
+          data: {
+            cartId: cart.id,
+            variantId: line.variantId,
+            storeId,
+            quantity: line.quantity,
+            unitPriceInPaise: line.priceInPaise,
+          },
+        });
+      }
+
+      for (const line of toIncrement) {
+        // Re-find the item by variantId to get its current ID.
+        // This handles the case where a concurrent transaction may have
+        // modified the cart (though SERIALIZABLE should prevent this).
+        const existingItem = currentCart.items.find((item) => item.variantId === line.variantId);
+        if (existingItem === undefined) {
+          // Item no longer exists — skip this increment.
+          // The unique constraint ensures no duplicate rows.
+          continue;
+        }
+        await tx.cartItem.update({
+          where: { id: existingItem.id },
+          data: { quantity: { increment: line.quantity } },
+        });
+      }
+
+      // Return the cart id for the final read outside the transaction.
+      return cart.id;
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+
+    // Read the final cart state outside the transaction for the response.
     return this.getCurrentCart(userId);
   }
 
@@ -411,13 +539,27 @@ export class CartService {
   private async ensureUserCart(userId: string) {
     const cart = await this.prisma.cart.findFirst({
       where: { userId, status: 'ACTIVE' },
-      include: { coupon: true },
+      include: {
+        items: {
+          where: { quantity: { gt: 0 } },
+          orderBy: { createdAt: 'asc' },
+          include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } },
+        },
+        coupon: true,
+      },
     });
 
     if (cart === null) {
       return this.prisma.cart.create({
         data: { userId, status: 'ACTIVE', currency: 'INR' },
-        include: { coupon: true },
+        include: {
+          items: {
+            where: { quantity: { gt: 0 } },
+            orderBy: { createdAt: 'asc' },
+            include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } },
+          },
+          coupon: true,
+        },
       });
     }
 

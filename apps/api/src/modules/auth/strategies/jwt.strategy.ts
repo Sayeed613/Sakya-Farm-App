@@ -5,6 +5,7 @@ import { isPermissionCode, isRoleCode } from '@sakya/types';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
 import { PrismaService } from '../../../database/prisma.service';
+import { PermissionCacheService } from '../../../cache/permission-cache.service';
 import type {
   AccessTokenPayload,
   AuthenticatedUser,
@@ -24,6 +25,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(
     configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly permissionCache: PermissionCacheService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -42,52 +44,67 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('Authentication failed: wrong token type');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: {
-        id: true,
-        email: true,
-        status: true,
-        roles: {
-          select: {
-            role: {
-              select: {
-                code: true,
-                permissions: { select: { permission: { select: { code: true } } } },
+    type CachedIdentity = {
+      permissions: readonly string[];
+      roles: readonly string[];
+      isSuperAdmin: boolean;
+      email: string;
+    };
+    const user = await this.permissionCache.getOrLoad(payload.sub, async () => {
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: {
+          id: true,
+          email: true,
+          status: true,
+          roles: {
+            select: {
+              role: {
+                select: {
+                  code: true,
+                  permissions: { select: { permission: { select: { code: true } } } },
+                },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    if (user === null) {
-      throw new UnauthorizedException('Authentication failed: account no longer exists');
-    }
+      if (user === null) {
+        throw new UnauthorizedException('Authentication failed: account no longer exists');
+      }
 
-    if (user.status !== 'ACTIVE') {
-      throw new UnauthorizedException(
-        `Authentication failed: account is ${user.status.toLowerCase()}`,
-      );
-    }
+      if (user.status !== 'ACTIVE') {
+        throw new UnauthorizedException(
+          `Authentication failed: account is ${user.status.toLowerCase()}`,
+        );
+      }
 
-    // Validated against the shared vocabularies rather than cast, so a row that
-    // drifted from the seeded set simply grants nothing.
-    const roles = user.roles.map((assignment) => assignment.role.code).filter(isRoleCode);
-    const permissions = [
-      ...new Set(
-        user.roles.flatMap((assignment) =>
-          assignment.role.permissions.map((entry) => entry.permission.code),
+      // Validated against the shared vocabularies rather than cast, so a row that
+      // drifted from the seeded set simply grants nothing.
+      const roles = user.roles.map((assignment) => assignment.role.code).filter(isRoleCode);
+      const permissions = [
+        ...new Set(
+          user.roles.flatMap((assignment) =>
+            assignment.role.permissions.map((entry) => entry.permission.code),
+          ),
         ),
-      ),
-    ].filter(isPermissionCode);
+      ].filter(isPermissionCode);
+
+      return {
+        permissions: [...permissions] as unknown as readonly string[],
+        roles: [...roles] as unknown as readonly string[],
+        isSuperAdmin: roles.includes('SUPER_ADMIN'),
+        email: user.email ?? '',
+      };
+    }) as CachedIdentity;
 
     return {
-      id: user.id,
-      email: user.email ?? '',
-      roles,
-      permissions,
-      isSuperAdmin: roles.includes('SUPER_ADMIN'),
+      id: payload.sub,
+      email: user.email,
+      roles: [...user.roles] as unknown as AuthenticatedUser['roles'],
+      permissions: [...user.permissions] as unknown as AuthenticatedUser['permissions'],
+      isSuperAdmin: user.isSuperAdmin,
     };
   }
 }

@@ -8,7 +8,9 @@ import type {
 } from '@sakya/types';
 import type { RegisterDeviceRequest } from '@sakya/validation';
 
+import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { incrementMetric } from '../../observability/business-metrics';
 import { timeExternal } from '../../observability/request-metrics';
 
 /**
@@ -27,6 +29,41 @@ interface ExpoPushMessage {
   channelId?: string;
   sound?: 'default';
 }
+
+/**
+ * Bounded delivery retry policy for the background worker.
+ *
+ * Attempts are counted at claim time, so five claims with a transient failure
+ * each time end in FAILED with the reason preserved; backoff doubles from 30s
+ * to a 15-minute cap. Retries never run on a request path — only the worker.
+ */
+export const MAX_DELIVERY_ATTEMPTS = 5;
+export const RETRY_BASE_MS = 30_000;
+export const RETRY_MAX_MS = 15 * 60_000;
+
+/** A notification row the worker has claimed (claim columns already set). */
+export interface ClaimedNotification {
+  id: string;
+  userId: string;
+  title: string;
+  body: string;
+  data: unknown;
+  attempts: number;
+}
+
+/** Classified result of one provider call — drives retry vs. permanent fail. */
+interface DeliveryResult {
+  accepted: boolean;
+  /** Retry cannot help: the provider permanently rejected the request. */
+  permanent: boolean;
+  reason: string | null;
+  /** First Expo ticket id, when the provider returned one. */
+  ticketId: string | null;
+}
+
+/** What one delivery attempt did to the notification row. */
+export type DeliveryOutcome = 'SENT' | 'RETRY' | 'FAILED' | 'SUPERSEDED';
+
 
 @Injectable()
 export class NotificationsService {
@@ -156,19 +193,39 @@ export class NotificationsService {
   // -----------------------------------------------------------------------
 
   /**
-   * Push an order-status update to every active device of the order's
-   * customer. Delivery failures never throw: a broken push channel must not
-   * fail a status transition, a payment webhook or a checkout request.
+   * Enqueue an order-status notification: create the durable QUEUED row.
+   *
+   * TRANSACTIONAL OUTBOX (critical paths): every critical call site passes the
+   * ACTIVE business transaction as `client`, so the state mutation and this
+   * QUEUED intent commit or roll back TOGETHER — a crash between commit and
+   * notification can no longer lose the record. In that mode an INSERT failure
+   * PROPAGATES, deliberately: rolling the whole transition back (the provider
+   * retries it) is correct; silently committing business state without its
+   * durable intent is not. Only a database failure can do this — provider
+   * (Expo) latency and failures never enter the transaction, they live in
+   * `NotificationWorkerService`, which claims this row later.
+   *
+   * STANDALONE MODE (no `client`): legacy best-effort semantics — never
+   * throws, so a broken channel cannot fail a caller that has no transaction
+   * to pair with.
+   *
+   * The row IS the notification — the in-app inbox reads it and the worker
+   * delivers it, with its own retries, from that record.
    */
-  async sendOrderStatusPush(input: {
-    userId: string;
-    orderNumber: string;
-    orderId: string;
-    status: string;
-    reason?: string | null;
-  }): Promise<void> {
+  async sendOrderStatusPush(
+    input: {
+      userId: string;
+      orderNumber: string;
+      orderId: string;
+      status: string;
+      reason?: string | null;
+    },
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
+  ): Promise<void> {
+    // Whether the caller handed us a transaction (outbox pairing).
+    const transactional = client !== this.prisma;
     try {
-      const user = await this.prisma.user.findUnique({
+      const user = await client.user.findUnique({
         where: { id: input.userId },
         select: { firstName: true },
       });
@@ -177,9 +234,7 @@ export class NotificationsService {
       const copy = orderPushCopy(input.status, input.reason ?? null, user.firstName);
       if (copy === null) return; // status has no customer-facing push
 
-      // Persist the notification FIRST, regardless of devices: this row is the
-      // durable record and what the in-app inbox reads. Push is just delivery.
-      const notification = await this.prisma.notification.create({
+      await client.notification.create({
         data: {
           userId: input.userId,
           channel: 'PUSH',
@@ -189,52 +244,121 @@ export class NotificationsService {
           data: { orderId: input.orderId, orderNumber: input.orderNumber, status: input.status },
         },
       });
-
-      const tokens = await this.prisma.devicePushToken.findMany({
-        where: { userId: input.userId, deactivatedAt: null },
-        select: { token: true },
-      });
-      if (tokens.length === 0) {
-        // No devices to deliver to; the inbox record still stands.
-        await this.prisma.notification.update({
-          where: { id: notification.id },
-          data: { status: 'SENT', sentAt: new Date() },
-        });
-        return;
-      }
-
-      const messages: ExpoPushMessage[] = tokens.map((row) => ({
-        to: row.token,
-        title: copy.title,
-        body: copy.body,
-        data: { orderId: input.orderId, orderNumber: input.orderNumber, status: input.status },
-        sound: 'default',
-      }));
-
-      const accepted = await this.deliver(messages);
-
-      await this.prisma.notification.update({
-        where: { id: notification.id },
-        data: {
-          status: accepted ? 'SENT' : 'FAILED',
-          sentAt: accepted ? new Date() : null,
-          failureReason: accepted ? null : 'Push provider rejected the message',
-        },
-      });
     } catch (error) {
-      // Swallow deliberately — see the doc comment.
+      // Transactional mode: let it roll back WITH the business state (see doc).
+      if (transactional) {
+        incrementMetric('notificationQueueFailures');
+        throw error;
+      }
+      // Standalone: swallow deliberately — see the doc comment.
       this.logger.warn(
-        `Order-status push failed for order ${input.orderNumber}: ${error instanceof Error ? error.message : String(error)}`,
+        `Order-status enqueue failed for order ${input.orderNumber}: ${error instanceof Error ? error.message : String(error)}`,
       );
+      incrementMetric('notificationQueueFailures');
     }
   }
 
-  /** POST to Expo; returns true only when no ticket reports an error. */
-  private async deliver(messages: ExpoPushMessage[]): Promise<boolean> {
-    if (messages.length === 0) return true;
+  /**
+   * One claimed notification's delivery pass, run only by the worker.
+   *
+   * Every transition is an atomic conditional UPDATE guarded by
+   * `(id, status QUEUED, claimedBy = this worker)`, so:
+   * - a row that another worker has since taken over is left alone
+   *   (`SUPERSEDED`) — a lost lease can never clobber the new holder;
+   * - a SENT row can never be flipped back (`J`);
+   * - transient failures requeue with exponential backoff, permanent ones
+   *   fail immediately, and the attempt cap turns persistent transients into
+   *   FAILED with the reason preserved.
+   */
+  async deliverClaimed(row: ClaimedNotification, workerId: string): Promise<DeliveryOutcome> {
+    const guard = { id: row.id, status: 'QUEUED' as const, claimedBy: workerId };
+
+    const tokens = await this.prisma.devicePushToken.findMany({
+      where: { userId: row.userId, deactivatedAt: null },
+      select: { token: true },
+    });
+
+    if (tokens.length === 0) {
+      // No devices to deliver to; the inbox record still stands.
+      const done = await this.prisma.notification.updateMany({
+        where: guard,
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+          claimedBy: null,
+          claimedAt: null,
+          failureReason: null,
+        },
+      });
+      return done.count === 1 ? 'SENT' : 'SUPERSEDED';
+    }
+
+    const payload = (row.data ?? {}) as Record<string, unknown>;
+    const messages: ExpoPushMessage[] = tokens.map((device) => ({
+      to: device.token,
+      title: row.title,
+      body: row.body,
+      data: payload,
+      sound: 'default',
+    }));
+
+    const result = await this.deliver(messages);
+
+    if (result.accepted) {
+      const done = await this.prisma.notification.updateMany({
+        where: guard,
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+          providerMessageId: result.ticketId,
+          claimedBy: null,
+          claimedAt: null,
+          failureReason: null,
+        },
+      });
+      return done.count === 1 ? 'SENT' : 'SUPERSEDED';
+    }
+
+    const reason = result.reason ?? 'Push provider rejected the message';
+
+    if (result.permanent || row.attempts >= MAX_DELIVERY_ATTEMPTS) {
+      const done = await this.prisma.notification.updateMany({
+        where: guard,
+        data: {
+          status: 'FAILED',
+          failureReason: result.permanent ? reason : `${reason} (after ${row.attempts} attempts)`,
+          claimedBy: null,
+          claimedAt: null,
+        },
+      });
+      return done.count === 1 ? 'FAILED' : 'SUPERSEDED';
+    }
+
+    // Transient: back to the queue with exponential backoff, reason recorded.
+    const backoffMs = Math.min(
+      RETRY_BASE_MS * 2 ** Math.max(0, row.attempts - 1),
+      RETRY_MAX_MS,
+    );
+    const done = await this.prisma.notification.updateMany({
+      where: guard,
+      data: {
+        nextAttemptAt: new Date(Date.now() + backoffMs),
+        claimedBy: null,
+        claimedAt: null,
+        failureReason: reason,
+      },
+    });
+    return done.count === 1 ? 'RETRY' : 'SUPERSEDED';
+  }
+
+  /** POST to Expo; classified so the worker can retry or give up correctly. */
+  private async deliver(messages: ExpoPushMessage[]): Promise<DeliveryResult> {
+    if (messages.length === 0) {
+      return { accepted: true, permanent: false, reason: null, ticketId: null };
+    }
     try {
       // Timed for baseline instrumentation only: the call, its 10s cap and its
-      // swallow-the-failure contract are untouched — see request-metrics.ts.
+      // never-throw contract are untouched — see request-metrics.ts.
       const response = await timeExternal('expo', () =>
         fetch(EXPO_PUSH_URL, {
           method: 'POST',
@@ -248,32 +372,60 @@ export class NotificationsService {
       );
       if (!response.ok) {
         this.logger.warn(`Expo push API responded ${response.status}`);
-        return false;
+        // 429/5xx are the provider having a bad day (retry); other 4xx are
+        // our request being wrong, which retrying cannot fix (permanent).
+        const transient = response.status === 429 || response.status >= 500;
+        return {
+          accepted: false,
+          permanent: !transient,
+          reason: `Expo push API responded ${response.status}`,
+          ticketId: null,
+        };
       }
       const payload = (await response.json()) as {
-        data?: Array<{ status: string; message?: string; details?: { error?: string } }>;
+        data?: Array<{ id?: string; status: string; message?: string; details?: { error?: string } }>;
       };
       const tickets = payload.data ?? [];
       const failed = tickets.filter((ticket) => ticket.status !== 'ok');
-      for (const ticket of failed) {
-        this.logger.warn(`Expo push ticket error: ${ticket.message ?? 'unknown'} (${ticket.details?.error ?? 'no code'})`);
-        // A DeviceNotRegistered receipt means the token is dead — deactivate
-        // so the next send skips it instead of accumulating failure noise.
-        if (ticket.details?.error === 'DeviceNotRegistered') {
-          const index = tickets.indexOf(ticket);
-          const dead = messages[index]?.to;
-          if (dead !== undefined) {
-            await this.prisma.devicePushToken.updateMany({
-              where: { token: dead },
-              data: { deactivatedAt: new Date() },
-            });
+      if (failed.length > 0) {
+        for (const ticket of failed) {
+          this.logger.warn(`Expo push ticket error: ${ticket.message ?? 'unknown'} (${ticket.details?.error ?? 'no code'})`);
+          // A DeviceNotRegistered receipt means the token is dead — deactivate
+          // so the next attempt skips it instead of accumulating failure noise.
+          if (ticket.details?.error === 'DeviceNotRegistered') {
+            const index = tickets.indexOf(ticket);
+            const dead = messages[index]?.to;
+            if (dead !== undefined) {
+              await this.prisma.devicePushToken.updateMany({
+                where: { token: dead },
+                data: { deactivatedAt: new Date() },
+              });
+            }
           }
         }
+        // Ticket errors are treated as transient: dead tokens drop out after
+        // deactivation and the attempt cap bounds anything persistent.
+        return {
+          accepted: false,
+          permanent: false,
+          reason: failed[0]?.message ?? 'Expo ticket reported an error',
+          ticketId: null,
+        };
       }
-      return failed.length === 0;
+      return {
+        accepted: true,
+        permanent: false,
+        reason: null,
+        ticketId: tickets[0]?.id ?? null,
+      };
     } catch (error) {
       this.logger.warn(`Expo push request failed: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
+      return {
+        accepted: false,
+        permanent: false,
+        reason: error instanceof Error ? error.message : String(error),
+        ticketId: null,
+      };
     }
   }
 

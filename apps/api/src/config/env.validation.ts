@@ -73,6 +73,13 @@ export const environmentSchema = z
      * at least 30% of max_connections free. One instance with the default of 20
      * leaves ~2/3 of the server for everything else; if you run N instances
      * behind a process manager, scale the default down to ~57/N.
+     *
+     * WARNING — Supabase SESSION POOLER is stricter than the primary: it caps
+     * at 15 session clients TOTAL (`XX000 EMAXCONNSESSION`), not 57. Any
+     * environment whose DATABASE_URL points at a `*.pooler.supabase.com`
+     * host must set DATABASE_POOL_MAX to ≤10 (verified: 10 leaves headroom
+     * for migrations/psql). The default of 20 above is only correct for a
+     * DIRECT connection (Render Postgres or `db.*.supabase.co` primary).
      */
     DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
 
@@ -102,6 +109,15 @@ export const environmentSchema = z
      * manager. 0 disables caching entirely.
      */
     CATALOG_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3600).default(30),
+
+    // --- Permission cache ---------------------------------------------------
+    /**
+     * Seconds a user's permission set stays cached in-process. Role/permission
+     * mutations invalidate the affected user's cache immediately; this TTL only
+     * bounds staleness that cannot be signalled in-process — other instances
+     * under a process manager. 0 disables caching entirely.
+     */
+    PERMISSION_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
 
     // --- Commerce rules -----------------------------------------------------
     /** GST percent applied to the discounted subtotal. 0 keeps the old behaviour. */
@@ -162,6 +178,15 @@ export const environmentSchema = z
       .default('info'),
     /** Human-readable logs for local development. Always JSON in production. */
     LOG_PRETTY: z.string().optional(),
+    /**
+     * Slow-request / slow-query warn threshold, in milliseconds. A request or
+     * a single database query that takes at least this long is logged at warn
+     * with its route/model and duration (never the SQL text or query params).
+     * 0 disables the warnings. Default 1000 is a conservative operational
+     * choice, NOT a measured production latency figure — tune it once real
+     * traffic data exists.
+     */
+    SLOW_REQUEST_MS: z.coerce.number().int().min(0).default(1000),
     /**
      * Sentry DSN for error tracking. Optional by design: when absent (or an
      * empty string) the SDK is never initialised and the process behaves

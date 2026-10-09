@@ -28,43 +28,24 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import type { AppConfig } from '../../config/configuration';
 import { computeTotals } from '../../common/pricing';
+import { incrementMetric } from '../../observability/business-metrics';
 import { CartService } from '../cart/cart.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import {
-  releaseOrderReservations,
-  reserveOrderLine,
-} from '../inventory/order-reservations';
+import { reserveOrderLine, releaseOrderReservations } from '../inventory/order-reservations';
 
-/**
- * Commerce configuration (GST, shipping, COD fee) is injected via ConfigService
+/** Commerce configuration (GST, shipping, COD fee) is injected via ConfigService
  * and the totals come from the SHARED pricing module (src/common/pricing.ts) —
  * the same function the cart preview uses. The approved checkout total is
  * therefore bit-for-bit the stored order total.
  */
 
-/**
- * Human-readable, collision-resistant order number.
- *
- * `Order.orderNumber` is unique and has no database default, so checkout has to
- * supply one — without this, every order insert failed with
- * `Argument 'orderNumber' is missing`. The date prefix keeps numbers
- * recognisable and roughly sortable; the random suffix makes a collision
- * vanishingly unlikely, and the unique index is the backstop if one occurs.
- */
+/** Human-readable, collision-resistant order number. */
 function generateOrderNumber(): string {
   const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   return `ORD-${day}-${randomBytes(4).toString('hex').toUpperCase()}`;
 }
 
-/**
- * Snapshot a cart line into an order line.
- *
- * `CartService` already resolves the product and variant titles, so they are read
- * straight off `CartItemResponse`. This previously reached for
- * `item.variant.product`, which is not part of that shape — every checkout threw
- * `Cannot read properties of undefined (reading 'product')` against a real
- * database, and the mock in the unit spec hid it.
- */
+/** Snapshot a cart line into an order line. */
 function snapshotItem(item: CartItemResponse) {
   return {
     id: item.id,
@@ -191,6 +172,9 @@ export class OrdersService {
     // transaction: either the order exists with its stock held, or nothing
     // happened at all. That is what stops a failed checkout leaking a
     // reservation, and a successful one from overselling.
+    // Observability flag: distinguishes a genuinely new order from an
+    // idempotent replay (the winner path) inside the same transaction.
+    let createdNewOrder = false;
     const order = await this.prisma.$transaction(async (tx) => {
       // Serialize concurrent checkouts of the SAME cart: `FOR UPDATE` makes a
       // second request (double tap, retry storm, scripted duplicate) wait here
@@ -223,6 +207,7 @@ export class OrdersService {
         where: { cartId: cart.id, quantity: { gt: 0 } },
       });
       if (remainingItems === 0) {
+        incrementMetric('checkoutFailures');
         throw new ConflictException(
           'This cart was just checked out. Refresh to review your orders.',
         );
@@ -426,8 +411,13 @@ export class OrdersService {
         data: { couponId: null },
       });
 
+      createdNewOrder = true;
       return created;
     }, { maxWait: 10_000, timeout: 30_000 });
+
+    // Business counter (never throws, no behaviour change): only a freshly
+    // inserted order counts — an idempotent replay must not inflate it.
+    if (createdNewOrder) incrementMetric('ordersCreated');
 
     return this.getOrderById(order.id, userId);
   }
@@ -570,17 +560,26 @@ export class OrdersService {
         }
       }
 
+      // Outbox pairing: the CANCELLED intent is written on the SAME
+      // transaction as the cancellation, so a crash between commit and
+      // notification can never lose the durable record (Step 12 correction).
+      // Nothing external is awaited here — the worker delivers later.
+      await this.notificationsService.sendOrderStatusPush(
+        {
+          userId: order.userId,
+          orderId,
+          orderNumber: order.orderNumber,
+          status: 'CANCELLED',
+          reason: parsed.reason,
+        },
+        tx,
+      );
+
       return result;
     });
 
-    // Best-effort push — never fails the cancellation (see NotificationsService).
-    await this.notificationsService.sendOrderStatusPush({
-      userId: order.userId,
-      orderId,
-      orderNumber: order.orderNumber,
-      status: 'CANCELLED',
-      reason: parsed.reason,
-    });
+    // Business counter: a customer-initiated cancellation completed.
+    incrementMetric('ordersCancelled');
 
     return this.toOrderResponse(updated);
   }

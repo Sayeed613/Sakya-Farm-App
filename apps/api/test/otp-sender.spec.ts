@@ -17,6 +17,9 @@ function createSender(options: {
 }): OtpSenderService {
   const config = {
     getOrThrow: vi.fn((_key: string) => options.isProduction),
+    // The sender reads sms.demoMode via config.get; the routing tests exercise
+    // real delivery, so demo mode stays off in this fake.
+    get: vi.fn((_key: string) => false),
   } as unknown as ConfigService;
   const msg91 = {
     configured: options.msg91Configured,

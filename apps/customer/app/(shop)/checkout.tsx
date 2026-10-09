@@ -26,6 +26,7 @@ import { addressesApi } from '../../src/api/notifications-api';
 import { useAuthStore } from '../../src/stores/auth-store';
 import { useLastAddressStore } from '../../src/stores/last-address-store';
 import { useLastPaymentMethodStore } from '../../src/stores/last-payment-method-store';
+import { resolveInitialPaymentMethod } from '../../src/lib/payment-restore';
 import { openRazorpayWebCheckout, reserveRazorpayPopup } from '../../src/lib/razorpay-checkout';
 import { softShadow } from '../../src/lib/shadows';
 
@@ -429,10 +430,15 @@ export default function CheckoutScreen() {
     }
   }
 
-  const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>(() => {
-    const saved = useLastPaymentMethodStore.getState().method;
-    return saved === 'UPI' || saved === 'CARD' || saved === 'NET_BANKING' ? saved : 'COD';
-  });
+  const [method, setMethod] = useState<'COD' | OnlinePaymentMethod>(() =>
+    // A remembered online method must NOT become active while online
+    // payments are disabled (its tiles are hidden then) — see
+    // resolveInitialPaymentMethod for the flag matrix.
+    resolveInitialPaymentMethod(
+      useLastPaymentMethodStore.getState().method,
+      ONLINE_PAYMENTS_ENABLED,
+    ),
+  );
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);

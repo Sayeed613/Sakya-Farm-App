@@ -11,6 +11,7 @@ import { cartApi } from '../../src/api/cart';
 import { AuthGate } from '../../src/components/AuthGate';
 import { SkeletonBlock } from '../../src/components/LoadingSkeleton';
 import { SubScreenHeader } from '../../src/components/navigation/SubScreenHeader';
+import { useOpenProduct } from '../../src/hooks/use-open-product';
 import { formatMoney } from '../../src/lib/format';
 import { useAuthStore } from '../../src/stores/auth-store';
 
@@ -32,6 +33,7 @@ export default function WishlistScreen() {
   const insets = useSafeAreaInsets();
   const session = useAuthStore((state) => state.session);
   const queryClient = useQueryClient();
+  const openProduct = useOpenProduct();
 
   const wishlist = useQuery({
     queryKey: ['wishlist'],
@@ -144,7 +146,7 @@ export default function WishlistScreen() {
               style={{ borderColor: LINE }}
             >
               <Pressable
-                onPress={() => router.push(`/(shop)/products/${item.productSlug}` as never)}
+                onPress={() => openProduct(item.productSlug)}
                 className="h-16 w-16 items-center justify-center overflow-hidden rounded-xl"
                 style={{ backgroundColor: '#F3EDE3' }}
                 accessibilityRole="imagebutton"
@@ -158,7 +160,7 @@ export default function WishlistScreen() {
               </Pressable>
 
               <Pressable
-                onPress={() => router.push(`/(shop)/products/${item.productSlug}` as never)}
+                onPress={() => openProduct(item.productSlug)}
                 className="flex-1"
               >
                 <RNText className="text-[13.5px] font-semibold" style={{ color: INK }} numberOfLines={2}>

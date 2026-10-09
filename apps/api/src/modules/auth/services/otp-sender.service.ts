@@ -25,17 +25,21 @@ export interface OtpDeliveryResult {
 
 @Injectable()
 export class OtpSenderService {
-  private readonly logger = new Logger(OtpSenderService.name);
-private readonly isProduction: boolean;
-private readonly demoMode: boolean;  /** Last code delivered this process, for development response bodies only. */
+  private readonly logger = new Logger(OtpSenderService.name);  private readonly isProduction: boolean;
+  private readonly demoMode: boolean;
+  /** Last code delivered this process, for development response bodies only. */
   lastDevCode: string | null = null;
 
   constructor(
     config: ConfigService,
     private readonly msg91: Msg91SmsService,
   ) {
-this.isProduction = config.getOrThrow<boolean>('app.isProduction');
-this.demoMode = config.get<boolean>('sms.demoMode') === true;  }
+    this.isProduction = config.getOrThrow<boolean>('app.isProduction');
+    // Production guard (same as OtpService): demo mode must never swallow
+    // real OTP deliveries in production, even if OTP_DEMO_MODE is misconfigured.
+    this.demoMode =
+      !this.isProduction && config.get<boolean>('sms.demoMode') === true;
+  }
 
   async send(phone: string, code: string): Promise<OtpDeliveryResult> {
   if (this.demoMode) {

@@ -71,6 +71,10 @@ export interface AppConfig {
     /** Seconds a public catalogue read stays cached in-process; 0 disables. */
     cacheTtlSeconds: number;
   };
+  permissionCache: {
+    /** Seconds a user's permission set stays cached in-process; 0 disables. */
+    ttlSeconds: number;
+  };
   /** Commerce rules that need ops tuning, not code changes. */
   commerce: {
     /** GST rate applied to the discounted subtotal, e.g. 5 means 5%. */
@@ -93,6 +97,8 @@ export interface AppConfig {
   logging: {
     level: string;
     pretty: boolean;
+    /** Requests/queries at or above this many ms are warned about; 0 disables. */
+    slowRequestMs: number;
   };
   observability: {
     /** Sentry DSN; null disables error tracking entirely. */
@@ -153,6 +159,9 @@ export default function configuration(): AppConfig {
     catalog: {
       cacheTtlSeconds: env.CATALOG_CACHE_TTL_SECONDS,
     },
+    permissionCache: {
+      ttlSeconds: env.PERMISSION_CACHE_TTL_SECONDS,
+    },
     commerce: {
       taxRatePercent: env.TAX_RATE_PERCENT,
       shippingFeeInPaise: env.SHIPPING_FEE_IN_PAISE,
@@ -167,6 +176,7 @@ export default function configuration(): AppConfig {
       level: env.LOG_LEVEL,
       // Pretty output is a development convenience; production emits JSON.
       pretty: env.LOG_PRETTY === undefined ? !isProduction : env.LOG_PRETTY === 'true',
+      slowRequestMs: env.SLOW_REQUEST_MS,
     },
     observability: {
       // A blank line in `.env` means "unset", not "track errors into a

@@ -209,6 +209,10 @@ async function clearTestUserData(prisma: PrismaClient, userId: string) {
     await tx.cart.deleteMany({ where: { userId } });
     await tx.payment.deleteMany({ where: { order: { userId } } });
     await tx.order.deleteMany({ where: { userId } });
+    // Cancelling an order queues a durable notification row (the outbox); it
+    // belongs to this test customer and must leave with them, or it leaks
+    // into the notification worker e2e suite's queue-safety rail.
+    await tx.notification.deleteMany({ where: { userId } });
   });
 
   // Checkout holds stock (it writes `quantityReserved`), and deleting an order

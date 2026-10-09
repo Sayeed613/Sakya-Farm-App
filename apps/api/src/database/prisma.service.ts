@@ -18,6 +18,12 @@ interface QueryEventSubscriber {
 }
 
 /**
+ * A `query` event carries the full SQL text (with bound values interpolated
+ * by Prisma's formatter). We deliberately read ONLY `duration`: query text can
+ * embed phone numbers, addresses and payment ids, and "do not log SQL
+ * containing sensitive values" is best satisfied by never touching it.
+ */
+/**
  * The single Prisma client for the process.
  *
  * Prisma 7 requires a driver adapter, so connections are owned and pooled by `pg`
@@ -41,6 +47,7 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
   constructor(configService: ConfigService) {
     const connectionString = configService.getOrThrow<string>('database.url');
     const poolMax = configService.getOrThrow<number>('database.poolMax');
+    const slowRequestMs = configService.getOrThrow<number>('logging.slowRequestMs');
 
     // TCP keepalive on every pooled connection.
     //
@@ -83,6 +90,13 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
     // above just turned on; see `QueryEventSubscriber`.
     (this as unknown as QueryEventSubscriber).$on('query', (event) => {
       recordDbDuration(event.duration);
+      // Slow-query warning: duration only, never the SQL text. 0 disables.
+      if (slowRequestMs > 0 && event.duration >= slowRequestMs) {
+        this.logger.warn(
+          { durationMs: Math.round(event.duration) },
+          `slow database query (>= ${slowRequestMs}ms)`,
+        );
+      }
     });
   }
 

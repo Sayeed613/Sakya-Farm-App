@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { FlatList, Text as RNText, View, type ListRenderItemInfo } from 'react-native';
+import { FlatList, Pressable, Text as RNText, View, type ListRenderItemInfo } from 'react-native';
 
 import type { ProductListItem } from '@sakya/types';
 import { useResponsive } from '../../lib/responsive';
@@ -61,9 +61,18 @@ function ProductDuoRailInner({
           ) : null}
         </View>
         {onSeeAll && !hideSeeAll ? (
-          <View accessibilityRole="button" accessibilityLabel={`See all ${title}`}>
+          // Must be a real Pressable: this previously rendered an inert View
+          // with accessibilityRole="button", so the visible See All link did
+          // nothing when tapped (ProductSection wires it correctly).
+          <Pressable
+            onPress={onSeeAll}
+            accessibilityRole="button"
+            accessibilityLabel={`See all ${title}`}
+            hitSlop={8}
+            className="active:opacity-70"
+          >
             <RNText className="text-[12.5px] font-bold text-brand">See All</RNText>
-          </View>
+          </Pressable>
         ) : null}
       </View>
       <FlatList

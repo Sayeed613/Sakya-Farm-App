@@ -343,6 +343,499 @@ describe('CartService', () => {
 
     await expect(service.removeItem('user-1', 'item-1')).rejects.toBeInstanceOf(BadRequestException);
   });
+
+
+  // ---- Step 6: mergeGuestCart tests ----
+
+  it('merges multiple guest lines into an empty cart (dedupe, server price, cleanup)', async () => {
+    const v1 = '00000000-0000-4000-8000-000000000001';
+    const v2 = '00000000-0000-4000-8000-000000000002';
+    
+    // Track calls to cartItem.create
+    const createdItems: Array<{ variantId: string; quantity: number; unitPriceInPaise: number }> = [];    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      // Inside transaction: cart is still empty (we're creating new items)
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      // Final read in getCurrentCart after transaction completes.
+      .mockResolvedValue({
+        ...cart(),
+        storeId: STORE_ID,
+        items: makeItems(STORE_ID, {
+          id: 'item-v1',
+          variantId: v1,
+          quantity: 3,
+          unitPriceInPaise: 2400,
+        }, {
+          id: 'item-v2',
+          variantId: v2,
+          quantity: 1,
+          unitPriceInPaise: 3200,
+        }),
+      });
+
+    prisma.productVariant.findMany.mockResolvedValue([
+      { id: v1, priceInPaise: 2400, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+      { id: v2, priceInPaise: 3200, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+    ] as any);
+    
+    prisma.cartItem.create.mockImplementation(
+      async ({ data }: { data: { variantId: string; quantity: number; unitPriceInPaise: number } }) => {
+        createdItems.push({ variantId: data.variantId, quantity: data.quantity, unitPriceInPaise: data.unitPriceInPaise });
+        return {
+          id: `item-${data.variantId}`,
+          ...data,
+          cartId: 'cart-1',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+      },
+    );
+    
+    // Mock $transaction to execute callback with delegated mocks
+    prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        cart: { findFirst: prisma.cart.findFirst },
+        cartItem: {
+          create: prisma.cartItem.create,
+          update: prisma.cartItem.update,
+        },
+      };
+      return await callback(tx);
+    });
+
+    const result = await service.mergeGuestCart('user-1', {
+      lines: [
+        { variantId: v1, quantity: 2 },
+        { variantId: v1, quantity: 1 },
+        { variantId: v2, quantity: 1 },
+      ],
+    });
+
+    // After transaction, cart should have the created items
+    expect(createdItems).toHaveLength(2);
+    expect(createdItems[0]!.variantId).toBe(v1);
+    expect(createdItems[0]!.quantity).toBe(3); // deduped: 2+1
+    expect(createdItems[0]!.unitPriceInPaise).toBe(2400);
+    expect(createdItems[1]!.variantId).toBe(v2);
+    expect(createdItems[1]!.quantity).toBe(1);
+    expect(createdItems[1]!.unitPriceInPaise).toBe(3200);
+    
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0]!.variantId).toBe(v1);
+    expect(result.items[0]!.quantity).toBe(3);
+    expect(result.items[0]!.unitPriceInPaise).toBe(2400);
+    expect(result.items[1]!.variantId).toBe(v2);
+    expect(result.items[1]!.quantity).toBe(1);
+    expect(result.items[1]!.unitPriceInPaise).toBe(3200);
+    expect(result.totalInPaise).toBeGreaterThan(0);
+    expect(prisma.cartItem.create).toHaveBeenCalledTimes(2);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('dedupes duplicate guest lines into a single line with summed quantity', async () => {
+    const v1 = '00000000-0000-4000-8000-000000000001';    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      // Inside transaction: cart is still empty
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      // Final read in getCurrentCart after transaction completes.
+      .mockResolvedValue({
+        ...cart(),
+        storeId: STORE_ID,
+        items: makeItems(STORE_ID, {
+          id: 'item-v1',
+          variantId: v1,
+          quantity: 3,
+          unitPriceInPaise: 2400,
+        }),
+      });
+
+    prisma.productVariant.findMany.mockResolvedValue([
+      { id: v1, priceInPaise: 2400, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+    ] as any);
+
+    prisma.cartItem.create.mockImplementation(
+      async ({ data }: { data: { variantId: string; quantity: number; unitPriceInPaise: number } }) => ({
+        id: `item-${data.variantId}`,
+        ...data,
+        cartId: 'cart-1',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    );
+
+    prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        cart: { findFirst: prisma.cart.findFirst },
+        cartItem: {
+          create: prisma.cartItem.create,
+          update: prisma.cartItem.update,
+        },
+      };
+      return await callback(tx);
+    });
+
+    const result = await service.mergeGuestCart('user-1', {
+      lines: [
+        { variantId: v1, quantity: 1 },
+        { variantId: v1, quantity: 1 },
+        { variantId: v1, quantity: 1 },
+      ],
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.quantity).toBe(3); // deduped: 1+1+1
+    expect(result.items[0]!.unitPriceInPaise).toBe(2400);
+    expect(prisma.cartItem.create).toHaveBeenCalledTimes(1);
+    expect(prisma.cartItem.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ quantity: 3 }),
+      }),
+    );
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('enforces per-line quantity cap and per-cart line cap (drops the offending line)', async () => {
+    const v1 = '00000000-0000-4000-8000-000000000001';
+    
+    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      .mockResolvedValue({
+        ...cart(),
+        storeId: STORE_ID,
+        items: makeItems(STORE_ID, {
+          id: 'existing-item',
+          variantId: v1,
+          quantity: 8,
+          unitPriceInPaise: 2400,
+        }),
+      });
+    
+    prisma.productVariant.findMany.mockResolvedValue([
+      { id: v1, priceInPaise: 2400, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+    ] as any);
+    
+    prisma.cartItem.update.mockImplementation(
+      async ({ where, data }: { where: { id: string }; data: { quantity: { increment: number } } }) => ({
+        id: where.id,
+        quantity: 8 + data.quantity.increment,
+        unitPriceInPaise: 2400,
+      }),
+    );
+    
+    prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        cart: { findFirst: prisma.cart.findFirst },
+        cartItem: {
+          create: prisma.cartItem.create,
+          update: prisma.cartItem.update,
+        },
+      };
+      return await callback(tx);
+    });
+
+    const result = await service.mergeGuestCart('user-1', {
+      lines: [{ variantId: v1, quantity: 3 }],
+    });
+
+    // Line should be dropped because 8+3 > maxQuantityPerLine (10)
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.quantity).toBe(8);
+    expect(prisma.cartItem.update).not.toHaveBeenCalled();
+    expect(prisma.productVariant.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops an unknown / unavailable variant and keeps the valid ones', async () => {
+    const existingVariant = '00000000-0000-4000-8000-000000000002';
+    const unknownVariant = 'ffffffff-ffff-4000-8000-000000000000';
+    const newValidVariant = '00000000-0000-4000-8000-000000000003';    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: makeItems(STORE_ID, {
+          id: 'existing-item',
+          variantId: existingVariant,
+          quantity: 1,
+          unitPriceInPaise: 2400,
+        }),
+      })
+      // Inside transaction: cart has existing item
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: makeItems(STORE_ID, {
+          id: 'existing-item',
+          variantId: existingVariant,
+          quantity: 1,
+          unitPriceInPaise: 2400,
+        }),
+      })
+      // Final read in getCurrentCart after transaction completes.
+      .mockResolvedValue({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [
+          ...makeItems(STORE_ID, {
+            id: 'existing-item',
+            variantId: existingVariant,
+            quantity: 5,
+            unitPriceInPaise: 2400,
+          }),
+          ...makeItems(STORE_ID, {
+            id: 'item-new',
+            variantId: newValidVariant,
+            quantity: 4,
+            unitPriceInPaise: 3200,
+          }),
+        ],
+      });
+
+    prisma.productVariant.findMany.mockResolvedValue([
+      { id: existingVariant, priceInPaise: 2400, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+      { id: newValidVariant, priceInPaise: 3200, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+    ] as any);
+    
+    prisma.cartItem.create.mockImplementation(
+      async ({ data }: { data: { variantId: string; quantity: number; unitPriceInPaise: number } }) => ({
+        id: `item-${data.variantId}`,
+        ...data,
+        cartId: 'cart-1',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    );
+    
+    prisma.cartItem.update.mockImplementation(
+      async ({ where, data }: { where: { id: string }; data: { quantity: { increment: number } } }) => ({
+        id: where.id,
+        quantity: 1 + data.quantity.increment,
+        unitPriceInPaise: 2400,
+      }),
+    );
+    
+    prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        cart: { findFirst: prisma.cart.findFirst },
+        cartItem: {
+          create: prisma.cartItem.create,
+          update: prisma.cartItem.update,
+        },
+      };
+      return await callback(tx);
+    });
+
+    const result = await service.mergeGuestCart('user-1', {
+      lines: [
+        { variantId: existingVariant, quantity: 4 },
+        { variantId: unknownVariant, quantity: 99 },
+        { variantId: newValidVariant, quantity: 4 },
+      ],
+    });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0]!.variantId).toBe(existingVariant);
+    expect(result.items[0]!.quantity).toBe(5); // 1+4
+    expect(result.items[1]!.variantId).toBe(newValidVariant);
+    expect(result.items[1]!.quantity).toBe(4);
+    expect(prisma.cartItem.create).toHaveBeenCalledTimes(1);
+    expect(prisma.cartItem.update).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a clean empty cart when every guest line is rejected', async () => {
+    const unavailableVariant = '00000000-0000-4000-8000-000000000001';
+    
+    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      .mockResolvedValue({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      });
+    
+    prisma.productVariant.findMany.mockResolvedValue([
+      { id: unavailableVariant, priceInPaise: 2400, isAvailable: false, product: { status: 'ACTIVE', isAvailable: true } },
+    ] as any);
+    
+    prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        cart: { findFirst: prisma.cart.findFirst },
+        cartItem: {
+          create: prisma.cartItem.create,
+          update: prisma.cartItem.update,
+        },
+      };
+      return await callback(tx);
+    });
+
+    const result = await service.mergeGuestCart('user-1', {
+      lines: [{ variantId: unavailableVariant, quantity: 5 }],
+    });
+
+    expect(result.items).toHaveLength(0);
+    expect(result.totalInPaise).toBe(0);
+    expect(prisma.cartItem.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('no-op when the guest body carries zero lines', async () => {
+    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      .mockResolvedValue({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      });
+
+    const result = await service.mergeGuestCart('user-1', { lines: [] });
+
+    expect(result.items).toHaveLength(0);
+    expect(prisma.productVariant.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  // ---- Concurrency tests ----
+
+  it('uses a transaction for the merge operation', async () => {
+    const v1 = '00000000-0000-4000-8000-000000000001';
+    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      .mockResolvedValue({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      });
+    prisma.productVariant.findMany.mockResolvedValue([
+      { id: v1, priceInPaise: 2400, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+    ] as any);
+    prisma.cartItem.create.mockImplementation(
+      async ({ data }: { data: { variantId: string; quantity: number; unitPriceInPaise: number } }) => ({
+        id: `item-${data.variantId}`,
+        ...data,
+        cartId: 'cart-1',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    );
+
+    await service.mergeGuestCart('user-1', {
+      lines: [{ variantId: v1, quantity: 1 }],
+    });
+
+    // Verify that $transaction was called (the merge runs inside a transaction).
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    // The transaction callback should have been invoked.
+    const transactionCall = prisma.$transaction.mock.calls[0];
+    expect(transactionCall).toBeDefined();
+    if (transactionCall) {
+      expect(transactionCall).toHaveLength(2);
+      expect(typeof transactionCall[0]).toBe('function'); // callback
+      expect(transactionCall[1]).toHaveProperty('isolationLevel');
+    }
+  });
+
+  it('re-reads cart state inside the transaction for validation', async () => {
+    const v1 = '00000000-0000-4000-8000-000000000001';
+    // First call: ensureUserCart (outside transaction)
+    prisma.cart.findFirst
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: [],
+      })
+      // Second call: inside transaction, current cart state with existing item
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: makeItems(STORE_ID, {
+          id: 'item-v1',
+          variantId: v1,
+          quantity: 5,
+          unitPriceInPaise: 2400,
+        }),
+      })
+      // Final read in getCurrentCart after transaction completes.
+      .mockResolvedValueOnce({
+        ...cart(),
+        storeId: STORE_ID,
+        items: makeItems(STORE_ID, {
+          id: 'item-v1',
+          variantId: v1,
+          quantity: 8,
+          unitPriceInPaise: 2400,
+        }),
+      });
+    prisma.productVariant.findMany.mockResolvedValue([
+      { id: v1, priceInPaise: 2400, isAvailable: true, product: { status: 'ACTIVE', isAvailable: true } },
+    ] as any);
+    prisma.cartItem.update.mockImplementation(
+      async ({ where, data }: { where: { id: string }; data: { quantity: { increment: number } } }) => ({
+        id: where.id,
+        quantity: 5 + data.quantity.increment,
+        unitPriceInPaise: 2400,
+      }),
+    );
+    
+    prisma.$transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        cart: { findFirst: prisma.cart.findFirst },
+        cartItem: {
+          create: prisma.cartItem.create,
+          update: prisma.cartItem.update,
+        },
+      };
+      return await callback(tx);
+    });
+
+    const result = await service.mergeGuestCart('user-1', {
+      lines: [{ variantId: v1, quantity: 3 }],
+    });
+
+    // The transaction should have been used.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    // The update should have incremented by 3 (from 5 to 8).
+    expect(prisma.cartItem.update).toHaveBeenCalledTimes(1);
+    expect(prisma.cartItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { quantity: { increment: 3 } },
+      }),
+    );
+    // Final cart should reflect the incremented quantity.
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.quantity).toBe(8);
+  });
 });
 
 type PrismaMock = ReturnType<typeof createPrismaMock>;
@@ -361,11 +854,13 @@ function createPrismaMock() {
     cartItem: {
       findFirst: vi.fn(),
       update: vi.fn(),
+      create: vi.fn(),
       delete: vi.fn(),
       deleteMany: vi.fn(),
     },
     productVariant: {
       findFirst: vi.fn(),
+      findMany: vi.fn(),
     },
     coupon: {
       findFirst: vi.fn(),
@@ -373,7 +868,22 @@ function createPrismaMock() {
     couponRedemption: {
       count: vi.fn(),
     },
+    $transaction: vi.fn(),
   };
 }
 
-export { createPrismaMock, type PrismaMock };
+function totalPrismaCalls(prisma: ReturnType<typeof createPrismaMock>): number {
+  let count = 0;
+  for (const service of Object.values(prisma)) {
+    if (service && typeof service === 'object') {
+      for (const mock of Object.values(service as Record<string, unknown>)) {
+        if (typeof mock === 'function') {
+          count += (mock as ReturnType<typeof vi.fn>).mock.calls.length;
+        }
+      }
+    }
+  }
+  return count;
+}
+
+export { createPrismaMock, totalPrismaCalls, type PrismaMock };

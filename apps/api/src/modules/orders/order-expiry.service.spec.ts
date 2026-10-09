@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderExpiryService } from './order-expiry.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { releaseOrderReservations } from '../inventory/order-reservations';
 
 vi.mock('../inventory/order-reservations', () => ({
@@ -120,25 +121,74 @@ function setup(orders: TestOrder[]) {
     orderStatusHistory: { create: statusHistoryCreate },
   };
 
+  // In-memory job lock mirroring the conditional-UPDATE claim the real
+  // database performs (the real functions are driven in job-lock.spec.ts).
+  // The state is shared across services in a test = the database two API
+  // instances would share.
+  const lockRows = new Map<string, { owner: string; expiresAt: Date }>();
+  const jobLock = {
+    updateMany: vi.fn(
+      async ({
+        where,
+        data,
+      }: {
+        where: { name: string; expiresAt?: { lt: Date }; owner?: string };
+        data: { owner?: string; acquiredAt?: Date; expiresAt: Date };
+      }) => {
+        const row = lockRows.get(where.name);
+        if (row === undefined) return { count: 0 };
+        if (where.expiresAt !== undefined && row.expiresAt >= where.expiresAt.lt) {
+          return { count: 0 };
+        }
+        if (where.owner !== undefined && row.owner !== where.owner) return { count: 0 };
+        if (data.owner !== undefined) row.owner = data.owner;
+        row.expiresAt = data.expiresAt;
+        return { count: 1 };
+      },
+    ),
+    findUnique: vi.fn(async ({ where }: { where: { name: string } }) => {
+      const row = lockRows.get(where.name);
+      return row === undefined
+        ? null
+        : { name: where.name, owner: row.owner, expiresAt: row.expiresAt };
+    }),
+    create: vi.fn(
+      async ({ data }: { data: { name: string; owner: string; expiresAt: Date } }) => {
+        if (lockRows.has(data.name)) {
+          const error = new Error('unique violation') as Error & { code: string };
+          error.code = 'P2002';
+          throw error;
+        }
+        lockRows.set(data.name, { owner: data.owner, expiresAt: data.expiresAt });
+        return data;
+      },
+    ),
+  };
+
   const prisma = {
     order: { findMany },
     $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
+    jobLock,
   };
   const config = { get: vi.fn(() => 120) };
   const processWebhookEvent = vi.fn(async () => ({}));
   const reconcilePayment =
     vi.fn<() => Promise<{ type: string } | null>>(async () => null);
   const paymentsService = { processWebhookEvent, reconcilePayment };
-  const service = new OrderExpiryService(prisma as never, config as never, paymentsService as never);
+  const makeService = () =>
+    new OrderExpiryService(prisma as never, config as never, paymentsService as never);
+  const service = makeService();
 
   return {
     service,
+    makeService,
     orders,
     findMany,
     updateMany,
     statusHistoryCreate,
     processWebhookEvent,
     reconcilePayment,
+    lockRows,
   };
 }
 
@@ -266,5 +316,147 @@ describe('OrderExpiryService', () => {
     );
     expect(orders.find(({ id }) => id === 'online-order')?.status).toBe('PENDING_PAYMENT');
     expect(releaseOrderReservations).not.toHaveBeenCalled();
+  });
+
+  it('skips the whole sweep when the database job lock is held by another instance', async () => {
+    const { service, findMany, updateMany, lockRows } = setup([unpaidOnlineOrder()]);
+    lockRows.set('order-expiry', {
+      owner: 'other-instance',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    await service.expireStalePendingOrders();
+
+    // The loser never even selects candidates, let alone touches an order.
+    expect(findMany).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+    // Owner-scoped release: this run never held the lock, so it stays held.
+    expect(lockRows.get('order-expiry')?.owner).toBe('other-instance');
+  });
+
+  it('releases the job lock after a successful sweep so the next tick can claim it', async () => {
+    const { service, lockRows } = setup([unpaidOnlineOrder()]);
+
+    await service.expireStalePendingOrders();
+
+    const row = lockRows.get('order-expiry');
+    expect(row).toBeDefined();
+    expect(row!.expiresAt.getTime()).toBe(0); // free immediately, no lease wait
+  });
+
+  it('releases the job lock and rethrows when the sweep itself fails', async () => {
+    const { service, findMany, lockRows } = setup([unpaidOnlineOrder()]);
+    findMany.mockRejectedValueOnce(new Error('database unreachable'));
+
+    await expect(service.expireStalePendingOrders()).rejects.toThrow('database unreachable');
+
+    expect(lockRows.get('order-expiry')!.expiresAt.getTime()).toBe(0);
+  });
+
+  it('two overlapping sweeps process the same order exactly once', async () => {
+    const shared = setup([unpaidOnlineOrder()]);
+    const runA = shared.makeService();
+    const runB = shared.makeService();
+    const warnOf = (instance: object) =>
+      vi.spyOn(
+        (instance as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger,
+        'warn',
+      );
+    const warnA = warnOf(runA);
+    const warnB = warnOf(runB);
+
+    await Promise.all([runA.expireStalePendingOrders(), runB.expireStalePendingOrders()]);
+
+    expect(shared.orders.find(({ id }) => id === 'online-order')?.status).toBe('CANCELLED');
+    // The lock loser never selected; the winner expired exactly once.
+    expect(shared.findMany).toHaveBeenCalledTimes(1);
+    expect(shared.statusHistoryCreate).toHaveBeenCalledTimes(1);
+    expect(releaseOrderReservations).toHaveBeenCalledTimes(1);
+    const lockSkips = [...warnA.mock.calls, ...warnB.mock.calls].filter((call) =>
+      String(call[0]).includes('job lock held'),
+    );
+    expect(lockSkips).toHaveLength(1);
+  });
+
+  it('counts an order whose state changed under the sweep as skipped, not expired', async () => {
+    const { service, statusHistoryCreate, updateMany } = setup([unpaidOnlineOrder()]);
+    // A webhook wins the race between selection and claim: the conditional
+    // UPDATE matches zero rows, so the run must count a skip — no history row,
+    // no release, and the log must not claim a cancellation.
+    updateMany.mockImplementationOnce(async () => ({ count: 0 }));
+    const logSpy = vi.spyOn(
+      (service as unknown as { logger: { log: (...args: unknown[]) => void } }).logger,
+      'log',
+    );
+
+    await service.expireStalePendingOrders();
+
+    expect(statusHistoryCreate).not.toHaveBeenCalled();
+    expect(releaseOrderReservations).not.toHaveBeenCalled();
+    expect(logSpy.mock.calls.some((call) => call[1] === 'order-expiry sweep started')).toBe(true);
+    const finished = logSpy.mock.calls.find(
+      (call) => call[1] === 'order-expiry sweep finished',
+    );
+    expect(finished).toBeDefined();
+    expect(finished![0]).toMatchObject({
+      candidates: 1,
+      expired: 0,
+      skippedStateChanged: 1,
+      failed: 0,
+    });
+  });
+
+  it('K. completes with the push provider hanging — delivery is off the expiry path', async () => {
+    const { service, orders, processWebhookEvent } = setup([capturedOnlineOrder()]);
+
+    // Route the auto-heal through the REAL enqueue path production uses (via
+    // PaymentsService -> NotificationsService), against an in-memory database.
+    const notificationCreate = vi.fn(async (args: { data: Record<string, unknown> }) => ({
+      id: 'n-1',
+      ...args.data,
+    }));
+    const notifyPrisma = {
+      user: { findUnique: vi.fn(async () => ({ firstName: 'Asha' })) },
+      notification: { create: notificationCreate },
+    };
+    const notifications = new NotificationsService(notifyPrisma as never, {} as never);
+    processWebhookEvent.mockImplementation(async () => {
+      await notifications.sendOrderStatusPush({
+        userId: 'user-1',
+        orderId: 'captured-order',
+        orderNumber: 'ORD-PAID',
+        status: 'CONFIRMED',
+      });
+      return {};
+    });
+
+    // A provider that never answers: if the sweep waited on delivery, the
+    // race below would reject and fail the test.
+    const fetchSpy = vi.fn(() => new Promise(() => undefined));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        service.expireStalePendingOrders(),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('expiry blocked on the push provider')),
+            5_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      globalThis.fetch = originalFetch;
+    }
+
+    // Delivery never ran on the sweep; the durable QUEUED row did.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(notificationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'QUEUED' }) }),
+    );
+    // Money-safety outcome unchanged: the captured order was auto-healed, not cancelled.
+    expect(orders.find(({ id }) => id === 'captured-order')?.status).toBe('PENDING_PAYMENT');
   });
 });

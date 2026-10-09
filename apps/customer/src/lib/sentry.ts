@@ -46,3 +46,24 @@ export function initSentryIfConfigured(): void {
 export function isSentryActive(): boolean {
   return hasSentryDsn();
 }
+
+/**
+ * Report a NON-FATAL error to the app's error sink.
+ *
+ * This is the only sanctioned way `src/` reports problems — `no-console` is an
+ * error rule there, deliberately, so a stray `console.warn` cannot ship. Callers
+ * use it when they have to absorb an error to keep the UI usable (a failed cart
+ * mutation must release its lock and stay tappable) but still want the failure
+ * to surface somewhere.
+ *
+ * No-op without a DSN, exactly like `initSentryIfConfigured` — reporting must
+ * never change behaviour or throw from an error path.
+ */
+export function captureError(error: unknown, context?: Record<string, unknown>): void {
+  if (!hasSentryDsn()) return;
+  try {
+    Sentry.captureException(error, context === undefined ? undefined : { extra: context });
+  } catch {
+    // Never let the reporter itself become a second failure.
+  }
+}

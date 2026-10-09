@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Head from 'expo-router/head';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Pressable,
@@ -20,8 +20,12 @@ import Animated, {
   useSharedValue,
 } from 'react-native-reanimated';
 
-import { catalogApi } from '../../../src/api/catalog';
+import {
+  prefetchProductDetails,
+  productDetailQueryOptions,
+} from '../../../src/api/product-detail-query';
 import { journeyApi } from '../../../src/api/journey';
+import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { useAuthStore } from '../../../src/stores/auth-store';
 import { ErrorState } from '../../../src/components/ErrorState';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
@@ -59,6 +63,14 @@ export default function ProductDetailScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
+
+  /*
+   * Prefetch-on-open: every entry into this screen (card press, related-rail
+   * tap, quick-view "view details") goes through useOpenProduct, which warms
+   * THIS exact key before the push. The query below then joins that request
+   * instead of issuing a second one — one round trip covers press + page.
+   */
+  const openProduct = useOpenProduct();
 
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(
     null,
@@ -102,10 +114,8 @@ export default function ProductDetailScreen() {
    * Product request.
    */
   const detail = useQuery({
-    queryKey: ['catalog', 'product', slug],
-    queryFn: () => catalogApi.getProduct(slug),
+    ...productDetailQueryOptions(slug),
     enabled: Boolean(slug),
-    staleTime: 120_000,
   });
 
   const detailData: ProductDetail | null = detail.data ?? null;
@@ -146,6 +156,20 @@ export default function ProductDetailScreen() {
       .filter((item) => item.slug !== slug)
       .slice(0, 10);
   }, [queryClient, slug]);
+
+  /*
+   * Warm the NEXT likely detail pages: the first few related products, under
+   * the same shared key (capped by RELATED_PREFETCH_LIMIT, so this can never
+   * become a catalogue-wide fetch). Purely additive reads — a failure is
+   * swallowed by prefetchQuery and the related card still navigates normally.
+   */
+  useEffect(() => {
+    if (!detailData) return;
+    void prefetchProductDetails(
+      queryClient,
+      relatedProducts.map((item) => item.slug),
+    );
+  }, [detailData, queryClient, relatedProducts]);
 
   const handleShare = useCallback(() => {
     if (!detailData) return;
@@ -1116,11 +1140,7 @@ export default function ProductDetailScreen() {
               renderItem={({ item }) => (
                 <RelatedProductCard
                   item={item}
-                  onOpen={(nextSlug) =>
-                    router.push(
-                      `/(shop)/products/${nextSlug}`,
-                    )
-                  }
+                  onOpen={openProduct}
                 />
               )}
             />

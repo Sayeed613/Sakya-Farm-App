@@ -44,6 +44,11 @@ async function refreshSessionOnce(): Promise<boolean> {
   const current = useAuthStore.getState().session;
   if (current === null || current.refreshToken === '') return false;
 
+  // Capture the logout generation AT THE START of the refresh round.
+  // This is passed to updateSession so it can verify the generation hasn't
+  // changed (i.e., the user didn't log out during the refresh).
+  const refreshGeneration = useAuthStore.getState().logoutGeneration;
+
   if (refreshInFlight === null) {
     refreshInFlight = (async () => {
       try {
@@ -51,11 +56,18 @@ async function refreshSessionOnce(): Promise<boolean> {
         // first call path, and the api layer builds on it.
         const { authApi } = await import('./auth');
         const renewed = await authApi.refresh({ refreshToken: current.refreshToken });
-        useAuthStore.getState().updateSession(renewed);
+        // Pass the captured generation — if the user logged out during the
+        // refresh, logoutGeneration will have changed and the renewed session
+        // will be dropped.
+        useAuthStore.getState().updateSession(renewed, refreshGeneration);
         return true;
       } catch {
         // The refresh token is expired/revoked too — the session is dead.
-        void useAuthStore.getState().logout();
+        // Only call logout if we haven't already logged out (check generation).
+        const state = useAuthStore.getState();
+        if (state.logoutGeneration === 0) {
+          void state.logout();
+        }
         return false;
       } finally {
         refreshInFlight = null;

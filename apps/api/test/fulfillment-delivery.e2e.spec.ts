@@ -188,6 +188,10 @@ async function clearCustomerData(prisma: PrismaClient, customerId: string) {
     await tx.cart.deleteMany({ where: { userId: customerId } });
     await tx.payment.deleteMany({ where: { order: { userId: customerId } } });
     await tx.order.deleteMany({ where: { userId: customerId } });
+    // Status transitions queue durable notification rows (the outbox); they
+    // belong to this test customer and must leave with them, or they leak
+    // into the notification worker e2e suite's queue-safety rail.
+    await tx.notification.deleteMany({ where: { userId: customerId } });
   });
 
   await resetInventory(prisma);

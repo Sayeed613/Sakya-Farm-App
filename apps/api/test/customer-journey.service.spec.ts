@@ -5,7 +5,14 @@ import { PrismaService } from '../src/database/prisma.service';
 import { CustomerJourneyService } from '../src/modules/customer-journey/customer-journey.service';
 
 function service(): CustomerJourneyService {
-  return new CustomerJourneyService({} as PrismaService, {} as never, {} as CartService);
+  return new CustomerJourneyService(
+    {} as PrismaService,
+    {} as never,
+    {} as CartService,
+    // Not under test here (serviceability is pure); the permission cache is
+    // exercised in account-deletion.permission-cache.spec.ts.
+    {} as never,
+  );
 }
 
 describe('CustomerJourneyService delivery policy', () => {

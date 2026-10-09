@@ -14,7 +14,13 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { UserAwareThrottlerGuard } from './common/guards/user-aware-throttler.guard';
 import { resolveRequestId } from './common/middleware/request-id.middleware';
 import type { RequestMetrics } from './observability/request-metrics';
+import {
+  REDACT_PATHS,
+  requestSerializer,
+  responseSerializer,
+} from './observability/pino-config';
 import { CatalogCacheModule } from './cache/catalog-cache.module';
+import { PermissionCacheModule } from './cache/permission-cache.module';
 import configuration from './config/configuration';
 import { PrismaModule } from './database/prisma.module';
 import {
@@ -113,26 +119,16 @@ const appRoot = join(__dirname, '..');
               : {}),
             // Reuse a caller-provided correlation id when it is safe to.
             genReqId: (request) => resolveRequestId(request.headers['x-request-id']),
-            // Credentials and secrets must never reach a log sink.
+            // Credentials, OTP codes and webhook signatures must never reach
+            // a log sink — policy lives in observability/pino-config.ts so it
+            // is unit-testable; serializers keep bodies/headers out entirely.
             redact: {
-              paths: [
-                'req.headers.authorization',
-                'req.headers.cookie',
-                'res.headers["set-cookie"]',
-                'req.body.password',
-                'req.body.currentPassword',
-                'req.body.newPassword',
-                'req.body.refreshToken',
-              ],
+              paths: REDACT_PATHS,
               censor: '[redacted]',
             },
             serializers: {
-              req: (request: { id?: string; method?: string; url?: string }) => ({
-                id: request.id,
-                method: request.method,
-                url: request.url,
-              }),
-              res: (response: { statusCode?: number }) => ({ statusCode: response.statusCode }),
+              req: requestSerializer,
+              res: responseSerializer,
             },
             // Evaluated once for the per-request child at request start and
             // AGAIN when the completion line is written — so the buckets
@@ -190,6 +186,7 @@ const appRoot = join(__dirname, '..');
 
     PrismaModule,
     CatalogCacheModule,
+    PermissionCacheModule,
     AuthModule,
     HealthModule,
 

@@ -14,6 +14,7 @@ import { ErrorState } from '../../../src/components/ErrorState';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
 import { filterByCategory, useFreshCatalog } from '../../../src/hooks/use-fresh-catalog';
 import { useDeliveryLocation } from '../../../src/hooks/use-delivery-location';
+import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { useResponsive } from '../../../src/lib/responsive';
 import type { ProductListItem } from '@sakya/types';
 
@@ -113,7 +114,7 @@ export default function SakyaFreshScreen() {
     return list;
   }, [fresh.products, fresh.produceProducts, handle, filter, sort, packFilter]);
 
-  const openProduct = useCallback((slug: string) => router.push(`/(shop)/products/${slug}`), []);
+  const openProduct = useOpenProduct();
   const openCategory = useCallback((slug: string) => router.push(`/(shop)/categories/${slug}`), []);
   const openCart = useCallback(() => router.push('/(shop)/cart'), []);
 

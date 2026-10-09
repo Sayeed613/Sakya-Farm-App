@@ -12,6 +12,7 @@ import { ProductQuickView } from '../src/components/commerce/ProductQuickView';
 import { VariantPickerSheet, type VariantPickerState } from '../src/components/commerce/VariantPickerSheet';
 import { ErrorState } from '../src/components/ErrorState';
 import { SkeletonBlock } from '../src/components/LoadingSkeleton';
+import { useOpenProduct } from '../src/hooks/use-open-product';
 import { goBackOrHome } from '../src/lib/navigation';
 import { colors } from '../src/theme';
 
@@ -52,7 +53,7 @@ export default function SearchScreen() {
     placeholderData: (previous) => previous,
   });
 
-  const openProduct = (slug: string) => router.push(`/(shop)/products/${slug}`);
+  const openProduct = useOpenProduct();
   const openCategory = (slug: string) => router.push(`/(shop)/categories/${slug}`);
 
   return (

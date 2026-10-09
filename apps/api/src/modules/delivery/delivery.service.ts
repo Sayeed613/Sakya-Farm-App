@@ -1000,19 +1000,26 @@ export class DeliveryService {
         }
       }
 
+      // Delivery completion closes the order — queue the customer push on the
+      // SAME transaction (durable outbox intent, no crash window between
+      // commit and notification). The firing condition is unchanged: it is
+      // evaluated on `result`, exactly as the old post-commit check evaluated
+      // it on `updated` (the same object). Nothing external is awaited here.
+      if (status === 'DELIVERED' && result.order.status === 'DELIVERED') {
+        await this.notificationsService.sendOrderStatusPush(
+          {
+            userId: result.order.userId,
+            orderId: result.order.id,
+            orderNumber: result.order.orderNumber,
+            status: 'DELIVERED',
+            reason: null,
+          },
+          tx,
+        );
+      }
+
       return result;
     });
-
-    // Delivery completion closes the order — tell the customer (best-effort).
-    if (status === 'DELIVERED' && updated.order.status === 'DELIVERED') {
-      await this.notificationsService.sendOrderStatusPush({
-        userId: updated.order.userId,
-        orderId: updated.order.id,
-        orderNumber: updated.order.orderNumber,
-        status: 'DELIVERED',
-        reason: null,
-      });
-    }
 
     return toDeliveryAssignmentDetail(updated);
   }

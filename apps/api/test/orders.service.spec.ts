@@ -1,7 +1,8 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import * as incrementMetricModule from '../src/observability/business-metrics';
 import { OrdersService } from '../src/modules/orders/orders.service';
 import { PrismaService } from '../src/database/prisma.service';
 import { NotificationsService } from '../src/modules/notifications/notifications.service';
@@ -65,24 +66,27 @@ describe('OrdersService', () => {
   let service: OrdersService;
   let prisma: ReturnType<typeof createPrismaMock>;
   let cartService: { getCurrentCart: ReturnType<typeof vi.fn> };
+  let notificationsPush: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     prisma = createPrismaMock();
     cartService = {
       getCurrentCart: vi.fn(),
     };
+    notificationsPush = vi.fn(async () => undefined);
+    const notificationsProvider = { sendOrderStatusPush: notificationsPush };
     const testModule = await Test.createTestingModule({
       providers: [
         OrdersService,
         { provide: PrismaService, useValue: prisma },
         { provide: ConfigService, useValue: configMock() },
         { provide: CartService, useValue: cartService },
-        { provide: NotificationsService, useValue: { sendOrderStatusPush: vi.fn(async () => undefined) } },
+        { provide: NotificationsService, useValue: notificationsProvider },
       ],
     })
       .overrideProvider(PrismaService).useValue(prisma)
       .overrideProvider(CartService).useValue(cartService)
-      .overrideProvider(NotificationsService).useValue({ sendOrderStatusPush: vi.fn(async () => undefined) })
+      .overrideProvider(NotificationsService).useValue(notificationsProvider)
       .compile();
     service = testModule.get(OrdersService) as OrdersService;
   });
@@ -1378,6 +1382,198 @@ describe('OrdersService', () => {
     await expect(
       service.cancelOrder('order-1', 'user-1', 'Changed mind'),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  /**
+   * Step 12 correction — transaction boundaries of the notification enqueue.
+   *
+   * The enqueue runs INSIDE the cancel transaction (durable outbox), so the
+   * business mutation and the QUEUED intent commit or roll back together —
+   * there is no longer a post-commit window where a crash could lose the
+   * record. These tests pin the pairing on the cancel path: a committed
+   * cancellation receives the intent on the same transaction client, a
+   * rolled-back one never even reaches the enqueue.
+   */
+  function primeCancelFixture() {
+    prisma.order.findFirst.mockResolvedValue({
+      id: 'order-1',
+      orderNumber: 'ORD-004',
+      userId: 'user-1',
+      status: 'PENDING_PAYMENT',
+      paymentStatus: 'PENDING',
+      currency: 'INR',
+      subtotalInPaise: 4800,
+      discountInPaise: 0,
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      billingAddress: null,
+      notes: null,
+      placedAt: null,
+      cancelledAt: null,
+      deliveredAt: null,
+      cancelReason: null,
+      createdAt: new Date('2026-09-12T00:00:00Z'),
+      updatedAt: new Date('2026-09-12T00:00:00Z'),
+      items: [],
+      payments: [],
+      statusHistory: [],
+      coupon: null,
+    } as any);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    prisma.order.update.mockResolvedValue({
+      id: 'order-1',
+      orderNumber: 'ORD-004',
+      userId: 'user-1',
+      status: 'CANCELLED',
+      paymentStatus: 'PENDING',
+      currency: 'INR',
+      subtotalInPaise: 4800,
+      discountInPaise: 0,
+      taxInPaise: 240,
+      shippingInPaise: 4900,
+      totalInPaise: 9940,
+      shippingAddress: { line1: 'Home', postalCode: '500001' },
+      billingAddress: null,
+      notes: null,
+      placedAt: null,
+      cancelledAt: new Date('2026-09-12T00:01:00Z'),
+      deliveredAt: null,
+      cancelReason: 'Changed mind',
+      createdAt: new Date('2026-09-12T00:00:00Z'),
+      updatedAt: new Date('2026-09-12T00:01:00Z'),
+      items: [],
+      payments: [],
+      statusHistory: [],
+      coupon: null,
+    } as any);
+    prisma.order.findUnique.mockResolvedValue({
+      storeId: 'store-1',
+      items: [{ variantId: 'v1', quantity: 2 }],
+    } as any);
+    prisma.inventory.findUnique.mockResolvedValue({
+      id: 'inv-1',
+      variantId: 'v1',
+      storeId: 'store-1',
+      quantityOnHand: 10,
+    });
+    prisma.inventoryMovement.findFirst.mockResolvedValue(null);
+    prisma.inventory.updateMany.mockResolvedValue({ count: 1 });
+  }
+
+  it('A. enqueues the notification INSIDE the cancel transaction (same tx client)', async () => {
+    primeCancelFixture();
+
+    await service.cancelOrder('order-1', 'user-1', 'Changed mind');
+
+    expect(notificationsPush).toHaveBeenCalledOnce();
+    // Second arg === the transaction client: the intent is written on the SAME
+    // transaction as the cancellation, so commit covers both atomically.
+    expect(notificationsPush).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'CANCELLED', orderNumber: 'ORD-004' }),
+      prisma,
+    );
+    // The enqueue happened while the transaction was executing, not after it:
+    // $transaction was invoked first and the push call lands inside its callback.
+    expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      notificationsPush.mock.invocationCallOrder[0] as number,
+    );
+  });
+
+  it('B. does NOT enqueue anything when the cancel transaction rolls back', async () => {
+    primeCancelFixture();
+    // The transaction fails before its callback ever runs — the intent (which
+    // lives inside that callback) is never written. The DB-level rollback
+    // AFTER an enqueue is proven in test/notification-outbox.e2e.spec.ts.
+    prisma.$transaction.mockRejectedValueOnce(new Error('serialization failure'));
+
+    await expect(
+      service.cancelOrder('order-1', 'user-1', 'Changed mind'),
+    ).rejects.toThrow('serialization failure');
+
+    expect(notificationsPush).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------
+  // Observability: in-process business counters (side effects only).
+  // ---------------------------------------------------------------------
+
+  describe('checkoutFailures + inventoryReservationFailures counters at the real checkout failure paths', () => {
+    let incrementMetricSpy: MockInstance;
+
+    beforeEach(() => {
+      incrementMetricSpy = vi.spyOn(incrementMetricModule, 'incrementMetric');
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('increments checkoutFailures exactly once when the cart was already checked out', async () => {
+      cartService.getCurrentCart.mockResolvedValue(
+        cartWithItems({ id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+      );
+      // No payment row exists for this key — neither the pre-transaction
+      // idempotency check nor the in-lock replay check finds a winner — so the
+      // conflict must come from the consumed cart itself.
+      prisma.payment.findFirst.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+      // But by the time the lock is granted, the cart has been consumed.
+      prisma.cartItem.count.mockResolvedValue(0);
+
+      await expect(
+        service.checkout('user-1', {
+          idempotencyKey: 'key-loser',
+          shippingAddress: { line1: 'Home', postalCode: '500001' },
+          notes: null,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(prisma.order.create).not.toHaveBeenCalled();
+      expect(incrementMetricSpy).toHaveBeenCalledTimes(1);
+      expect(incrementMetricSpy).toHaveBeenCalledWith('checkoutFailures');
+
+      vi.restoreAllMocks();
+    });
+
+    it('increments inventoryReservationFailures exactly once when the atomic reserve guard finds insufficient stock', async () => {
+      cartService.getCurrentCart.mockResolvedValue(
+        cartWithItems({ id: 'i1', variantId: 'v1', quantity: 5, unitPriceInPaise: 2400 }),
+      );
+      prisma.payment.findFirst.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+      prisma.cart.findUnique.mockResolvedValue({
+        storeId: 'store-1',
+        couponId: null,
+        store: { id: 'store-1', isActive: true },
+      });
+      prisma.order.create.mockResolvedValue({ id: 'order-1' } as any);
+      prisma.inventory.findUnique.mockResolvedValue({
+        id: 'inv-1',
+        variantId: 'v1',
+        storeId: 'store-1',
+        quantityOnHand: 3,
+      });
+      // The conditional UPDATE matched no row: available < requested.
+      prisma.$executeRaw.mockResolvedValue(0);
+
+      await expect(
+        service.checkout('user-1', {
+          idempotencyKey: 'key-short',
+          shippingAddress: { line1: 'Home', postalCode: '500001' },
+          notes: null,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // The reservation guard itself owns the counter: exactly one
+      // inventoryReservationFailures and no blanket checkoutFailures on top.
+      expect(prisma.inventoryMovement.create).not.toHaveBeenCalled();
+      expect(incrementMetricSpy).toHaveBeenCalledTimes(1);
+      expect(incrementMetricSpy).toHaveBeenCalledWith('inventoryReservationFailures');
+
+      vi.restoreAllMocks();
+    });
   });
 });
 

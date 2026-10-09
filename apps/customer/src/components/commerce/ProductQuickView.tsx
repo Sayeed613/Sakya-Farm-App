@@ -35,6 +35,7 @@ import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 
 import { catalogApi } from '../../api/catalog';
+import { productDetailQueryOptions } from '../../api/product-detail-query';
 import { FALLBACK_CATEGORY_ICON } from '../../config/category-icons';
 import { getCategoryImage } from '../../config/category-images';
 import type {
@@ -666,10 +667,8 @@ function ProductSlide({
   onGalleryGesture?: (active: boolean) => void;
 }) {
   const detail = useQuery({
-    queryKey: ['catalog', 'product', product.slug],
-    queryFn: () => catalogApi.getProduct(product.slug),
+    ...productDetailQueryOptions(product.slug),
     enabled: isActive,
-    staleTime: 120_000,
   });
 
   if (detail.isPending) {
@@ -1315,7 +1314,8 @@ function BottomAddToCart({
   variants: ProductDetail['variants'];
   bottomInset: number;
 }) {
-  const { quantity, add, addVariant, increment, decrement, resolving } = useProductAdd(product);
+  const { quantity, add, addVariant, increment, decrement, resolving, mutating } =
+    useProductAdd(product);
   const meta = selectedVariant as (typeof selectedVariant & { mrpInPaise?: number | null }) | null;
   const perUnit = selectedVariant
     ? derivePerUnitLine(selectedVariant.title, selectedVariant.priceInPaise)
@@ -1324,7 +1324,9 @@ function BottomAddToCart({
   const handleAdd = () => {
     if (!selectedVariant || !product.isAvailable) return;
     if (variants.length > 1) {
-      addVariant({
+      // Guarded: rapid taps here previously dispatched one request each and
+      // never flipped the disabled state, because addVariant bypassed the lock.
+      void addVariant({
         id: selectedVariant.id,
         priceInPaise: selectedVariant.priceInPaise,
         title: selectedVariant.title,
@@ -1388,7 +1390,7 @@ function BottomAddToCart({
       {quantity > 0 ? (
         <QuantityStepper
           quantity={quantity}
-          disabled={resolving || !product.isAvailable}
+          disabled={resolving || mutating || !product.isAvailable}
           width={110}
           onAdd={handleAdd}
           onIncrement={() => void increment()}
@@ -1397,7 +1399,7 @@ function BottomAddToCart({
       ) : (
         <Pressable
           testID="deck-add"
-          disabled={!selectedVariant || resolving || !product.isAvailable}
+          disabled={!selectedVariant || resolving || mutating || !product.isAvailable}
           onPress={handleAdd}
           accessibilityRole="button"
           accessibilityLabel="Add to cart"

@@ -5,7 +5,7 @@ import { memo, useState } from 'react';
 import { Pressable, Text as RNText, View } from 'react-native';
 
 import type { ProductDetail, ProductListItem } from '@sakya/types';
-import { catalogApi } from '../../api/catalog';
+import { productDetailKey, productDetailQueryOptions } from '../../api/product-detail-query';
 import { router } from 'expo-router';
 import { formatMoney, formatPackSize } from '../../lib/format';
 import { cdnImageUri } from '../../lib/cdn-image';
@@ -125,7 +125,7 @@ function ProductCardInner({
   width,
   elevated = false,
 }: ProductCardProps) {
-  const { quantity, add, increment, decrement, resolving } = useProductAdd(product);
+  const { quantity, add, increment, decrement, resolving, mutating } = useProductAdd(product);
   const press = usePressScale();
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -251,6 +251,7 @@ function ProductCardInner({
                 {variantTitles[0] ?? '1 pc'}
               </RNText>
             </View>
+
           ) : null}
         </View>
 
@@ -309,7 +310,7 @@ function ProductCardInner({
             ) : (
               <QuantityStepper
                 quantity={quantity}
-                disabled={resolving}
+                disabled={resolving || mutating}
                 onAdd={() => void add()}
                 onIncrement={() => void increment()}
                 onDecrement={decrement}
@@ -336,12 +337,10 @@ export const ProductCard = memo(ProductCardInner);
 function NotifyMeControl({ productId, productSlug }: { productId: string; productSlug: string }) {
   const queryClient = useQueryClient();
 
-  const cachedDetail = queryClient.getQueryData<ProductDetail>(['catalog', 'product', productSlug]);
+  const cachedDetail = queryClient.getQueryData<ProductDetail>(productDetailKey(productSlug));
   const detail = useQuery({
-    queryKey: ['catalog', 'product', productSlug],
-    queryFn: () => catalogApi.getProduct(productSlug),
+    ...productDetailQueryOptions(productSlug),
     enabled: cachedDetail === undefined,
-    staleTime: 120_000,
   });
 
   const resolved = cachedDetail ?? detail.data ?? null;

@@ -8,6 +8,7 @@ import {
 import { buildPaginationMeta, toSkipTake, type PageRequest } from '@sakya/utils';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../database/prisma.service';
+import { PermissionCacheService } from '../../cache/permission-cache.service';
 import type { RoleCode } from '@sakya/types';
 
 /**
@@ -63,7 +64,10 @@ const SYSTEM_ROLES: RoleCode[] = [
 
 @Injectable()
 export class AdminUsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissionCache: PermissionCacheService,
+  ) {}
 
   /** One page of users, newest first by default. */
   async list(query: AdminUserListQuery): Promise<Paginated<AdminUserSummary>> {
@@ -180,6 +184,7 @@ export class AdminUsersService {
   /**
    * Update a user's status and/or roles.
    * Only system roles can be assigned; SUPER_ADMIN requires SUPER_ADMIN caller.
+   * Invalidates the user's cached permissions when roles change.
    */
   async update(id: string, body: AdminUpdateUserRequest): Promise<AdminUserDetail> {
     const parsed = adminUpdateUserSchema.parse(body);
@@ -189,11 +194,18 @@ export class AdminUsersService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      // Status and role assignments both feed JwtStrategy's loader, so either
+      // one must drop the cached entry. A status change is security-critical:
+      // the ACTIVE check lives *inside* the loader, which a cache hit skips —
+      // without this, a deactivated user could keep authorising for up to a TTL.
+      let authorizationChanged = false;
+
       if (parsed.status !== undefined) {
         await tx.user.update({
           where: { id },
           data: { status: parsed.status },
         });
+        authorizationChanged = true;
       }
 
       if (parsed.roles !== undefined) {
@@ -225,6 +237,17 @@ export class AdminUsersService {
             },
           });
         }
+
+        authorizationChanged = true;
+      }
+
+      // Invalidate the user's cached permissions so the change takes effect
+      // immediately. Reached only after every write above succeeded, so a failed
+      // operation never invalidates. This runs inside the transaction but after
+      // the writes — if the transaction rolls back, the invalidation is harmless
+      // (the cache will just miss and reload).
+      if (authorizationChanged) {
+        this.permissionCache.invalidate(id);
       }
     });
 
@@ -275,6 +298,9 @@ export class AdminUsersService {
       },
     });
 
+    // Invalidate the user's cached permissions so the change takes effect immediately.
+    this.permissionCache.invalidate(userId);
+
     const updatedUser = await this.getById(userId);
     return {
       userId,
@@ -310,6 +336,9 @@ export class AdminUsersService {
     if (deleted.count === 0) {
       throw new BadRequestException(`User does not have role "${role}"`);
     }
+
+    // Invalidate the user's cached permissions so the change takes effect immediately.
+    this.permissionCache.invalidate(userId);
 
     const updatedUser = await this.getById(userId);
     return {

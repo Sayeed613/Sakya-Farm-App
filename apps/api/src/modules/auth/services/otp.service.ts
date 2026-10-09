@@ -45,7 +45,10 @@ export class OtpService {
     config: ConfigService,
   ) {
     this.isProduction = config.getOrThrow<boolean>('app.isProduction');
-this.demoMode = config.get<boolean>('sms.demoMode') === true;
+    // Production guard (duplicated here per configuration.ts): demo mode must
+    // never activate in production even if OTP_DEMO_MODE is misconfigured —
+    // otherwise every phone would verify with the fixed demo code.
+    this.demoMode = !this.isProduction && config.get<boolean>('sms.demoMode') === true;
     this.demoCode = config.get<string>('sms.demoCode') ?? '1234';
   }
 

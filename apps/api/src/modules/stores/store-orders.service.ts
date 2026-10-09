@@ -267,15 +267,20 @@ export class StoreOrdersService {
           changedByUserId: userId,
         },
       });
-    });
 
-    // Best-effort customer push; never fails the store transition.
-    await this.notificationsService.sendOrderStatusPush({
-      userId: order.userId,
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      status: body.status,
-      reason: body.reason ?? null,
+      // Outbox pairing: the push intent commits atomically with the store
+      // transition (no crash window between commit and notification). Provider
+      // delivery stays in the worker — nothing external is awaited inside tx.
+      await this.notificationsService.sendOrderStatusPush(
+        {
+          userId: order.userId,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          status: body.status,
+          reason: body.reason ?? null,
+        },
+        tx,
+      );
     });
 
     return this.getStoreOrder(storeId, orderId, userId);

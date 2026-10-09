@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BANNER_H, BANNER_W, PEEK } from '../../../src/components/home/HeroCarousel';
 import { useResponsive } from '../../../src/lib/responsive';
+import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { StatusBar } from 'expo-status-bar';
 
 import { ErrorState } from '../../../src/components/ErrorState';
@@ -92,7 +93,7 @@ export default function ShopHome() {
     setVariantPick({ product });
   }, []);
 
-  const openProduct = useCallback((slug: string) => router.push(`/(shop)/products/${slug}`), []);
+  const openProduct = useOpenProduct();
   const openCategory = useCallback((slug: string) => router.push(`/(shop)/categories/${slug}`), []);
 
   // The quick-view pager: every product visible on this surface, in display
@@ -229,7 +230,7 @@ function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant 
   // screen, regardless of device size. Header height arrives via callback.
   const collapseThreshold = useRef(300);
 
-  const openProduct = useCallback((slug: string) => router.push(`/(shop)/products/${slug}`), []);
+  const openProduct = useOpenProduct();
   const openCategory = useCallback((slug: string) => router.push(`/(shop)/categories/${slug}`), []);
   const openCategories = useCallback(() => router.push('/(shop)/categories'), []);
   const openSearch = useCallback(() => router.push('/search'), []);

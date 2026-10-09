@@ -5,7 +5,8 @@ import { Pressable, Text as RNText, View } from 'react-native';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { cartApi } from '../../api/cart';
+import { cartQueryOptions } from '../../api/cart-query';
+import { stickyCartBarBottomOffset } from '../../lib/layout-metrics';
 import { useAuthStore } from '../../stores/auth-store';
 import { useGuestCartStore } from '../../stores/guest-cart-store';
 import { useQuery } from '@tanstack/react-query';
@@ -55,12 +56,7 @@ function StickyCartBarInner({ itemCount, onPress, bottomOffset = 0 }: StickyCart
   // Server cart lines — the same ['cart'] cache the cart screen uses, so the
   // pill updates the moment any cart mutation lands. Fetched only when signed
   // in; guests feed the pill from their local display snapshots.
-  const serverCart = useQuery({
-    queryKey: ['cart'],
-    queryFn: cartApi.getCart,
-    enabled: isAuthenticated,
-    staleTime: 30_000,
-  });
+  const serverCart = useQuery(cartQueryOptions(isAuthenticated));
 
   const products = useMemo<PillProduct[]>(() => {
     if (isAuthenticated) {
@@ -107,7 +103,7 @@ function StickyCartBarInner({ itemCount, onPress, bottomOffset = 0 }: StickyCart
       // did nothing and the pill stretched to full width on Pixel 9 Pro.
       style={{
         position: 'absolute',
-        bottom: Math.max(insets.bottom, 10) + 86 + bottomOffset,
+        bottom: stickyCartBarBottomOffset(insets.bottom, bottomOffset),
         left: 0,
         right: 0,
         alignItems: 'center',
@@ -194,12 +190,7 @@ export function useCartSummary(): { itemCount: number; subtotalInPaise: number }
   const lines = useGuestCartStore((state) => state.lines);
   const priceTotals = useGuestCartStore((state) => state.priceTotals);
   const isAuthenticated = useAuthStore((state) => state.session !== null);
-  const serverCart = useQuery({
-    queryKey: ['cart'],
-    queryFn: cartApi.getCart,
-    enabled: isAuthenticated,
-    staleTime: 30_000,
-  });
+  const serverCart = useQuery(cartQueryOptions(isAuthenticated));
 
   const guestCount = lines.reduce((sum, line) => sum + line.quantity, 0);
   const serverCount = (serverCart.data?.items ?? []).reduce((sum, item) => sum + item.quantity, 0);

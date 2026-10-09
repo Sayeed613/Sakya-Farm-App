@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text as RNText, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { sheetMaxContentHeight } from '../../lib/layout-metrics';
 import { useState } from 'react';
 import Animated, {
   Easing,
@@ -53,6 +54,7 @@ export function AddressPickerSheet({
   onAddNew,
 }: AddressPickerSheetProps) {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const queryClient = useQueryClient();
   const [removeError, setRemoveError] = useState<string | null>(null);
   const book = useQuery({
@@ -173,7 +175,7 @@ function sameAs(saved: AddressView, current: CheckoutAddress | null): boolean {
               <ScrollView
                 showsVerticalScrollIndicator={false}
                 className="mt-2"
-                style={{ maxHeight: 420 }}
+                style={{ maxHeight: sheetMaxContentHeight(windowHeight) }}
                 contentContainerStyle={{ paddingHorizontal: 16, gap: 10, paddingBottom: 8 }}
               >
                 {book.isPending ? (

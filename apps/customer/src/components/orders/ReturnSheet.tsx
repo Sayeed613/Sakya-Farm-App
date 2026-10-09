@@ -6,10 +6,12 @@ import {
   ScrollView,
   Text as RNText,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { sheetMaxContentHeight } from '../../lib/layout-metrics';
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import type { ReturnReason } from '@sakya/validation';
 
@@ -62,6 +64,7 @@ export function ReturnSheet({
   onSubmit: (input: { orderItemId: string; reason: ReturnReason; comment?: string }) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const [orderItemId, setOrderItemId] = useState<string | null>(items[0]?.orderItemId ?? null);
   const [reason, setReason] = useState<ReturnReason | null>(null);
   const [comment, setComment] = useState('');
@@ -106,7 +109,10 @@ export function ReturnSheet({
             </RNText>
           </View>
 
-          <ScrollView className="px-5 pt-3" style={{ maxHeight: 380 }}>
+          <ScrollView
+            className="px-5 pt-3"
+            style={{ maxHeight: sheetMaxContentHeight(windowHeight) }}
+          >
             {items.length === 0 ? (
               <RNText className="text-[13px]" style={{ color: MUTED }}>
                 No items on this order are eligible for a return.

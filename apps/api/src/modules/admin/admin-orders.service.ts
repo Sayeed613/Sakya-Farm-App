@@ -301,15 +301,20 @@ export class AdminOrdersService {
       if (toStatus === 'DELIVERED') {
         await deductOrderReservations(tx, id, 'Order delivered');
       }
-    });
 
-    // Best-effort customer push; never fails the admin transition.
-    await this.notificationsService.sendOrderStatusPush({
-      userId: order.userId,
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      status: toStatus,
-      reason: reason ?? null,
+      // Outbox pairing: the push intent commits atomically with the transition
+      // (no crash window between commit and notification). Provider delivery
+      // stays in the worker — nothing external is awaited inside the tx.
+      await this.notificationsService.sendOrderStatusPush(
+        {
+          userId: order.userId,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          status: toStatus,
+          reason: reason ?? null,
+        },
+        tx,
+      );
     });
 
     return this.getById(id);

@@ -15,6 +15,7 @@ import {
 import { StickyCartBar, useCartSummary } from '../../../src/components/commerce/StickyCartBar';
 import { ErrorState } from '../../../src/components/ErrorState';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
+import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { goBackOrHome } from '../../../src/lib/navigation';
 import { useResponsive } from '../../../src/lib/responsive';
 import type { CategorySummary, ProductListItem } from '@sakya/types';
@@ -57,10 +58,7 @@ export default function CategoryProducts() {
 
   const items = useMemo<ProductListItem[]>(() => products.data?.items ?? [], [products.data]);
 
-  const openProduct = useCallback(
-    (nextSlug: string) => router.push(`/(shop)/products/${nextSlug}`),
-    [],
-  );
+  const openProduct = useOpenProduct();
 
   const openCategory = useCallback(
     (categorySlug: string) => router.push(`/(shop)/categories/${categorySlug}`),

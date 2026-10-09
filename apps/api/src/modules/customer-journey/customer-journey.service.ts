@@ -35,6 +35,7 @@ import type {
 } from '@sakya/validation';
 import { isBengaluruPincode, toPaise } from '@sakya/utils';
 
+import { PermissionCacheService } from '../../cache/permission-cache.service';
 import { PrismaService } from '../../database/prisma.service';
 import type { AppConfig } from '../../config/configuration';
 import { CartService } from '../cart/cart.service';
@@ -69,6 +70,7 @@ export class CustomerJourneyService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig, true>,
     private readonly cartService: CartService,
+    private readonly permissionCache: PermissionCacheService,
   ) {}
 
   private commerce() {
@@ -525,6 +527,13 @@ export class CustomerJourneyService {
       await tx.cartItem.deleteMany({ where: { cart: { userId } } });
       await tx.cart.updateMany({ where: { userId, status: 'ACTIVE' }, data: { status: 'ABANDONED' } });
     });
+
+    // The account is now DEACTIVATED. JwtStrategy checks status inside the cache
+    // loader, so a still-warm entry would bypass that check and keep authorising
+    // for up to a TTL. Drop the entry now that the transaction has committed.
+    // Deliberately after the transaction: a rollback throws before this line, so
+    // a failed deletion never invalidates anything.
+    this.permissionCache.invalidate(userId);
 
     if (reason !== null && reason !== '') {
       await this.prisma.auditLog.create({

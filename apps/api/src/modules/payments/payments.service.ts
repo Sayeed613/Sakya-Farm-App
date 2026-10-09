@@ -23,6 +23,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { toPaymentDetail } from './payments.mapper';
 import { canTransitionPayment } from './payment-transitions';
 import type { IntentView, PaymentProvider, ProviderWebhookEvent } from './providers/payment-provider.interface';
+import { incrementMetric } from '../../observability/business-metrics';
 
 /** Injection token for the provider registry (name -> adapter). */
 export const PAYMENT_PROVIDERS = 'PAYMENT_PROVIDERS';
@@ -179,6 +180,7 @@ export class PaymentsService {
           return this.toIntentResponse(winner as PaymentRowView, provider);
         }
       }
+      incrementMetric('paymentFailures');
       throw error;
     }
   }
@@ -324,12 +326,11 @@ export class PaymentsService {
     let event: ProviderWebhookEvent | null;
     try {
       event = await provider.fetchPaymentStatus(row.providerOrderId);
-    } catch (error) {
-      this.logger.warn(
-        `Reconciliation could not reach ${row.provider} for order ${row.providerOrderId}: ${
+    } catch (error) {      this.logger.warn(`Reconciliation could not reach ${row.provider} for order ${row.providerOrderId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      incrementMetric('paymentFailures');
       return null;
     }
 
@@ -360,6 +361,7 @@ export class PaymentsService {
             error instanceof Error ? error.message : String(error)
           }`,
         );
+      incrementMetric('paymentFailures');
       }
     }
 
@@ -462,6 +464,8 @@ export class PaymentsService {
           });
     if (existing === null) {
       this.logger.warn(`Webhook for unknown ${provider} payment ${event.providerPaymentId}`);
+      this.logger.warn(`Webhook for unknown ${provider} payment ${event.providerPaymentId}`);
+      incrementMetric('webhookFailures');
       throw new NotFoundException('No payment matches this provider event');
     }
     if (event.amountInPaise !== undefined && event.amountInPaise !== existing.amountInPaise) {
@@ -503,28 +507,34 @@ export class PaymentsService {
         data: this.webhookPaymentPatch(existing as PaymentRowView, event, target) as never,
       });
       await this.mirrorToOrder(tx, existing.orderId, target, event);
+
+      // The payment event may have advanced the order (captured -> CONFIRMED,
+      // failed -> FAILED). The customer push intent is written on the SAME
+      // transaction as the state transition (durable outbox): a crash between
+      // commit and notification can never lose the record. No network happens
+      // here — the worker claims the QUEUED row and talks to Expo later.
+      if (event.type === 'captured' || event.type === 'failed') {
+        const order = await tx.order.findUnique({
+          where: { id: existing.orderId },
+          select: { id: true, userId: true, orderNumber: true, status: true },
+        });
+        if (order !== null) {
+          await this.notificationsService.sendOrderStatusPush(
+            {
+              userId: order.userId,
+              orderId: order.id,
+              orderNumber: order.orderNumber,
+              status: order.status,
+              reason: event.type === 'failed' ? (event.failureReason ?? 'Payment failed') : null,
+            },
+            tx,
+          );
+        }
+      }
+
       return next;
     });
     this.logger.log(`Payment ${existing.id} ${existing.status} -> ${target} via ${provider} webhook`);
-
-    // The payment event may have advanced the order (captured -> CONFIRMED,
-    // failed -> FAILED). Notify the customer best-effort; a push failure must
-    // not fail the webhook, or the provider will keep retrying it.
-    if (event.type === 'captured' || event.type === 'failed') {
-      const order = await this.prisma.order.findUnique({
-        where: { id: existing.orderId },
-        select: { id: true, userId: true, orderNumber: true, status: true },
-      });
-      if (order !== null) {
-        await this.notificationsService.sendOrderStatusPush({
-          userId: order.userId,
-          orderId: order.id,
-          orderNumber: order.orderNumber,
-          status: order.status,
-          reason: event.type === 'failed' ? (event.failureReason ?? 'Payment failed') : null,
-        });
-      }
-    }
 
     return toPaymentDetail(updated as PaymentRowView);
   }

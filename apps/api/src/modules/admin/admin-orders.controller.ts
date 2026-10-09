@@ -13,15 +13,20 @@ import { AdminOrdersService } from './admin-orders.service';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { z } from 'zod';
 
+import { snapshotMetrics } from '../../observability/business-metrics';
+import type { BusinessMetricsSnapshot } from '../../observability/business-metrics';
+
 /**
- * Admin order management.
+ * Admin order management and diagnostics.
  *
  *   GET    /api/v1/admin/orders                 list all orders, filterable      (orders:read)
  *   GET    /api/v1/admin/orders/:id             order detail with items/payments (orders:read)
  *   PATCH  /api/v1/admin/orders/:id/status      transition order status          (orders:update:status)
+ *   GET    /api/v1/admin/orders/observability/metrics internal business counters (observability:read)
  *
  * All endpoints sit behind `@Roles('ADMIN', 'SUPER_ADMIN')` in addition to
- * per-endpoint permissions.
+ * per-endpoint permissions. The observability endpoint is intentionally
+ * separate so its permission can be granted independently of order data access.
  */
 @Controller('admin/orders')
 @UseGuards(PermissionsGuard)
@@ -69,5 +74,21 @@ export class AdminOrdersController {
     }))) body: { status: string; reason?: string },
   ): Promise<AdminOrderDetail> {
     return this.ordersService.updateStatus(params.id, body.status as OrderStatus, body.reason);
+  }
+
+  /**
+   * Internal diagnostic snapshot of in-process business counters.
+   *
+   * Process-local only: with more than one API instance each process reports its
+   * own counters, so these are trend/health signals rather than a global ledger.
+   *
+   * Security: counters and a timestamp only — no customer identifiers, phones,
+   * emails, tokens, OTPs, payment secrets, webhook secrets or raw provider
+   * payloads are included.
+   */
+  @Permissions('observability:read')
+  @Get('observability/metrics')
+  async observabilityMetrics(): Promise<{ metrics: BusinessMetricsSnapshot; timestamp: string }> {
+    return { metrics: snapshotMetrics(), timestamp: new Date().toISOString() };
   }
 }
