@@ -220,13 +220,32 @@ describe.skipIf(!runDatabaseE2e)('Payment idempotency scoping (seeded DB)', () =
     actor: Actor,
     idempotencyKey: string,
   ): Promise<{ status: number; body: { id: string; orderNumber: string } }> {
+    // The API rejects a client-supplied storeId (contract: the fulfilment
+    // store is server-owned), so scope this customer's cart to the fixture
+    // store BEFORE the first add — the server then resolves the committed
+    // store and checkout reserves the inventory this suite seeds.
+    const existingCart = await ctx.prisma.cart.findFirst({
+      where: { userId: actor.id, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (existingCart === null) {
+      await ctx.prisma.cart.create({
+        data: { userId: actor.id, status: 'ACTIVE', currency: 'INR', storeId: STORE_ID },
+      });
+    } else {
+      await ctx.prisma.cart.update({
+        where: { id: existingCart.id },
+        data: { storeId: STORE_ID },
+      });
+    }
+
     const added = await fetch(ctx.baseUrl + '/cart/items', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${actor.token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ variantId: VARIANT_ID, storeId: STORE_ID, quantity: 1 }),
+      body: JSON.stringify({ variantId: VARIANT_ID, quantity: 1 }),
     });
     expect(added.status).toBe(201);
 

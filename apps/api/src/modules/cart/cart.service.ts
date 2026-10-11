@@ -17,6 +17,16 @@ import { PrismaService } from '../../database/prisma.service';
 import type { AppConfig } from '../../config/configuration';
 import { computeTotals } from '../../common/pricing';
 
+/**
+ * One line of the cart response.
+ *
+ * The response contract (`CartItemResponse`) exposes exactly ONE image per
+ * line — `productImageUrl: string | null` — and every consumer (cart card,
+ * order review, sticky cart bar) reads only that field. Hydration therefore
+ * reads the first image only (`take: 1` in `resolveCurrentCart`); fetching the
+ * remaining images would be rows transferred for a field that does not exist
+ * in the API contract.
+ */
 function toCartItemResponse(item: {
   id: string;
   variantId: string;
@@ -65,7 +75,7 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
       items: {
         where: { quantity: { gt: 0 } },
         orderBy: { createdAt: 'asc' },
-        include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } }, categories: { select: { category: { select: { slug: true } } } } } } } } },
+        include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' }, take: 1 }, categories: { select: { category: { select: { slug: true } } } } } } } } },
       },
       coupon: true,
     },
@@ -75,7 +85,7 @@ async function resolveCurrentCart(prisma: PrismaService, userId: string) {
     const created = await prisma.cart.create({
       data: { userId, status: 'ACTIVE', currency: 'INR' },
       include: {
-        items: { include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } }, categories: { select: { category: { select: { slug: true } } } } } } } } } },
+        items: { include: { variant: { include: { product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' }, take: 1 }, categories: { select: { category: { select: { slug: true } } } } } } } } } },
         coupon: true,
       },
     });
@@ -194,13 +204,12 @@ export class CartService {
     const cart = await this.ensureUserCart(userId);
 
     /*
-     * Fulfillment store: the caller's explicit store when provided, else the
-     * cart's already-scoped store, else the first active store — clients
-     * cannot choose a store (no public store endpoint exists to resolve one),
-     * so the server owns this decision exactly as in mergeGuestCart.
+     * Fulfillment store: the cart's already-scoped store, else the first
+     * active store. Clients cannot choose — `addCartItemSchema` REJECTS a body
+     * that carries a storeId with 400 — so the server owns this decision
+     * exactly as in mergeGuestCart.
      */
     const resolvedStoreId =
-      parsed.storeId ??
       cart.storeId ??
       (
         await this.prisma.store.findFirst({
@@ -214,7 +223,7 @@ export class CartService {
       throw new ConflictException('No store is available to fulfil this cart');
     }
 
-    const store = await this.ensureCartStore(cart.id, resolvedStoreId);
+    const store = await this.ensureCartStore(cart, resolvedStoreId);
     const variant = await this.assertVariantAvailable(parsed.variantId, store.id);
 
     // Cart caps: per-line quantity and distinct line count. Guarding here (the
@@ -290,7 +299,7 @@ export class CartService {
     const cart = await this.ensureUserCart(userId);
     await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
     // Keep the coupon removed when the cart is cleared; re-applying is explicit.
-    if (cart.coupon !== null) {
+    if (cart.couponId !== null) {
       await this.prisma.cart.update({
         where: { id: cart.id },
         data: { couponId: null },
@@ -319,7 +328,7 @@ export class CartService {
 
   async removeCoupon(userId: string): Promise<CartResponse> {
     const cart = await this.ensureUserCart(userId);
-    if (cart.coupon === null) {
+    if (cart.couponId === null) {
       throw new NotFoundException('No coupon applied to this cart');
     }
     await this.prisma.cart.update({
@@ -382,7 +391,7 @@ export class CartService {
     // open while resolving the store.
     const cart = await this.ensureUserCart(userId);
     const existingStoreId = cart.storeId ?? null;
-    const storeId =
+    let storeId =
       existingStoreId ??
       (await this.prisma.store.findFirst({
         where: { isActive: true },
@@ -395,11 +404,25 @@ export class CartService {
     }
 
     if (existingStoreId === null) {
-      // Scope the cart to the store outside the merge transaction.
-      await this.prisma.cart.update({
-        where: { id: cart.id },
+      // One-shot scope claim (still outside the merge transaction): the
+      // null-guarded WHERE makes `cart.storeId` write-once, so a concurrent
+      // first-scope can never be overwritten. If we lose the claim, the lines
+      // written below adopt the WINNER's committed store — they can never
+      // disagree with cart.storeId.
+      const claimed = await this.prisma.cart.updateMany({
+        where: { id: cart.id, storeId: null },
         data: { storeId },
       });
+      if (claimed.count === 0) {
+        const winner = await this.prisma.cart.findFirst({
+          where: { id: cart.id },
+          select: { storeId: true },
+        });
+        if (winner === null || winner.storeId === null) {
+          throw new ConflictException('The cart is no longer available');
+        }
+        storeId = winner.storeId;
+      }
     }
 
     // ---- Batched variant availability/price read (outside transaction) ----
@@ -536,30 +559,28 @@ export class CartService {
   // Internal assertions
   // -----------------------------------------------------------------------
 
+  /**
+   * The cart's HEADER only: id, store scope, status and coupon id.
+   *
+   * Performance: every mutating endpoint ends with `getCurrentCart`, which is
+   * the ONE authoritative full read (items → variant → product → images →
+   * categories → coupon). Loading that same graph here as well doubled the
+   * relation round trips per mutation for data this method never uses —
+   * callers need only the cart id, its store scope and whether a coupon is
+   * attached. Validation (caps, ownership, availability) happens against
+   * dedicated queries, so nothing here is skipped — it is simply not
+   * re-fetched twice.
+   */
   private async ensureUserCart(userId: string) {
     const cart = await this.prisma.cart.findFirst({
       where: { userId, status: 'ACTIVE' },
-      include: {
-        items: {
-          where: { quantity: { gt: 0 } },
-          orderBy: { createdAt: 'asc' },
-          include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } },
-        },
-        coupon: true,
-      },
+      select: { id: true, storeId: true, status: true, couponId: true },
     });
 
     if (cart === null) {
       return this.prisma.cart.create({
         data: { userId, status: 'ACTIVE', currency: 'INR' },
-        include: {
-          items: {
-            where: { quantity: { gt: 0 } },
-            orderBy: { createdAt: 'asc' },
-            include: { variant: { include: { product: { select: { title: true, status: true, isAvailable: true } } } } },
-          },
-          coupon: true,
-        },
+        select: { id: true, storeId: true, status: true, couponId: true },
       });
     }
 
@@ -570,23 +591,58 @@ export class CartService {
     return cart;
   }
 
-  private async ensureCartStore(cartId: string, storeId: string) {
-    const cart = await this.prisma.cart.findUnique({
-      where: { id: cartId },
-      include: { store: true },
-    });
-
-    if (cart?.store?.id === storeId) {
-      return cart.store!;
+  /**
+   * The store id cart lines will be written against, scoping the cart first
+   * when it is not yet scoped.
+   *
+   * INVARIANT this method maintains: `cart.storeId` is WRITE-ONCE — it moves
+   * null → S exactly once and never afterwards — so any header snapshot of it
+   * is stable and the fast path below cannot act on stale data. That invariant
+   * holds because (a) the request schema REJECTS a client-supplied storeId, so
+   * no request can ever resolve a store different from the cart's committed
+   * one; (b) this method's only write is a null-guarded claim; and (c)
+   * mergeGuestCart scopes through the same null-guarded claim. The line we
+   * write therefore always carries the store the cart is committed to.
+   *
+   * The fast path fires when the header already committed
+   * `storeId === resolvedStoreId`; the claim below only ever runs for a cart
+   * that looked UNSCOPED, and a request that loses the claim adopts the
+   * winner's committed value rather than its own resolution — so two
+   * concurrent first-adds converge on one store instead of overwriting each
+   * other. (The previous implementation re-read the cart with an unguarded
+   * `update { connect }`, which could revert a concurrent scope.) The FK on
+   * `cart.storeId` guarantees the store row exists for any committed value.
+   */
+  private async ensureCartStore(
+    cart: { id: string; storeId: string | null },
+    storeId: string,
+  ): Promise<{ id: string }> {
+    if (cart.storeId === storeId) {
+      return { id: storeId };
     }
 
-    // Create the cart scoped to the requested store if it is not yet scoped.
-    const updated = await this.prisma.cart.update({
-      where: { id: cartId },
-      data: { store: { connect: { id: storeId } } },
-      include: { store: true },
+    // One-shot scope claim: `WHERE store_id IS NULL` makes the null → S write
+    // atomic — a cart another request has already scoped can never be
+    // overwritten from here.
+    const claimed = await this.prisma.cart.updateMany({
+      where: { id: cart.id, storeId: null },
+      data: { storeId },
     });
-    return updated.store!;
+
+    if (claimed.count === 1) {
+      return { id: storeId };
+    }
+
+    // Lost the race (or the cart vanished): honour the COMMITTED value so the
+    // line written next can never disagree with cart.storeId.
+    const current = await this.prisma.cart.findFirst({
+      where: { id: cart.id },
+      select: { storeId: true },
+    });
+    if (current === null || current.storeId === null) {
+      throw new ConflictException('The current cart is no longer active');
+    }
+    return { id: current.storeId };
   }
 
   private async assertVariantAvailable(variantId: string, _storeId: string) {
@@ -598,7 +654,10 @@ export class CartService {
         isAvailable: true,
         sku: true,
         title: true,
-        product: { select: { title: true, slug: true, status: true, isAvailable: true, images: { select: { url: true, position: true }, orderBy: { position: 'asc' } } } },
+        // No images here: this read only answers "is it sellable, and at
+        // what price". The response images come from the final full-cart read
+        // (getCurrentCart), so fetching them per add was a wasted round trip.
+        product: { select: { title: true, slug: true, status: true, isAvailable: true } },
       },
     });
 
@@ -614,6 +673,19 @@ export class CartService {
   }
 
   private async assertCartItemBelongsToUser(userId: string, itemId: string) {
+    // Fast path: ONE indexed statement proves the row exists, belongs to the
+    // caller AND their cart is active (the relation filter runs in SQL). The
+    // detailed read below only executes when that proof fails, so the 404 / 400
+    // / 409 distinctions and their messages are unchanged.
+    const owned = await this.prisma.cartItem.findFirst({
+      where: { id: itemId, cart: { userId, status: 'ACTIVE' } },
+      select: { id: true },
+    });
+
+    if (owned !== null) {
+      return owned;
+    }
+
     const item = await this.prisma.cartItem.findFirst({
       where: { id: itemId },
       include: { cart: { select: { userId: true, status: true } } },

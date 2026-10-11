@@ -24,9 +24,10 @@ import { parseInput } from '../schema';
  * that response verbatim — the app renders the server's numbers rather than
  * re-deriving them.
  *
- * `AddCartItemRequest.storeId` comes from the API, not from the app: the server
- * decides which store fulfils an order. No public store endpoint exists yet, so
- * the app cannot resolve that value on its own (see the report).
+ * There is no `storeId` on this request: clients cannot choose a store (the
+ * schema REJECTS a body that sends one with 400). The server resolves the
+ * fulfilment store — the cart's committed store, else the first active store —
+ * and this resource returns the response verbatim, including that choice.
  *
  * Every method is `async` so validation failures arrive as rejections rather than
  * synchronous throws; see `catalog.ts` for the same reasoning.

@@ -6,19 +6,42 @@ import { couponCodeSchema, quantitySchema, uuidSchema } from './primitives';
 // Cart item body validation
 // ---------------------------------------------------------------------------
 
-export const addCartItemSchema = z.object({
-  variantId: uuidSchema,
-  /**
-   * Optional: the server resolves the fulfillment store when omitted — the
-   * cart's already-scoped store, else the first active store (the same rule
-   * merge-guest-cart applies). Clients cannot choose a store; no public
-   * store endpoint exists for them to resolve one.
-   */
-  storeId: uuidSchema.optional(),
-  quantity: quantitySchema,
-});
+export const addCartItemSchema = z
+  .object({
+    variantId: uuidSchema,
+    quantity: quantitySchema,
+    /**
+     * DELIBERATELY NOT ACCEPTED — kept as a key only so a caller that sends
+     * one gets an explicit 400 instead of a silently stripped field (silent
+     * stripping would let the caller believe it had chosen a store while the
+     * server chose otherwise).
+     *
+     * The contract, documented here and on the service since the endpoint
+     * shipped: clients cannot choose the fulfilment store — there is no public
+     * store endpoint to resolve one from — so the server owns the decision,
+     * exactly as in merge-guest-cart. Enforcing it at the schema (rather than
+     * trusting that callers simply omit the field) is what makes the cart's
+     * store write-once and every line's storeId agree with cart.storeId.
+     */
+    storeId: z.uuid().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.storeId !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['storeId'],
+        message:
+          'Clients cannot choose a store; omit storeId and the server resolves the fulfilment store.',
+      });
+    }
+  });
 
-export type AddCartItemRequest = z.infer<typeof addCartItemSchema>;
+/**
+ * The accepted request body: no client-chosen store (see the schema). The
+ * `storeId` key exists in the schema solely to REJECT it, so it is omitted
+ * from the public type — typed callers cannot even construct one.
+ */
+export type AddCartItemRequest = Omit<z.infer<typeof addCartItemSchema>, 'storeId'>;
 
 export const updateCartItemSchema = z.object({
   quantity: quantitySchema,

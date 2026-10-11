@@ -1,7 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { AppModule } from '../src/app.module';
@@ -301,6 +301,29 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
     await ctx?.prisma.$disconnect();
   });
 
+  beforeEach(async () => {
+    // The API REJECTS a client-supplied storeId (the fulfilment store is
+    // server-owned), and afterEach deletes this customer's cart — every test
+    // therefore starts with a FRESH cart. Unscoped, the server would scope it
+    // to the first active store in the database, which in a shared test
+    // database is not necessarily this suite's fixture store — and checkout
+    // reserves inventory AT the cart's store. Scope the cart to the fixture
+    // store up front (the same pattern payment-idempotency.e2e.spec.ts uses)
+    // so each add resolves exactly this store, as the old `storeId` body did.
+    if (ctx === undefined) return;
+    const existing = await ctx.prisma.cart.findFirst({
+      where: { userId: ctx.user.id, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (existing === null) {
+      await ctx.prisma.cart.create({
+        data: { userId: ctx.user.id, status: 'ACTIVE', currency: 'INR', storeId: STORE_ID },
+      });
+    } else {
+      await ctx.prisma.cart.update({ where: { id: existing.id }, data: { storeId: STORE_ID } });
+    }
+  });
+
   afterEach(async () => {
     // Clear the rows created by this test so the next test starts from the
     // same seeded baseline.
@@ -333,7 +356,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 2,
       }),
     });
@@ -371,7 +393,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: '00000000-0000-0000-0000-000000000001',
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });
@@ -389,7 +410,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });
@@ -428,7 +448,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 2,
       }),
     });
@@ -506,7 +525,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });
@@ -578,7 +596,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });
@@ -621,7 +638,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });
@@ -687,7 +703,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });
@@ -741,7 +756,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 2,
       }),
     });
@@ -796,7 +810,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });
@@ -837,7 +850,6 @@ describe.skipIf(!runDatabaseE2e)('Cart and checkout endpoints (seeded DB)', () =
       },
       body: JSON.stringify({
         variantId: VARIANT_ID,
-        storeId: STORE_ID,
         quantity: 1,
       }),
     });

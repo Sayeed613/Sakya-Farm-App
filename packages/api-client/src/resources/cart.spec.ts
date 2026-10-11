@@ -33,30 +33,33 @@ describe('getCart', () => {
 });
 
 describe('addItem', () => {
-  it('posts the validated item body', async () => {
+  it('posts the validated item body (no store — the server resolves it)', async () => {
     const { cart, double } = build({ status: 201, body: CART });
 
-    await cart.addItem({ variantId: VARIANT_ID, storeId: STORE_ID, quantity: 2 });
+    await cart.addItem({ variantId: VARIANT_ID, quantity: 2 });
 
     expect(double.lastCall().url).toBe(`${BASE_URL}/cart/items`);
     expect(double.lastCall().init.method).toBe('POST');
-    expect(double.lastBody()).toEqual({ variantId: VARIANT_ID, storeId: STORE_ID, quantity: 2 });
+    expect(double.lastBody()).toEqual({ variantId: VARIANT_ID, quantity: 2 });
   });
 
   it('rejects a non-integer quantity before making a request', async () => {
     const { cart, double } = build({ body: CART });
 
-    await expect(
-      cart.addItem({ variantId: VARIANT_ID, storeId: STORE_ID, quantity: 1.5 }),
-    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', issues: [{ path: 'quantity' }] });
+    await expect(cart.addItem({ variantId: VARIANT_ID, quantity: 1.5 })).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      issues: [{ path: 'quantity' }],
+    });
     expect(double.calls).toHaveLength(0);
   });
 
-  it('rejects a missing store, which the server requires to fulfil the order', async () => {
+  it('rejects a client-chosen storeId before making a request (server-owned store)', async () => {
     const { cart, double } = build({ body: CART });
 
     await expect(
-      cart.addItem({ variantId: VARIANT_ID, storeId: '', quantity: 1 }),
+      // The TS type already omits `storeId`; this cast exercises the RUNTIME
+      // guard that protects untyped callers from believing they chose a store.
+      cart.addItem({ variantId: VARIANT_ID, storeId: STORE_ID, quantity: 1 } as never),
     ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', issues: [{ path: 'storeId' }] });
     expect(double.calls).toHaveLength(0);
   });

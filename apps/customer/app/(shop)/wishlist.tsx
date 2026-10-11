@@ -56,8 +56,11 @@ export default function WishlistScreen() {
   const moveToCart = useMutation({
     mutationFn: (defaultVariantId: string) => cartApi.addItem({ variantId: defaultVariantId, quantity: 1 }),
     onSuccess: (data) => {
+      // The mutation response IS the authoritative cart — writing it here and
+      // ALSO invalidating made React Query fire an immediate duplicate
+      // GET /cart after every "Move to cart" tap. Keep the response write
+      // only, so the UI updates at once with zero extra full-cart reads.
       queryClient.setQueryData(['cart'], data);
-      void queryClient.invalidateQueries({ queryKey: ['cart'] });
       setActionError(null);
       router.push('/(shop)/cart');
     },

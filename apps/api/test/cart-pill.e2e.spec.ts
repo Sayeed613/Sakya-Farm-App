@@ -18,7 +18,8 @@ import { configureApp } from '../src/app.setup';
  *
  *   signup → add (no storeId)  → GET /cart shows the line  → pill renders
  *   login  → add (no storeId)  → GET /cart shows the line  → pill renders
- *   add with an explicit storeId must keep working (backwards compatibility)
+ *   add with an explicit storeId → 400 (the fulfilment store is server-owned;
+ *       the field is REJECTED, not silently stripped)
  *   unavailable variant → 409 → app stays silent, no pill
  */
 
@@ -267,7 +268,7 @@ describe.skipIf(!runDatabaseE2e)('Logged-in add-to-cart → View Cart pill (seed
     expect(cart.subtotalInPaise).toBe(2 * 2400);
   });
 
-  it('an explicit storeId keeps working for callers that send one', async () => {
+  it('an explicit storeId is rejected with 400 — the fulfilment store is server-owned', async () => {
     const session = await authenticate(ctx, PHONE_STOREID);
 
     const res = await fetch(`${ctx.baseUrl}/cart/items`, {
@@ -275,10 +276,16 @@ describe.skipIf(!runDatabaseE2e)('Logged-in add-to-cart → View Cart pill (seed
       headers: authHeaders(session),
       body: JSON.stringify({ variantId: VARIANT_A, storeId: STORE_ID, quantity: 1 }),
     });
-    expect(res.status).toBe(201);
+    // The contract (schema doc, service doc, api-client doc): clients cannot
+    // choose a store. The field is REJECTED — not silently stripped — so a
+    // caller can never believe it chose the store the server resolved.
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { issues?: Array<{ path: string; message: string }> };
+    expect(body.issues?.some((issue) => issue.path === 'storeId')).toBe(true);
 
+    // Rejected at the validation pipe: no line was created.
     const cart = await getCart(ctx, session);
-    expect(cart.items.some((item) => item.variantId === VARIANT_A)).toBe(true);
+    expect(cart.items).toHaveLength(0);
   });
 
   it('an unavailable variant is rejected with 400 — no line, no pill', async () => {

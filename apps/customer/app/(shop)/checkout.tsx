@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { cartApi } from '../../src/api/cart';
+import { cartQueryOptions } from '../../src/api/cart-query';
 import { journeyApi } from '../../src/api/journey';
 import {
   checkoutApi,
@@ -126,7 +126,13 @@ export default function CheckoutScreen() {
    */
   const [pendingPayment, setPendingPayment] = useState<PaymentDetail | null>(null);
 
-  const cart = useQuery({ queryKey: ['cart'], queryFn: cartApi.getCart, staleTime: 15_000 });
+  const cart = useQuery(
+    // Shared cart options: every cart observer on 30s staleness. This screen
+    // used its own 15s window, which made a checkout visit refetch the whole
+    // cart even when the pill, cards and cart screen (30s) were all still
+    // fresh — one deduped cache entry, one agreed staleness window.
+    cartQueryOptions(session !== null),
+  );
 
   /**
    * The saved address book (loaded with the screen, not on picker open) —

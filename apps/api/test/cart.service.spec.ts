@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { addCartItemSchema } from '@sakya/validation';
 import { Prisma } from '../src/generated/prisma/client';
 import { CartService } from '../src/modules/cart/cart.service';
 import { PrismaService } from '../src/database/prisma.service';
@@ -48,6 +49,8 @@ function cart(id = 'cart-1', userId = 'user-1') {
     currency: 'INR',
     expiresAt: null as Date | null,
     store: { id: 'store-1', currency: 'INR' } as unknown as Prisma.StoreModel,
+    storeId: STORE_ID as string | null,
+    couponId: null as string | null,
     coupon: null as Prisma.CouponGetPayload<true> | null,
     items: [] as Array<Prisma.CartItemGetPayload<true> & { variant: Prisma.ProductVariantGetPayload<true>; product: { title: string } }>,
   } as unknown as Prisma.CartGetPayload<true>;
@@ -153,7 +156,7 @@ describe('CartService', () => {
     });
 
     await expect(
-      service.addItem('user-1', { variantId: VARIANT_ID, storeId: STORE_ID, quantity: 1 }),
+      service.addItem('user-1', { variantId: VARIANT_ID, quantity: 1 }),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -177,7 +180,7 @@ describe('CartService', () => {
       coupon: null,
     });
 
-    const result = await service.addItem('user-1', { variantId: VARIANT_ID, storeId: STORE_ID, quantity: 3 });
+    const result = await service.addItem('user-1', { variantId: VARIANT_ID, quantity: 3 });
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0]!.quantity).toBe(5);
@@ -210,6 +213,7 @@ describe('CartService', () => {
       .mockResolvedValueOnce({
         ...cart(),
         items: makeItems('store-1', { id: 'i1', variantId: 'v1', quantity: 1, unitPriceInPaise: 2400 }),
+        couponId: 'coupon-1',
         coupon: { id: 'coupon-1', code: 'SAVE10', type: 'PERCENTAGE', value: 1000 } as any,
       })
       .mockResolvedValue({
@@ -331,15 +335,20 @@ describe('CartService', () => {
   });
 
   it('raises BadRequestException when a cart item belongs to another user', async () => {
-    prisma.cartItem.findFirst.mockResolvedValue({
-      id: 'item-1',
-      cartId: 'cart-1',
-      variantId: 'v1',
-      storeId: 'store-1',
-      quantity: 1,
-      unitPriceInPaise: 2400,
-      cart: { userId: 'other-user', status: 'ACTIVE' },
-    } as any);
+    // First call is the single-statement ownership fast path (misses here
+    // because of the mocked relation filter), the second is the detailed read
+    // that produces the 400.
+    prisma.cartItem.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        id: 'item-1',
+        cartId: 'cart-1',
+        variantId: 'v1',
+        storeId: 'store-1',
+        quantity: 1,
+        unitPriceInPaise: 2400,
+        cart: { userId: 'other-user', status: 'ACTIVE' },
+      } as any);
 
     await expect(service.removeItem('user-1', 'item-1')).rejects.toBeInstanceOf(BadRequestException);
   });
@@ -836,6 +845,420 @@ describe('CartService', () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]!.quantity).toBe(8);
   });
+
+  // ---- Cart performance: query-shape regressions --------------------------
+  //
+  // Render production logs showed POST /cart/items ~3.3s / 21 queries and
+  // PATCH /cart/items/:id ~1.6s / 11 queries. The dominant cost was reading
+  // the full cart graph (cart → items → variant → product → images →
+  // categories → coupon) up to three times per mutation. These tests pin the
+  // shapes that keep each mutation to ONE full read (the authoritative
+  // response) plus header/validation reads.
+
+  it('addItem reads a header-only cart before writing, then one full cart after', async () => {
+    const header = { id: 'cart-1', storeId: STORE_ID, status: 'ACTIVE', couponId: null };
+    prisma.cart.findFirst
+      .mockResolvedValueOnce(header)
+      .mockResolvedValue({ ...cart(), storeId: STORE_ID, items: [], coupon: null });
+    prisma.productVariant.findFirst.mockResolvedValue(variant('v1', '500 g', 2400, true));
+    prisma.cartItem.findFirst.mockResolvedValue({
+      id: 'existing-item',
+      cartId: 'cart-1',
+      variantId: 'v1',
+      storeId: STORE_ID,
+      quantity: 2,
+      unitPriceInPaise: 2400,
+    });
+    prisma.cartItem.update.mockResolvedValue({} as any);
+
+    await service.addItem('user-1', { variantId: VARIANT_ID, quantity: 1 });
+
+    // Header read + availability + line lookup + write + final full read —
+    // and nothing else (relation fan-out inside each read is asserted below).
+    expect(totalPrismaCalls(prisma)).toBe(5);
+
+    const headerArgs = prisma.cart.findFirst.mock.calls[0]![0] as {
+      select?: unknown;
+      include?: unknown;
+    };
+    expect(headerArgs.select).toEqual({ id: true, storeId: true, status: true, couponId: true });
+    expect(headerArgs.include).toBeUndefined();
+
+    // Cart already scoped to the resolved store: no redundant cart.findUnique.
+    expect(prisma.cart.findUnique).not.toHaveBeenCalled();
+
+    // The availability check must not fetch images; the final read supplies them.
+    const variantArgs = prisma.productVariant.findFirst.mock.calls[0]![0] as {
+      select: { product: { images?: unknown } };
+    };
+    expect(variantArgs.select.product.images).toBeUndefined();
+  });
+
+  it('addItem creates a new line after the line-count cap check', async () => {
+    const header = { id: 'cart-1', storeId: STORE_ID, status: 'ACTIVE', couponId: null };
+    prisma.cart.findFirst
+      .mockResolvedValueOnce(header)
+      .mockResolvedValue({ ...cart(), storeId: STORE_ID, items: [], coupon: null });
+    prisma.productVariant.findFirst.mockResolvedValue(variant('v1', '500 g', 2400, true));
+    prisma.cartItem.findFirst.mockResolvedValue(null); // no existing line
+    prisma.cartItem.count.mockResolvedValue(3); // under maxCartLines (25)
+    prisma.cartItem.create.mockResolvedValue({} as any);
+
+    await service.addItem('user-1', { variantId: VARIANT_ID, quantity: 2 });
+
+    // The cap check still runs for new lines — it was not dropped for speed.
+    expect(prisma.cartItem.count).toHaveBeenCalledWith({ where: { cartId: 'cart-1' } });
+    expect(prisma.cartItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          variantId: VARIANT_ID,
+          storeId: STORE_ID,
+          quantity: 2,
+          unitPriceInPaise: 2400,
+        }),
+      }),
+    );
+    expect(totalPrismaCalls(prisma)).toBe(6);
+  });
+
+  it('first add claims the cart scope with one null-guarded write (no re-read)', async () => {
+    // Header says the cart has NO store yet: the fast path must be skipped and
+    // the scope must be claimed atomically (`WHERE store_id IS NULL`) so a
+    // concurrent first-add can never be overwritten. No cart.findUnique round
+    // trip remains — the claim replaces the old re-read + connect pair.
+    const header = { id: 'cart-1', storeId: null, status: 'ACTIVE', couponId: null };
+    prisma.cart.findFirst
+      .mockResolvedValueOnce(header)
+      .mockResolvedValue({ ...cart(), storeId: null, items: [], coupon: null });
+    prisma.store.findFirst.mockResolvedValue({ id: STORE_ID });
+    prisma.cart.updateMany.mockResolvedValue({ count: 1 });
+    prisma.productVariant.findFirst.mockResolvedValue(variant('v1', '500 g', 2400, true));
+    prisma.cartItem.findFirst.mockResolvedValue({
+      id: 'existing-item',
+      cartId: 'cart-1',
+      variantId: 'v1',
+      storeId: STORE_ID,
+      quantity: 2,
+      unitPriceInPaise: 2400,
+    });
+    prisma.cartItem.update.mockResolvedValue({} as any);
+
+    await service.addItem('user-1', { variantId: VARIANT_ID, quantity: 1 });
+
+    // Server-side resolution: first active store (clients cannot choose one).
+    expect(prisma.store.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { isActive: true } }),
+    );
+    // The claim only ever writes NULL → store: never an overwrite.
+    expect(prisma.cart.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cart-1', storeId: null },
+      data: { storeId: STORE_ID },
+    });
+    expect(prisma.cart.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('rejects a client-supplied storeId at the schema boundary (clients cannot choose a store)', () => {
+    expect(() =>
+      addCartItemSchema.parse({ variantId: VARIANT_ID, quantity: 1, storeId: STORE_ID }),
+    ).toThrowError(/cannot choose a store/);
+    // The accepted shape parses cleanly.
+    expect(addCartItemSchema.parse({ variantId: VARIANT_ID, quantity: 1 })).toEqual({
+      variantId: VARIANT_ID,
+      quantity: 1,
+    });
+  });
+
+  it('a storeId on the body never reaches the mutation path (rejected before any DB call)', async () => {
+    await expect(
+      service.addItem('user-1', { variantId: VARIANT_ID, quantity: 1, storeId: STORE_ID } as any),
+    ).rejects.toThrowError(/cannot choose a store/);
+    expect(totalPrismaCalls(prisma)).toBe(0);
+  });
+
+  it('adopts the committed store when a concurrent request claims the scope first', async () => {
+    const WINNER_STORE_ID = '00000000-0000-4000-8000-000000000007';
+    const header = { id: 'cart-1', storeId: null, status: 'ACTIVE', couponId: null };
+    prisma.cart.findFirst
+      .mockResolvedValueOnce(header) // header read: still unscoped
+      .mockResolvedValue({ ...cart(), storeId: WINNER_STORE_ID, items: [], coupon: null });
+    prisma.store.findFirst.mockResolvedValue({ id: STORE_ID }); // our resolution…
+    prisma.cart.updateMany.mockResolvedValue({ count: 0 }); // …but we lose the claim
+    prisma.productVariant.findFirst.mockResolvedValue(variant('v1', '500 g', 2400, true));
+    prisma.cartItem.findFirst.mockResolvedValue(null);
+    prisma.cartItem.count.mockResolvedValue(0);
+    prisma.cartItem.create.mockResolvedValue({} as any);
+
+    await service.addItem('user-1', { variantId: VARIANT_ID, quantity: 1 });
+
+    expect(prisma.cart.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'cart-1', storeId: null } }),
+    );
+    // The line is written against the WINNER's committed store — never ours —
+    // so cart.storeId and line.storeId cannot diverge. This is sequential
+    // coverage of the lost-claim branch; the interleaving below sequences two
+    // real calls through the same window.
+    expect(prisma.cartItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ storeId: WINNER_STORE_ID }) }),
+    );
+  });
+
+  it('interleaving: a line written after a concurrent first-scope uses the committed store', async () => {
+    // HONEST SCOPE: the unit suite has no database, so this is NOT a real
+    // multi-connection concurrency test. It is an ORDERING-CONTROLLED
+    // interleaving of two REAL `addItem` calls through stateful mocks: request
+    // B runs to completion in the middle of request A's flow — after A's header
+    // read (which sees storeId: null) and before A's scope claim — the exact
+    // window the fast path relies on. True DB-level concurrency (row locks,
+    // two connections, blocking on a locked row) is only exercised by the
+    // RUN_DB_E2E=1 suites; what this pins is the ORDERING CONTRACT of that
+    // window, not the database enforcing it.
+    //
+    // WHAT IT MODELS: both requests target the SAME user's one active cart
+    // (user-1). The cart mocks honour the service's real query shapes — the
+    // header/final reads must carry `where: { userId, status: 'ACTIVE' }` (any
+    // other user gets `null`, i.e. a different, empty cart), and the lost-claim
+    // re-read must be the id-scoped `{ select: { storeId: true } }` query. B
+    // runs inside A's window: it resolves Store B, wins the null-guarded claim
+    // on the still-unscoped cart and writes its line to Store B. A then
+    // resumes, resolves Store A, loses the claim (the cart is already scoped),
+    // re-reads the committed store and writes its line to Store B as well.
+    //
+    // DELIBERATELY CHANGING STORE SELECTION: production resolves the FIRST
+    // ACTIVE STORE (`orderBy createdAt asc`), so two back-to-back resolutions
+    // return the SAME id unless the active-store set changed in between (a
+    // store deactivated, another activated). The mock therefore returns a
+    // DIFFERENT selection result for A's call than for B's — an unusual,
+    // changing result that is required for the test to mean anything: with
+    // identical resolutions, "the loser adopts the committed store" would be
+    // indistinguishable from "the loser writes its own resolution". The two
+    // requests add DIFFERENT variants so both genuinely create lines without
+    // colliding on the real `(cartId, variantId, storeId)` unique key.
+    const STORE_A_ID = '00000000-0000-4000-8000-00000000000a';
+    const STORE_B_ID = '00000000-0000-4000-8000-00000000000b';
+    const VARIANT_B_ID = '00000000-0000-4000-8000-000000000003';
+
+    let dbCartStoreId: string | null = null; // the committed cart.storeId
+    let current: 'A' | 'B' = 'A'; // which request is executing right now
+    let bStarted = false;
+    const lines: Array<{
+      id: string;
+      cartId: string;
+      variantId: string;
+      storeId: string;
+      quantity: number;
+      unitPriceInPaise: number;
+    }> = [];
+    const events: string[] = [];
+    const claimResults: number[] = [];
+    const claimTargets: string[] = [];
+    const createdStores: string[] = [];
+
+    prisma.cart.findFirst.mockImplementation(
+      async (args: {
+        where: { userId?: string; status?: string; id?: string };
+        select?: Record<string, unknown>;
+        include?: unknown;
+      }) => {
+        if (args.where.id !== undefined) {
+          // Lost-claim re-read: id-scoped, storeId only.
+          expect(args).toEqual({ where: { id: 'cart-1' }, select: { storeId: true } });
+          events.push(`reread:${current}:${dbCartStoreId}`);
+          return { storeId: dbCartStoreId };
+        }
+        // Header and final reads are user-scoped exactly as the service issues them.
+        expect(args.where).toEqual({ userId: 'user-1', status: 'ACTIVE' });
+        if (args.select !== undefined) {
+          // Header read: the committed store as stored RIGHT NOW.
+          events.push(`header:${current}:store=${dbCartStoreId ?? 'null'}`);
+          return { id: 'cart-1', storeId: dbCartStoreId, status: 'ACTIVE', couponId: null };
+        }
+        // Final authoritative read (getCurrentCart): whatever is committed.
+        return {
+          ...cart(),
+          storeId: dbCartStoreId,
+          items: lines.map((line) => ({
+            ...line,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            variant: variant(line.variantId, '500 g', line.unitPriceInPaise, true),
+          })),
+          coupon: null,
+        };
+      },
+    );
+    prisma.cart.updateMany.mockImplementation(
+      async ({
+        where,
+        data,
+      }: {
+        where: { id: string; storeId: string | null };
+        data: { storeId: string };
+      }) => {
+        // The conditional claim, exactly as issued: `WHERE store_id IS NULL`.
+        expect(where).toEqual({ id: 'cart-1', storeId: null });
+        claimTargets.push(data.storeId);
+        const won = dbCartStoreId === null;
+        if (won) {
+          dbCartStoreId = data.storeId;
+        }
+        claimResults.push(won ? 1 : 0);
+        events.push(`claim:${current}:${won ? 1 : 0}`);
+        return { count: won ? 1 : 0 };
+      },
+    );
+    prisma.store.findFirst.mockImplementation(async () => {
+      if (!bStarted) {
+        bStarted = true;
+        // ---- Request B runs ENTIRELY inside A's window ----
+        // A has already read the header (storeId: null) and is paused here in
+        // its store resolution, BEFORE its claim; B resolves Store B, claims
+        // the null-scoped cart and writes its line to Store B.
+        current = 'B';
+        await service.addItem('user-1', { variantId: VARIANT_B_ID, quantity: 1 });
+        current = 'A';
+        // A's own (differing) resolution lands only after B has committed.
+        events.push(`resolve:A:${STORE_A_ID}`);
+        return { id: STORE_A_ID };
+      }
+      events.push(`resolve:B:${STORE_B_ID}`);
+      return { id: STORE_B_ID };
+    });
+    prisma.productVariant.findFirst.mockImplementation(
+      async ({ where }: { where: { id: string } }) => variant(where.id, '500 g', 2400, true),
+    );
+    prisma.cartItem.findFirst.mockImplementation(
+      async ({ where }: { where: { cartId: string; variantId: string; storeId: string } }) =>
+        // Same predicate as the service's cap lookup (cartId, variantId, storeId).
+        lines.find(
+          (line) =>
+            line.cartId === where.cartId &&
+            line.variantId === where.variantId &&
+            line.storeId === where.storeId,
+        ) ?? null,
+    );
+    prisma.cartItem.count.mockImplementation(
+      async ({ where }: { where: { cartId: string } }) =>
+        lines.filter((line) => line.cartId === where.cartId).length,
+    );
+    prisma.cartItem.create.mockImplementation(
+      async ({
+        data,
+      }: {
+        data: {
+          cartId: string;
+          variantId: string;
+          storeId: string;
+          quantity: number;
+          unitPriceInPaise: number;
+        };
+      }) => {
+        const line = { id: `line-${lines.length + 1}`, ...data };
+        lines.push(line);
+        createdStores.push(data.storeId);
+        events.push(`line:${current}:${data.storeId}:${data.variantId}`);
+        return line;
+      },
+    );
+
+    const resultA = await service.addItem('user-1', { variantId: VARIANT_ID, quantity: 1 });
+
+    // Claim results [1, 0]: B won the null-guarded claim, A lost it — and A
+    // attempted its OWN resolution (Store A), so the loss is not a no-op.
+    expect(claimResults).toEqual([1, 0]);
+    expect(claimTargets).toEqual([STORE_B_ID, STORE_A_ID]);
+    // The cart ends scoped to Store B: B's committed write is never overwritten.
+    expect(dbCartStoreId).toBe(STORE_B_ID);
+    // BOTH lines are on Store B — A's line follows the COMMITTED store, not
+    // its own (differing) resolution, so cart.storeId and line.storeId cannot
+    // diverge even when the two requests resolve different stores.
+    expect(createdStores).toEqual([STORE_B_ID, STORE_B_ID]);
+    // The exact ordering that produced those results (mock-level sequencing,
+    // not database-enforced concurrency).
+    expect(events).toEqual([
+      'header:A:store=null',
+      'header:B:store=null',
+      `resolve:B:${STORE_B_ID}`,
+      'claim:B:1',
+      `line:B:${STORE_B_ID}:${VARIANT_B_ID}`,
+      `resolve:A:${STORE_A_ID}`,
+      'claim:A:0',
+      `reread:A:${STORE_B_ID}`,
+      `line:A:${STORE_B_ID}:${VARIANT_ID}`,
+    ]);
+    // A's authoritative response read sees both committed lines.
+    expect(resultA.items).toHaveLength(2);
+    expect(resultA.items.map((item) => item.variantId)).toEqual([VARIANT_B_ID, VARIANT_ID]);
+  });
+
+  it('updateItem proves ownership with a single filtered read on the happy path', async () => {
+    prisma.cartItem.findFirst.mockResolvedValue({ id: 'item-1' });
+    prisma.cartItem.update.mockResolvedValue({} as any);
+    prisma.cart.findFirst.mockResolvedValue({ ...cart(), items: [], coupon: null });
+
+    const result = await service.updateItem('user-1', 'item-1', { quantity: 4 });
+
+    // One statement for ownership + cart-active proof, one for the write.
+    expect(prisma.cartItem.findFirst).toHaveBeenCalledTimes(1);
+    const args = prisma.cartItem.findFirst.mock.calls[0]![0] as {
+      where: unknown;
+      select?: unknown;
+    };
+    expect(args.select).toEqual({ id: true });
+    expect(args.where).toEqual({ id: 'item-1', cart: { userId: 'user-1', status: 'ACTIVE' } });
+    expect(prisma.cartItem.update).toHaveBeenCalledWith({
+      where: { id: 'item-1' },
+      data: { quantity: 4 },
+    });
+    expect(result.items).toHaveLength(0);
+  });
+
+  it('updateItem enforces the per-line cap before writing', async () => {
+    prisma.cartItem.findFirst.mockResolvedValue({ id: 'item-1' });
+
+    await expect(
+      service.updateItem('user-1', 'item-1', { quantity: 11 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.cartItem.update).not.toHaveBeenCalled();
+    expect(prisma.cart.findFirst).not.toHaveBeenCalled(); // no final read after a rejection
+  });
+
+  it('updateItem keeps 404 / 400 / 409 distinctions when the fast path misses', async () => {
+    prisma.cartItem.findFirst.mockResolvedValueOnce(null).mockResolvedValue(null);
+    await expect(service.updateItem('user-1', 'missing', { quantity: 2 })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    prisma.cartItem.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ id: 'item-1', cart: { userId: 'someone-else', status: 'ACTIVE' } } as any);
+    await expect(service.updateItem('user-1', 'item-1', { quantity: 2 })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+
+    prisma.cartItem.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ id: 'item-1', cart: { userId: 'user-1', status: 'CONVERTED' } } as any);
+    await expect(service.updateItem('user-1', 'item-1', { quantity: 2 })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    expect(prisma.cartItem.update).not.toHaveBeenCalled();
+  });
+
+  it('removes an applied coupon', async () => {
+    prisma.cart.findFirst
+      .mockResolvedValueOnce({ ...cart(), couponId: 'coupon-1' })
+      .mockResolvedValue({ ...cart(), coupon: null });
+    prisma.cart.update.mockResolvedValue({} as any);
+
+    const result = await service.removeCoupon('user-1');
+
+    expect(result.coupon).toBeNull();
+    expect(prisma.cart.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { couponId: null } }),
+    );
+  });
 });
 
 type PrismaMock = ReturnType<typeof createPrismaMock>;
@@ -848,11 +1271,16 @@ function createPrismaMock() {
       findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       delete: vi.fn(),
       deleteMany: vi.fn(),
     },
+    store: {
+      findFirst: vi.fn(),
+    },
     cartItem: {
       findFirst: vi.fn(),
+      count: vi.fn(),
       update: vi.fn(),
       create: vi.fn(),
       delete: vi.fn(),

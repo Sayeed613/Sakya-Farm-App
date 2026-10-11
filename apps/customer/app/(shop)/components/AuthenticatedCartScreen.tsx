@@ -5,6 +5,7 @@ import { Pressable, ScrollView, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cartApi } from '../../../src/api/cart';
+import { cartQueryOptions } from '../../../src/api/cart-query';
 import { ErrorState } from '../../../src/components/ErrorState';
 import { LoadingState } from '../../../src/components/LoadingState';
 import { formatMoney } from '../../../src/lib/format';
@@ -42,14 +43,12 @@ export default function AuthenticatedCartScreen() {
   const insets = useSafeAreaInsets();
   const session = useAuthStore((state) => state.session);
   const queryClient = useQueryClient();
-  const cart = useQuery({
-    queryKey: ['cart'],
-    queryFn: cartApi.getCart,
-    // cart.tsx only mounts this screen when signed in; the guard is kept so a
-    // session drop mid-flight can never fetch the server cart unauthenticated
-    // (that just produced 401s and a retry on every guest visit).
-    enabled: session !== null,
-  });
+  const cart = useQuery(
+    // The ONE shared cart query (same key, options and stale window every other
+    // cart consumer uses) so observers agree on staleness and a mount here
+    // cannot trigger a refetch the other screens would not have asked for.
+    cartQueryOptions(session !== null),
+  );
 
   const update = useMutation({
     mutationFn: ({ id, quantity }: { id: string; quantity: number }) =>

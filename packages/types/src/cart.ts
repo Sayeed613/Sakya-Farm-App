@@ -77,14 +77,14 @@ export interface AppliedCouponResponse {
 export interface AddCartItemRequest {
   /** Variant to add. The server reads the price from the database, never from here. */
   variantId: string;
-  /**
-   * Optional fulfillment store. When omitted, the server resolves it: the
-   * cart's already-scoped store, else the first active store. Clients cannot
-   * choose a store — there is no public store endpoint to resolve one from.
-   */
-  storeId?: string;
   /** Quantity to stock in the cart. */
   quantity: number;
+  // No storeId: clients cannot choose the fulfilment store — there is no
+  // public store endpoint to resolve one from. A body that sends one is
+  // rejected with 400 by `addCartItemSchema`; the server resolves the store
+  // (the cart's committed store, else the first active store), the same rule
+  // merge-guest-cart applies. Keeping the choice server-side is what lets the
+  // cart's store be write-once, so every line's storeId matches cart.storeId.
 }
 
 export interface UpdateCartItemRequest {

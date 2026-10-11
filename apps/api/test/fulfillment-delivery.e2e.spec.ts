@@ -258,9 +258,28 @@ function api(ctx: TestContext) {
 async function placeOrder(ctx: TestContext, idempotencyKey: string) {
   const http = api(ctx);
 
+  // The API REJECTS a client-supplied storeId (the fulfilment store is
+  // server-owned), and every test starts with this customer's cart cleared by
+  // afterEach — so scope the fresh cart to the fixture store FIRST. The server
+  // then resolves exactly this store for the add (the old `storeId` body did
+  // that implicitly), and checkout reserves the inventory this suite seeds.
+  const existingCart = await ctx.prisma.cart.findFirst({
+    where: { userId: ctx.customer.id, status: 'ACTIVE' },
+    select: { id: true },
+  });
+  if (existingCart === null) {
+    await ctx.prisma.cart.create({
+      data: { userId: ctx.customer.id, status: 'ACTIVE', currency: 'INR', storeId: STORE_ID },
+    });
+  } else {
+    await ctx.prisma.cart.update({
+      where: { id: existingCart.id },
+      data: { storeId: STORE_ID },
+    });
+  }
+
   const added = await http.customer.post('/cart/items', {
     variantId: VARIANT_ID,
-    storeId: STORE_ID,
     quantity: ORDERED_QUANTITY,
   });
   expect(added.status).toBe(201);
