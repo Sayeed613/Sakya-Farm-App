@@ -307,7 +307,7 @@ describe('AuthService.verifyOtpAndAuthenticate', () => {
 });
 
 /* ============================================================
-   DEMO OTP MODE — fixed 4-digit code, non-production only
+   DEMO OTP MODE — fixed 6-digit code, non-production only
 ============================================================ */
 
 describe('OtpService demo mode', () => {
@@ -346,17 +346,17 @@ describe('OtpService demo mode', () => {
     prisma.otpCode.updateMany.mockResolvedValue({ count: 0 });
   }
 
-  it('issues the fixed 4-digit demo code when demo mode is enabled', async () => {
+  it('issues the fixed 6-digit demo code when demo mode is enabled', async () => {
     const { service, prisma, sender } = await createDemoService(true);
     arrangeHappyPath(prisma);
 
     await service.send(PHONE);
 
     // The exact demo code goes out on the sender channel.
-    expect(sender.send).toHaveBeenCalledWith(PHONE, '1234');
+    expect(sender.send).toHaveBeenCalledWith(PHONE, '123456');
     // And only its hash is persisted.
     const created = prisma.otpCode.create.mock.calls[0]![0] as { data: { tokenHash: string } };
-    expect(created.data.tokenHash).toBe(hashOf('1234'));
+    expect(created.data.tokenHash).toBe(hashOf('123456'));
   });
 
   it('still verifies through the normal hash/single-use pipeline in demo mode', async () => {
@@ -364,19 +364,19 @@ describe('OtpService demo mode', () => {
     arrangeHappyPath(prisma);
     await service.send(PHONE);
 
-    // Wrong 4-digit code: generic failure, attempt recorded.
+    // Wrong 6-digit code: generic failure, attempt recorded.
     prisma.otpCode.findFirst.mockResolvedValue(
-      otpRow({ tokenHash: hashOf('1234') }),
+      otpRow({ tokenHash: hashOf('123456') }),
     );
     prisma.otpCode.update.mockResolvedValue({});
-    await expect(service.verify(PHONE, '9999')).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(service.verify(PHONE, '000000')).rejects.toBeInstanceOf(UnauthorizedException);
 
     // Correct code: consumed exactly once.
     prisma.otpCode.findFirst.mockResolvedValue(
-      otpRow({ tokenHash: hashOf('1234') }),
+      otpRow({ tokenHash: hashOf('123456') }),
     );
     prisma.otpCode.update.mockResolvedValue({});
-    await expect(service.verify(PHONE, '1234')).resolves.toBeUndefined();
+    await expect(service.verify(PHONE, '123456')).resolves.toBeUndefined();
     expect(prisma.otpCode.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'otp-1' },
@@ -393,7 +393,7 @@ describe('OtpService demo mode', () => {
 
     const code = (sender.send.mock.calls[0] as unknown as [string, string])[1];
     expect(code).toMatch(/^\d{6}$/);
-    expect(code).not.toBe('1234');
+    expect(code).not.toBe('123456');
   });
 });
 

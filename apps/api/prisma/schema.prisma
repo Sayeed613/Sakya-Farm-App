@@ -656,6 +656,7 @@ model ServiceabilityZone {
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([isActive])
+  @@index([storeId])
   @@map("serviceability_zones")
 }
 
@@ -766,6 +767,7 @@ model InventoryMovement {
   @@index([variantId, storeId, createdAt])
   @@index([referenceType, referenceId])
   @@index([storeId, createdAt])
+  @@index([performedByUserId])
   @@map("inventory_movements")
 }
 
@@ -800,6 +802,8 @@ model Cart {
   @@index([userId, status])
   @@index([anonymousId, status])
   @@index([status, expiresAt])
+  @@index([storeId])
+  @@index([couponId])
   @@map("carts")
 }
 
@@ -824,6 +828,7 @@ model CartItem {
 
   @@unique([cartId, variantId, storeId])
   @@index([variantId])
+  @@index([storeId])
   @@map("cart_items")
 }
 
@@ -880,6 +885,7 @@ model Order {
   @@index([storeId, status])
   @@index([status, createdAt])
   @@index([createdAt])
+  @@index([couponId])
   @@map("orders")
 }
 
@@ -932,6 +938,7 @@ model OrderStatusHistory {
   changedBy User? @relation("OrderStatusActor", fields: [changedByUserId], references: [id], onDelete: SetNull)
 
   @@index([orderId, createdAt])
+  @@index([changedByUserId])
   @@map("order_status_history")
 }
 
@@ -1035,6 +1042,7 @@ model DeliveryAssignment {
   @@index([orderId])
   @@index([deliveryPartnerUserId, status])
   @@index([status, assignedAt])
+  @@index([shipmentId])
   @@map("delivery_assignments")
 }
 
@@ -1096,6 +1104,7 @@ model CouponRedemption {
   /// One redemption per order, which makes retries safe.
   @@unique([orderId])
   @@index([couponId, userId])
+  @@index([userId])
   @@map("coupon_redemptions")
 }
 

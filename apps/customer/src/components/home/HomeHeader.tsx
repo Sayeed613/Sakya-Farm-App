@@ -83,7 +83,7 @@ export interface HomeHeaderProps {
  *   │ DELIVERY TO                                  │ │ collapses on scroll
  *   │ ⌖ street, city ▾                             │ ┘
  *   │ ┌──────────────────────┐ ┌────┐              │
- *   │ │ 🔍 Search "ghee"… 🎤 │ │ 🛒 │              │ ← fixed core
+ *   │ │ 🔍 Search produce… 🎤 │ │ 🛒 │              │ ← fixed core
  *   │ └──────────────────────┘ └────┘              │
  *   │   [⬚][⬚][⬚][⬚][⬚]→  (category strip)        │ ← fixed core
  *   └──────────────────────────────────────────────┘
@@ -94,7 +94,9 @@ export interface HomeHeaderProps {
  */
 export function HomeHeader({
   onLocationPress,
-  searchPlaceholder = 'Search "ghee"…',
+  // Broad, always-fitting prompt — the old 'Search "ghee"…' only advertised
+  // one product line (and truncated on narrow screens).
+  searchPlaceholder = 'Search fresh produce & more',
   onSearchPress,
   cartCount = 0,
   children,

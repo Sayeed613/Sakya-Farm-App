@@ -357,10 +357,11 @@ async function phaseOtp() {
   await showMetrics('otp');
   await showLogs('send-otp');
 
-  // 3. Type the demo code — reproduce "stuck on verification"
+  // 3. Type the demo code — reproduce "stuck on verification".
+  // Demo OTP is a fixed SIX-digit code ('123456' unless OTP_DEMO_CODE).
   await clickLabel('Verification code input');
   await sleep(300);
-  await page.keyboard.type('1234', { delay: 80 });
+  await page.keyboard.type('000000', { delay: 80 });
   await sleep(1500);
   await dump('otp-typed-1s');
   await sleep(4000);
@@ -809,17 +810,18 @@ async function phaseAuthE() {
   await sleep(2500);
   await dump('otp-screen', { max: 2500 });
 
-  // Step 16a: wrong code must be rejected with a clear error
+  // Step 16a: wrong code must be rejected with a clear error.
+  // 6 digits now: '000000' cannot match the fixed demo code '123456'.
   await clickLabel('Verification code input');
   await sleep(300);
-  await page.keyboard.type('0000', { delay: 80 });
+  await page.keyboard.type('000000', { delay: 80 });
   await sleep(3000);
   await dump('otp-wrong-code', { max: 2500 });
   await showLogs('otp-wrong');
 
   // Step 16b: correct code — measure redirect + guest-cart merge timing
   const T = Date.now();
-  await page.keyboard.type('1234', { delay: 80 });
+  await page.keyboard.type('123456', { delay: 80 });
   console.log(`  [+${((Date.now() - T) / 1000).toFixed(1)}s] typed final digit`);
   const deadline = Date.now() + 25000;
   let landed = null;
@@ -1363,7 +1365,7 @@ async function phaseAccountI() {
   await sleep(2500);
   await clickLabel('Verification code input');
   await sleep(300);
-  await page.keyboard.type('1234', { delay: 80 });
+  await page.keyboard.type('123456', { delay: 80 });
   await sleep(12000);
   console.log('  after verify url=' + page.url());
   await dump('after-relogin', { max: 2500 });

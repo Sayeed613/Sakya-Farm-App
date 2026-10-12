@@ -49,7 +49,7 @@ export class OtpService {
     // never activate in production even if OTP_DEMO_MODE is misconfigured —
     // otherwise every phone would verify with the fixed demo code.
     this.demoMode = !this.isProduction && config.get<boolean>('sms.demoMode') === true;
-    this.demoCode = config.get<string>('sms.demoCode') ?? '1234';
+    this.demoCode = config.get<string>('sms.demoCode') ?? '123456';
   }
 
   /**
@@ -74,7 +74,7 @@ export class OtpService {
       );
     }
 
-    // Demo mode: every phone verifies with the same fixed 4-digit code so a
+    // Demo mode: every phone verifies with the same fixed 6-digit code so a
     // demo build can be driven without an SMS inbox. The code still goes
     // through the identical hash/store/verify pipeline — nothing about the
     // security model changes, only what gets generated. Production always
@@ -84,7 +84,7 @@ export class OtpService {
       : String(randomInt(0, 1_000_000)).padStart(6, '0');
     const expiresAt = new Date(now.getTime() + OTP_TTL_SECONDS * 1000);
 
-    await this.prisma.$transaction([
+    const [, created] = await this.prisma.$transaction([
       // Supersede any still-active codes for this phone: one live code at a time.
       this.prisma.otpCode.updateMany({
         where: { phone, consumedAt: null, expiresAt: { gt: now } },
@@ -102,7 +102,18 @@ export class OtpService {
       }),
     ]);
 
-    await this.sender.send(phone, code);
+    try {
+      await this.sender.send(phone, code);
+    } catch (error) {
+      // The code was committed but never left the building. Remove it, or the
+      // resend cooldown it just started would refuse the caller's next attempt
+      // for a full minute on top of the failure they already saw — the retry
+      // would answer 429 instead of reaching the provider.
+      if (created?.id !== undefined) {
+        await this.prisma.otpCode.deleteMany({ where: { id: created.id } });
+      }
+      throw error;
+    }
 
     const response: OtpSendResponse = {
       phone,

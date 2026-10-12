@@ -67,7 +67,7 @@ export const otpVerifySchema = z.object({
   otp: z
     .string()
     .trim()
-    .regex(/^\d{6}$|^\d{4}$/, 'Enter the verification code'),
+    .regex(/^\d{6}$/, 'Enter the 6-digit verification code'),
 });
 
 export type OtpVerifyRequest = z.infer<typeof otpVerifySchema>;

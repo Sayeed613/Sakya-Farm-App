@@ -43,11 +43,12 @@ export interface AppConfig {
     otpTemplateId: string | null;
     from: string;
     /**
-     * Demo OTP mode: every phone verifies with the same fixed 4-digit code.
-     * For demo/staging builds only; never active in production.
+     * Demo OTP mode: every phone verifies with the same fixed 6-digit code
+     * (the same length production codes have). For demo/staging builds only;
+     * never active in production.
      */
     demoMode: boolean;
-    /** The fixed 4-digit code used when demoMode is on (default 1234). */
+    /** The fixed 6-digit code used when demoMode is on (default 123456). */
     demoCode: string;
   };
   auth: {
@@ -137,7 +138,9 @@ export default function configuration(): AppConfig {
       // Demo mode is opt-in via env and can never activate in production:
       // this guard is duplicated inside OtpService so relying on it is safe.
       demoMode: env.OTP_DEMO_MODE === 'true',
-      demoCode: env.OTP_DEMO_CODE ?? '1234',
+      // Must stay 6 digits, matching OTP_DEMO_CODE validation and the verify
+      // schema — production codes are always 6 digits too.
+      demoCode: env.OTP_DEMO_CODE ?? '123456',
     },
     auth: {
       accessSecret: env.JWT_ACCESS_SECRET,

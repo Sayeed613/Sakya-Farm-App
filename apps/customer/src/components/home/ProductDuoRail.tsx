@@ -47,7 +47,9 @@ function ProductDuoRailInner({
 
   const renderItem = ({ item }: ListRenderItemInfo<ProductListItem>) => (
     <View style={{ width: cardWidth }}>
-      <ProductCard product={item} onPress={onPressProduct} onQuickView={onQuickView} onPickVariant={onPickVariant} />
+      {/* Flat: sliding rail cards carry no drop shadow — the hairline border
+          does the separation (design review). */}
+      <ProductCard product={item} onPress={onPressProduct} onQuickView={onQuickView} onPickVariant={onPickVariant} flat />
     </View>
   );
 

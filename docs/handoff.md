@@ -116,7 +116,8 @@ always visible and is the real flow.
 
 - **OTP phone auth** — JWT sessions; MSG91 SMS provider implemented and
   optional. **Demo mode is currently on** (`OTP_DEMO_MODE=true`,
-  dev code `1234`) — must be off with real MSG91 creds for production.
+  fixed six-digit dev code `123456`, overridable via `OTP_DEMO_CODE`, which
+  must be exactly 6 digits) — must be off with real MSG91 creds for production.
 - **COD checkout** — order + stock reservation + MANUAL payment record written
   atomically; zone-restricted delivery; idempotency keys.
 - **Cart, wishlist, addresses, order history, order cancel, status history.**

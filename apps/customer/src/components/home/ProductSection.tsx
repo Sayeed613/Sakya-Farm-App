@@ -33,7 +33,9 @@ function ProductSectionInner({ title, subtitle, products, onPressProduct, onSeeA
     // Responsive width (≈2.2 cards visible): fixed 168px cards hid info on
     // small phones and looked lost on large ones.
     <View style={{ width: railCardWidth }}>
-      <ProductCard product={item} onPress={onPressProduct} onQuickView={onQuickView} onPickVariant={onPickVariant} />
+      {/* Flat: sliding rail cards carry no drop shadow — the hairline border
+          does the separation (design review). */}
+      <ProductCard product={item} onPress={onPressProduct} onQuickView={onQuickView} onPickVariant={onPickVariant} flat />
     </View>
   );
 

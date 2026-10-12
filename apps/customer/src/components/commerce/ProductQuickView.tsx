@@ -213,7 +213,10 @@ export function CategoryProductPager({
   const deckTy = useSharedValue(SCREEN_HEIGHT);
 
   const snapOffsets = useMemo(
-    () => slides.map((_, index) => SNAP_INTERVAL * index),
+    // Snap positions are content offsets INSIDE the padded container, so each
+    // offset must include PAGER_PAD — without it every card snapped PAGER_PAD
+    // short and the popped-up card sat visibly LEFT of centre.
+    () => slides.map((_, index) => PAGER_PAD + SNAP_INTERVAL * index),
     [slides],
   );
 

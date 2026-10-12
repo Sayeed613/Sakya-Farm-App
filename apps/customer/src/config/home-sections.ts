@@ -120,6 +120,16 @@ export const EXCLUDED_PRODUCT_SLUGS: ReadonlySet<string> = new Set(['checkout-te
  */
 export const FRESH_SIDEBAR_HANDLES: readonly string[] = FRESH_PRODUCE_CATEGORY_SLUGS;
 
+/**
+ * Umbrella mega-collections inside the Fresh scope. They must never render as
+ * sidebar tiles — the sidebar's "All Fresh" header already represents them —
+ * but products linked ONLY to these slugs must stay in the produce scope.
+ */
+export const FRESH_SIDEBAR_UMBRELLA_HANDLES: ReadonlySet<string> = new Set([
+  'all-fresh',
+  'sakya-fresh',
+]);
+
 /** Duplicate collection pairs: the first handle powers rails, the second is dropped. */
 export const DUPLICATE_HANDLE_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['oils', 'pure-healthy-oils'],

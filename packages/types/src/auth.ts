@@ -39,6 +39,11 @@ export interface OtpSendResponse {
   resendAfterSeconds: number;
   /** Seconds the code stays valid. */
   expiresInSeconds: number;
-  /** Development convenience only; stripped in production responses. */
+  /**
+   * Development convenience only. Present in non-production responses when
+   * the code was delivered through the dev channel (demo mode or no SMS
+   * provider); absent in production — the send path there is the real MSG91
+   * channel, which never records a dev code.
+   */
   devCode?: string;
 }

@@ -156,10 +156,10 @@ export const environmentSchema = z
      * service as well — env validation is not a security boundary).
      */
     OTP_DEMO_MODE: z.string().optional(),
-    /** The fixed 4-digit code used when OTP_DEMO_MODE is on. */
+    /** The fixed 6-digit code used when OTP_DEMO_MODE is on (default 123456). */
     OTP_DEMO_CODE: z
       .string()
-.regex(/^\d{6}$/, 'OTP_DEMO_CODE must be exactly 6 digits')
+      .regex(/^\d{6}$/, 'OTP_DEMO_CODE must be exactly 6 digits')
       .optional(),
     /**
      * MSG91 credentials for production OTP delivery. Optional as a pair: when

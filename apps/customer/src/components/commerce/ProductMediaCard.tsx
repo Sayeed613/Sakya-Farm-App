@@ -33,7 +33,6 @@ import { cardShadow } from '../../lib/shadows';
 const TILE_RADIUS = 14;
 const CARD_RADIUS = 20;
 const GRID_GAP = 8;
-const CARD_PADDING = 8;
 
 const NEUTRAL_BG = '#F3EDE3';
 const MUTED = '#8C8A80';
@@ -69,18 +68,19 @@ export function ProductMediaCardInner({
   return (
     <View
       accessibilityRole={onPress ? 'imagebutton' : 'image'}
-      accessibilityLabel={accessibilityLabel}
-      style={[
-        {
-          borderRadius: CARD_RADIUS,
-          backgroundColor: '#FFFFFF',
-          borderWidth: 1,
-          borderColor: '#ECE8E0',
-          padding: CARD_PADDING,
-          overflow: 'hidden',
-        },
-        cardShadow,
-      ]}
+      accessibilityLabel={accessibilityLabel}        style={[
+          {
+            borderRadius: CARD_RADIUS,
+            backgroundColor: '#FFFFFF',
+            borderWidth: 1,
+            borderColor: '#ECE8E0',
+            // Full-bleed: the old 8px padding left an unwanted white gutter on
+            // the image's left/right edges.
+            padding: 0,
+            overflow: 'hidden',
+          },
+          cardShadow,
+        ]}
     >
       <Pressable
         onPress={onPress}
@@ -107,7 +107,9 @@ export function ProductMediaCardInner({
             <Image
               source={{ uri: live[0] ?? '' }}
               style={{ width: '100%', aspectRatio: 1 }}
-              contentFit="contain"
+              /* Fill the well — `contain` letterboxed the photo and the pale
+                 well showed as unwanted padding around it. */
+              contentFit="cover"
               cachePolicy="disk"
               recyclingKey={live[0]}
               transition={150}

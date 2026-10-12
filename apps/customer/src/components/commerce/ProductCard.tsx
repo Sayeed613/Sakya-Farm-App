@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { Pressable, Text as RNText, View } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 
 import type { ProductDetail, ProductListItem } from '@sakya/types';
 import { productDetailKey, productDetailQueryOptions } from '../../api/product-detail-query';
@@ -83,6 +84,51 @@ export interface ProductCardProps {
   width?: number;
   /** White backing for the ADD control when the card sits on imagery. */
   elevated?: boolean;
+  /**
+   * Drop the card shadow (rails that slide horizontally read cleaner flat —
+   * the hairline border still separates the card from the canvas).
+   */
+  flat?: boolean;
+}
+
+/**
+ * Deterministic pseudo-random delay (0–320 ms) from the product id, so card
+ * titles ripple up in a natural stagger instead of in lock-step, while the
+ * SAME product always animates identically between renders.
+ */
+function titleDelayFor(seed: string): number {
+  let hash = 5381;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = ((hash << 5) + hash + seed.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash) % 320;
+}
+
+/**
+ * The product title with a subtle slide-up entrance (fade + 12px rise,
+ * MOTION vocabulary). Runs once per mount; recycled list views re-run it,
+ * which reads as a fresh entrance on scroll — intentional.
+ */
+function SlideUpTitle({ children, delay, ...textProps }: { children: string; delay: number } & React.ComponentProps<typeof RNText>) {
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = withDelay(
+      delay,
+      withTiming(1, { duration: 260, easing: Easing.out(Easing.cubic) }),
+    );
+  }, [delay, progress]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [{ translateY: (1 - progress.value) * 12 }],
+  }));
+
+  return (
+    <Animated.View style={animatedStyle}>
+      <RNText {...textProps}>{children}</RNText>
+    </Animated.View>
+  );
 }
 
 /** One badge pill: icon + label on the image's top-left. */
@@ -124,6 +170,7 @@ function ProductCardInner({
   variant = 'rail',
   width,
   elevated = false,
+  flat = false,
 }: ProductCardProps) {
   const { quantity, add, increment, decrement, resolving, mutating } = useProductAdd(product);
   const press = usePressScale();
@@ -205,7 +252,7 @@ function ProductCardInner({
       onPress={() => (opensSheet ? onQuickView(product) : onPress(product))}
       onPressIn={press.onPressIn}
       onPressOut={press.onPressOut}
-      style={[press.animatedStyle, cardStyle, cardShadow]}
+      style={[press.animatedStyle, cardStyle, flat ? undefined : cardShadow]}
       className="rounded-2xl bg-white"
     >
       {/**
@@ -220,7 +267,13 @@ function ProductCardInner({
             <ProductImage
               uri={images[0] ?? ''}
               style={{ width: '100%', height: '100%' }}
-              fit={images.length === 1 ? 'contain' : 'cover'}
+              /*
+               * Fill the square well on every card. `contain` letterboxed
+               * single-photo products (the common fresh-produce case) and the
+               * pale well below the photo read as dead space between the
+               * image and the details.
+               */
+              fit="cover"
               onError={() => setImageFailed(true)}
             />
           ) : (
@@ -257,14 +310,15 @@ function ProductCardInner({
 
         {/* Body */}
         <View className="gap-0.5 px-2.5 pb-2.5 pt-2">
-          <RNText
+          <SlideUpTitle
+            delay={titleDelayFor(product.id)}
             className="text-[13.5px] font-semibold leading-5"
             style={{ color: INK }}
             numberOfLines={2}
             ellipsizeMode="tail"
           >
             {product.title}
-          </RNText>
+          </SlideUpTitle>
 
           {/* Provenance: the real vendor/brand the catalog publishes — never a
               fabricated farm name. Hidden when the payload has no vendor. */}
@@ -303,9 +357,12 @@ function ProductCardInner({
             )}
           </View>
 
-          {/* ADD row: picker/notify control, or the stepper at bottom-right */}
+          {/* ADD row: picker/notify control, or the stepper at bottom-right.
+              Once the product IS in the cart the stepper always takes over —
+              even for multi-variant products — so the card reflects the real
+              quantity instead of a stale ADD button. */}
           <View className="mt-1.5 flex-row items-center justify-end">
-            {soldOut || needsPicker ? (
+            {soldOut || (needsPicker && quantity === 0) ? (
               addControl
             ) : (
               <QuantityStepper

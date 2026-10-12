@@ -1,13 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text as RNText, View } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { FlatList, Pressable, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { DropdownChip, ChipOptionMenu } from '../../../src/components/commerce/DropdownChip';
+import { DropdownChip } from '../../../src/components/commerce/DropdownChip';
+import {
+  hasActiveFilters,
+  ListingFilterSheet,
+  type AvailabilityFilter,
+  type ListingFilterState,
+  type SortOption,
+} from '../../../src/components/commerce/ListingFilterSheet';
 import { ProductCard } from '../../../src/components/commerce/ProductCard';
 import { ProductQuickView } from '../../../src/components/commerce/ProductQuickView';
 import { VariantPickerSheet, type VariantPickerState } from '../../../src/components/commerce/VariantPickerSheet';
+import { AddressSheet } from '../../../src/components/checkout/AddressSheet';
 import { StickyCartBar, useCartSummary } from '../../../src/components/commerce/StickyCartBar';
 import { CategoryIcon } from '../../../src/components/home/CategoryIcon';
 import { ErrorState } from '../../../src/components/ErrorState';
@@ -16,12 +24,11 @@ import { filterByCategory, useFreshCatalog } from '../../../src/hooks/use-fresh-
 import { useDeliveryLocation } from '../../../src/hooks/use-delivery-location';
 import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { useResponsive } from '../../../src/lib/responsive';
+import { useAuthStore } from '../../../src/stores/auth-store';
+import { useLastAddressStore } from '../../../src/stores/last-address-store';
 import type { ProductListItem } from '@sakya/types';
 
 const BOTTOM_NAV_CLEARANCE = 116;
-
-const SORT_OPTIONS = ['Relevance', 'Price: low to high', 'Price: high to low', 'Freshness'] as const;
-const FILTER_OPTIONS = ['In stock', 'On sale'] as const;
 
 /**
  * Sakya Fresh — the Blinkit-style category listing.
@@ -38,40 +45,42 @@ export default function SakyaFreshScreen() {
   const { itemCount } = useCartSummary();
   const fresh = useFreshCatalog();
   const location = useDeliveryLocation();
+  const session = useAuthStore((state) => state.session);
+  const lastAddress = useLastAddressStore((state) => state.address);
+  const rememberAddress = useLastAddressStore((state) => state.remember);
+  const [addressEditorOpen, setAddressEditorOpen] = useState(false);
+
+  // Delivery-to affordance: signed-in customers (and guests who already typed
+  // an address) see it; guests without one are sent to sign in, so the header
+  // never pretends a device-location guess is their delivery address.
+  function handleDeliverToPress() {
+    if (session === null && lastAddress === null) {
+      useAuthStore.getState().setPendingRedirect('/(shop)/fresh');
+      router.push('/(auth)/phone');
+      return;
+    }
+    setAddressEditorOpen(true);
+  }
+
+  const contactDefaults =
+    session && session.user
+      ? {
+          name: [session.user.firstName, session.user.lastName].filter(Boolean).join(' '),
+          phone: session.user.phone ?? '',
+        }
+      : undefined;
 
   const [handle, setHandle] = useState<string | null>(null);
-  const [sort, setSort] = useState<(typeof SORT_OPTIONS)[number]>('Relevance');
-  const [filter, setFilter] = useState<(typeof FILTER_OPTIONS)[number] | null>(null);
-  const [packFilter, setPackFilter] = useState<string | null>(null);
-  const [openMenu, setOpenMenu] = useState<'sort' | 'filter' | 'type' | null>(null);
+  const [filterState, setFilterState] = useState<ListingFilterState>({
+    sort: 'Relevance',
+    filter: null,
+    packFilter: null,
+  });
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [quickViewSlug, setQuickViewSlug] = useState<string | null>(null);
   const [variantPick, setVariantPick] = useState<VariantPickerState | null>(null);
 
-  // Dropdown geometry: the menu is rendered AT SCREEN LEVEL (outside the
-  // toolbar/scroll subtree) anchored to the MEASURED chips row — so it
-  // always opens directly below the chips, can never be covered by the
-  // grid's elevated cards, and never clips (Android elevation quirk).
-  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
-  const toolbarRef = useRef<View>(null);
-  const screenRef = useRef<View>(null);
-
-  function openMenuAt(menu: 'sort' | 'filter' | 'type') {
-    const next = openMenu === menu ? null : menu;
-    setOpenMenu(next);
-    if (next === null) {
-      setMenuAnchor(null);
-      return;
-    }
-    // Next frame: measure after the press settles, then position the menu
-    // relative to the screen root (handles the centred web shell too).
-    requestAnimationFrame(() => {
-      toolbarRef.current?.measureInWindow((tx, _txy, _tw, th) => {
-        screenRef.current?.measureInWindow((sx, sy) => {
-          setMenuAnchor({ x: tx - sx + 12, y: _txy - sy + th + 6 });
-        });
-      });
-    });
-  }
+  const { sort, filter, packFilter } = filterState;
 
   const activeCategory = fresh.categories.find((category) => category.slug === handle) ?? null;
   const title = activeCategory?.name ?? 'Sakya Fresh';
@@ -120,8 +129,13 @@ export default function SakyaFreshScreen() {
 
   const selectCategory = useCallback((slug: string | null) => {
     setHandle(slug);
-    setOpenMenu(null);
   }, []);
+
+  const filterActive = hasActiveFilters(filterState);
+  const clearFilters = useCallback(
+    () => setFilterState({ sort: 'Relevance', filter: null, packFilter: null }),
+    [],
+  );
 
   // The quick-view pager: the current grid IS the deck — swipe left/right to
   // step through exactly these products.
@@ -146,19 +160,32 @@ export default function SakyaFreshScreen() {
   }
 
   return (
-    <View ref={screenRef} className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
+    <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <View className="flex-row items-center gap-1 px-3 pb-1.5 pt-2">
         <View className="flex-1 pl-1">
           <RNText className="text-[17px] font-bold leading-5 text-ink" numberOfLines={1}>
             {title}
           </RNText>
-          {/* Informational only: Fresh is a tab, so it has no address flow of
-              its own. This used to be a Pressable with no onPress — a button
-              that did nothing when tapped. */}
-          <RNText className="text-[11.5px] font-semibold text-brand" numberOfLines={1}>
-            Delivering to: {location.label}
-          </RNText>
+          {/* Delivery address: saved address → sign-in prompt for guests →
+              device location. Tappable, same flows the Home header uses. */}
+          <Pressable
+            onPress={handleDeliverToPress}
+            accessibilityRole="button"
+            accessibilityLabel="Change delivery address"
+            hitSlop={4}
+            className="mt-0.5 flex-row items-center gap-1"
+          >
+            <Ionicons name="location" size={11} color="#0B594C" />
+            <RNText className="flex-1 text-[11.5px] font-semibold text-brand" numberOfLines={1}>
+              {lastAddress !== null
+                ? `Deliver to: ${shortAddressLabel(lastAddress)}`
+                : session === null
+                  ? 'Sign in to set delivery address'
+                  : `Delivering to: ${location.status === 'locating' ? 'Locating…' : location.label}`}
+            </RNText>
+            <Ionicons name="chevron-down" size={11} color="#0B594C" />
+          </Pressable>
         </View>
         <Pressable
           onPress={() => router.push('/search')}
@@ -218,10 +245,8 @@ export default function SakyaFreshScreen() {
             </View>
 
             {/* Main column: editorial heading, toolbar chips, grid. The
-                option menus render AT SCREEN LEVEL (see the screen-root
-                overlay below), anchored to this MEASURED chips row — so a
-                menu always opens directly below its own chips and never
-                covers the heading, the chips, or gets covered by cards. */}
+                sort/filter UI is a bottom sheet (ListingFilterSheet) rendered
+                at screen level — no anchored menus to clip or cover. */}
             <View className="flex-1">
               {/* Editorial band: category metadata when the backend has it,
                   minimal brand copy otherwise. No invented claims. */}
@@ -234,24 +259,29 @@ export default function SakyaFreshScreen() {
                 </RNText>
               </View>
 
-              {/* Toolbar row — measured so the screen-level dropdown can
-                  anchor exactly under the chips. */}
-              <View ref={toolbarRef} className="pb-1 pt-1.5">
+              {/* Toolbar row — one Sort & filter entry opens the redesigned
+                  bottom sheet; a Clear chip appears only when something is
+                  active. */}
+              <View className="pb-1 pt-1.5">
                 <View className="flex-row items-center gap-1.5 px-3">
-                  <DropdownChip label="Filters" onPress={() => openMenuAt('filter')} />
                   <DropdownChip
-                    prefix="Sort"
-                    label={sort}
-                    active={sort !== 'Relevance'}
-                    onPress={() => openMenuAt('sort')}
+                    label="Sort & filter"
+                    active={filterActive}
+                    onPress={() => setFilterSheetOpen(true)}
                   />
-                  {packOptions.length > 0 ? (
-                    <DropdownChip
-                      prefix="Type"
-                      label={packFilter ?? 'Any'}
-                      active={packFilter != null}
-                      onPress={() => openMenuAt('type')}
-                    />
+                  {filterActive ? (
+                    <Pressable
+                      onPress={clearFilters}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear all filters"
+                      hitSlop={6}
+                      className="flex-row items-center gap-1 rounded-full border border-line bg-white px-3 py-1.5 active:opacity-70"
+                    >
+                      <Ionicons name="close-circle" size={12} color="#B4612F" />
+                      <RNText className="text-[12px] font-semibold" style={{ color: '#B4612F' }}>
+                        Clear
+                      </RNText>
+                    </Pressable>
                   ) : null}
                   <View className="flex-1" />
                   <RNText className="text-[11.5px] font-semibold text-ink-soft">
@@ -307,67 +337,40 @@ export default function SakyaFreshScreen() {
             </View>
           </View>
 
-          {/* Screen-level dropdown: scrim swallows outside taps (closes the
-              menu), the measured anchor positions the card just below the
-              chips row. Absolutely positioned at the screen root, so nothing
-              — grid cards, elevated surfaces — can paint over it or under
-              the toolbar. */}
-          {openMenu !== null && menuAnchor !== null ? (
-            <View className="absolute inset-0" style={{ zIndex: 90, elevation: 24 }} pointerEvents="box-none">
-              {/* Scrim: full-area, closes on tap. */}
-              <Pressable
-                accessibilityLabel="Close options"
-                onPress={() => setOpenMenu(null)}
-                className="absolute inset-0"
-                style={{ backgroundColor: 'rgba(23,26,24,0.18)' }}
-              />
-              {/* Menu card anchored under the chips. */}
-              <View
-                style={[
-                  styles.menuOverlay,
-                  { position: 'absolute', left: Math.max(12, menuAnchor.x), top: menuAnchor.y, right: 12 },
-                ]}
-              >
-                {openMenu === 'type' ? (
-                  <ChipOptionMenu
-                    options={[...packOptions]}
-                    onSelect={(option) => {
-                      setPackFilter((current) => (current === option ? null : option));
-                      setOpenMenu(null);
-                    }}
-                    onDismiss={() => setOpenMenu(null)}
-                  />
-                ) : null}
-                {openMenu === 'filter' ? (
-                  <ChipOptionMenu
-                    options={[...FILTER_OPTIONS]}
-                    onSelect={(option) => {
-                      setFilter((current) =>
-                        current === option ? null : (option as (typeof FILTER_OPTIONS)[number]),
-                      );
-                      setOpenMenu(null);
-                    }}
-                    onDismiss={() => setOpenMenu(null)}
-                  />
-                ) : null}
-                {openMenu === 'sort' ? (
-                  <ChipOptionMenu
-                    options={[...SORT_OPTIONS]}
-                    onSelect={(option) => {
-                      setSort(option as (typeof SORT_OPTIONS)[number]);
-                      setOpenMenu(null);
-                    }}
-                    onDismiss={() => setOpenMenu(null)}
-                  />
-                ) : null}
-              </View>
-            </View>
-          ) : null}
-
           {/* Sticky cart pill above the bottom nav. */}
           <StickyCartBar itemCount={itemCount} onPress={openCart} />
         </>
       )}
+
+      {/* Redesigned sort/filter bottom sheet (sort, availability, pack size,
+          Clear all). Replaces the old screen-level dropdown menus. */}
+      <ListingFilterSheet
+        visible={filterSheetOpen}
+        state={filterState}
+        packOptions={packOptions}
+        resultCount={gridProducts.length}
+        onSortChange={(next: SortOption) => setFilterState((current) => ({ ...current, sort: next }))}
+        onFilterChange={(next: AvailabilityFilter | null) =>
+          setFilterState((current) => ({ ...current, filter: next }))
+        }
+        onPackChange={(next: string | null) => setFilterState((current) => ({ ...current, packFilter: next }))}
+        onClearAll={clearFilters}
+        onClose={() => setFilterSheetOpen(false)}
+      />
+
+      {/* Address editor — the same sheet the Home header uses; guests who
+          already have a typed address can refine it here too. */}
+      <AddressSheet
+        visible={addressEditorOpen}
+        initial={lastAddress}
+        contactDefaults={contactDefaults}
+        canSaveToBook={session !== null}
+        onClose={() => setAddressEditorOpen(false)}
+        onSave={(address) => {
+          rememberAddress(address);
+          setAddressEditorOpen(false);
+        }}
+      />
 
       {/* Quick-view sheet (native modal, not a route push). */}
       <ProductQuickView
@@ -389,14 +392,24 @@ export default function SakyaFreshScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  menuOverlay: {
-    // Menu card floating over the grid. zIndex + elevation must exceed the
-    // product cards' elevation 6 (cardShadow) on every platform.
-    borderRadius: 16,
-    overflow: 'hidden',
-    zIndex: 50,
-    boxShadow: '0 8px 18px rgba(7, 63, 54, 0.14)',
-    backgroundColor: '#FFFFFF',
-  },
-});
+/**
+ * "Home · #233 1st Cross" — tag plus the first few words of the street, for
+ * the Deliver-to line. Mirrors the Home header's helper so both surfaces
+ * label the same address identically.
+ */
+function shortAddressLabel(address: {
+  line1: string;
+  line2?: string;
+  landmark?: string;
+}): string {
+  const street = [address.line1, address.line2 ?? '', address.landmark ?? '']
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  const short = (street[0] ?? '').split(/\s+/).slice(0, 4).join(' ');
+  const tag = /office|work/i.test(short)
+    ? 'Office'
+    : /flat|apt|apartment/i.test(short)
+      ? 'Flat'
+      : 'Home';
+  return short !== '' ? `${tag} · ${short}` : tag;
+}

@@ -25,12 +25,10 @@ const LINE = '#E7E4DA';
 const DANGER = '#B42318';
 
 /**
- * Production issues 6-digit codes; the non-production demo issues 4. The
- * screen sizes to whichever the API actually sent (the demo reports its code
- * via `devCode`, so its length is authoritative there). Hardcoding 4 — as this
- * screen used to — meant a production build could never accept a real code.
+ * Every code — production *and* the non-production demo — is exactly six
+ * digits, so one constant governs the boxes, the paste trim and auto-verify.
  */
-const PRODUCTION_CODE_LENGTH = 6;
+const CODE_LENGTH = 6;
 /** Matches the API's resend cooldown. */
 const RESEND_SECONDS = 60;
 
@@ -48,9 +46,8 @@ function formatPhoneForDisplay(phone: string): string {
  * account during the same call, so the screen is identical for both — no
  * sign-up, no password, no branching until the optional profile step.
  *
- * 4-digit code per the demo OTP contract (the server's schema accepts the
- * demo length; production issues 6-digit codes and the server validates the
- * active length — this screen matches the demo build it ships in).
+ * Production and the non-production demo both issue and validate 6-digit
+ * codes, so this screen is identical for demo and production builds.
  *
  * The `devCode` chip appears only when the API reported the code in its
  * response — which happens exclusively in non-production demo mode. On a
@@ -66,8 +63,10 @@ export default function VerifyOtpScreen() {
   // (deep link, back-nav) sends the user to the phone screen rather than
   // verifying an unknown number.
   const phone = typeof params.phone === 'string' && params.phone.startsWith('+') ? params.phone : null;
+  // The demo hint, when the send response carried one. Must be a 6-digit
+  // numeric string to render — matching what the API can actually issue.
   const [demoCode, setDemoCode] = useState(
-    typeof params.devCode === 'string' && /^\d+$/.test(params.devCode) ? params.devCode : null,
+    typeof params.devCode === 'string' && /^\d{6}$/.test(params.devCode) ? params.devCode : null,
   );
 
   const [code, setCode] = useState('');
@@ -77,9 +76,8 @@ export default function VerifyOtpScreen() {
 
   const inputRef = useRef<TextInput>(null);
 
-  // Demo responses carry the code itself, so its length is the truth there;
-  // otherwise this is a production build expecting the 6-digit code.
-  const codeLength = demoCode !== null ? demoCode.length : PRODUCTION_CODE_LENGTH;
+  // The demo hint is display-only: the code is always six digits.
+  const codeLength = CODE_LENGTH;
 
   // Six boxes must fit a 320dp phone: derive the box size from the real
   // viewport instead of assuming 44px always fits.
@@ -180,7 +178,9 @@ export default function VerifyOtpScreen() {
     setError(null);
     try {
       const result = await authApi.sendOtp(phone);
-      setDemoCode(result.devCode ?? null);
+      setDemoCode(
+        typeof result.devCode === 'string' && /^\d{6}$/.test(result.devCode) ? result.devCode : null,
+      );
       setResendIn(RESEND_SECONDS);
       setCode('');
       inputRef.current?.focus();

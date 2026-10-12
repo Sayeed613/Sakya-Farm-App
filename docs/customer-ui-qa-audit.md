@@ -61,7 +61,7 @@ Customer checks passed: typecheck, lint, and 63 tests. Selected screens had no h
 | Orders `/orders`                       | Signed-out gate and phone-verification action rendered.                                                          |
 | Account `/profile`                     | Signed-out gate and phone-verification action rendered.                                                          |
 | Phone login `/phone`                   | Form rendered; no viewport overflow.                                                                             |
-| OTP `/verify-otp`                      | Demo 4-digit state rendered; production 6-digit flow not exercised.                                              |
+| OTP `/verify-otp`                      | 6-digit code entry rendered (demo and production share the same six-digit contract); full verify-redirect flow not exercised in this browser session. |
 | Profile completion `/complete-profile` | Name/email fields and skip action rendered.                                                                      |
 | Search `/search`                       | Empty-query state and search input rendered. Results not verified.                                               |
 | Cart `/cart`                           | Guest empty-cart state and Start shopping action rendered. Non-empty cart not exercised.                         |

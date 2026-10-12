@@ -21,7 +21,8 @@ process.env.JWT_ACCESS_SECRET ??= 'test-access-secret-value-0123456789abcdef';
 process.env.JWT_REFRESH_SECRET ??= 'test-refresh-secret-value-0123456789abcdef';
 // Unconditional: a developer machine's `.env` may already have been loaded
 // with a 4-digit demo code, which env validation rejects ("must be exactly
-// 6 digits") and which `??=` would therefore preserve.
+// 6 digits") and which `??=` would therefore preserve. The hermetic default
+// is the same fixed six-digit code the API checks against.
 process.env.OTP_DEMO_CODE = '123456';
 
 export {};

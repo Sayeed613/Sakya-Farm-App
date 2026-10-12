@@ -2,7 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
 import { catalogApi } from '../api/catalog';
-import { EXCLUDED_PRODUCT_SLUGS, FRESH_SIDEBAR_HANDLES } from '../config/home-sections';
+import {
+  EXCLUDED_PRODUCT_SLUGS,
+  FRESH_SIDEBAR_HANDLES,
+  FRESH_SIDEBAR_UMBRELLA_HANDLES,
+} from '../config/home-sections';
 import type { CategorySummary, ProductListItem } from '@sakya/types';
 
 /**
@@ -56,8 +60,13 @@ export function useFreshCatalog() {
     }
 
     const categoryBySlug = new Map((categories.data ?? []).map((category) => [category.slug, category]));
+    // The sidebar ALREADY has an "All Fresh" header entry (pseudo-slug
+    // `leaf`), so the umbrella collections (all-fresh, sakya-fresh) must not
+    // render AGAIN as their own tiles — that was the "All Fresh appears
+    // twice" bug. They stay in the produce SCOPE below.
     const categoryList: CategorySummary[] = FRESH_SIDEBAR_HANDLES.flatMap(
       (handle) => {
+        if (FRESH_SIDEBAR_UMBRELLA_HANDLES.has(handle)) return [];
         const category = categoryBySlug.get(handle);
         if (!category) return [];
         if ((purchasableByCategory.get(handle) ?? 0) === 0) return [];

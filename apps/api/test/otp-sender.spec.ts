@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,8 +8,10 @@ import { OtpSenderService } from '../src/modules/auth/services/otp-sender.servic
 /**
  * Delivery routing rules:
  * - MSG91 configured -> always real send (any environment)
- * - not configured + production -> fail closed
+ * - not configured + production -> fail closed with a retryable 503
  * - not configured + development -> log the code, set lastDevCode
+ * Provider failures never surface as a bare 500: the caller gets 503 and the
+ * cause is logged.
  */
 function createSender(options: {
   isProduction: boolean;
@@ -41,19 +44,29 @@ describe('OtpSenderService delivery routing', () => {
     expect(sender.lastDevCode).toBeNull();
   });
 
-  it('propagates MSG91 rejections instead of pretending success', async () => {
+  it('answers 503 for an MSG91 rejection instead of pretending success', async () => {
     const msg91Send = vi.fn(async () => {
       throw new Error('MSG91 rejected the OTP send: template not found');
     });
     const sender = createSender({ isProduction: false, msg91Configured: true, msg91Send });
 
-    await expect(sender.send('+919876543210', '123456')).rejects.toThrow('template not found');
+    const error = await sender.send('+919876543210', '123456').catch((e: unknown) => e);
+
+    // Rejection is still propagated — as a retryable status, with the
+    // provider's detail kept out of the response body.
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+    expect((error as ServiceUnavailableException).message).not.toContain('MSG91');
+    expect(sender.lastDevCode).toBeNull();
   });
 
-  it('fails closed in production without a provider', async () => {
+  it('fails closed in production without a provider, with a retryable 503', async () => {
     const sender = createSender({ isProduction: true, msg91Configured: false });
 
-    await expect(sender.send('+919876543210', '123456')).rejects.toThrow('SMS provider is not configured');
+    const error = await sender.send('+919876543210', '123456').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
     expect(sender.lastDevCode).toBeNull();
   });
 

@@ -27,7 +27,7 @@ sequenceDiagram
 
     C->>API: POST /auth/otp/send {phone}
     API->>MSG: send 6-digit code (5 min TTL)
-    MSG-->>C: SMS code (dev builds echo devCode 1234)
+    MSG-->>C: SMS code (dev builds echo devCode, e.g. 123456)
     C->>API: POST /auth/otp/verify {phone, otp}
     API-->>C: {session: access + refresh JWT}
     Note over C: Signed-in state gates cart, addresses, orders.<br/>Each phone number = one account (saved addresses are per-account).
