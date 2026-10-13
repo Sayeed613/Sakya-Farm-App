@@ -148,7 +148,21 @@ export const environmentSchema = z
     RAZORPAY_KEY_SECRET: z.string().trim().min(1).optional(),
     RAZORPAY_WEBHOOK_SECRET: z.string().trim().min(1).optional(),
 
+    // --- Temporary exact test OTP (development/staging only) ---------------
+    // One explicitly-configured phone may receive one fixed code, only while
+    // the deadline is active and only OUTSIDE production (hard-guarded in the
+    // services). Every other phone is unaffected. Never set these on Render.
+    FEATURE_FLAG_TEST_OTP: z.string().trim().toLowerCase().optional(),
+    TEST_OTP_TEST_PHONE: z.string().trim().optional(),
+    TEST_OTP_CODE: z
+      .string()
+      .trim()
+      .regex(/^\d{6}$/, 'TEST_OTP_CODE must be exactly 6 digits')
+      .optional(),
+    TEST_OTP_ENABLED_DEADLINE: z.string().trim().datetime().optional(),
+
     // --- SMS (OTP delivery) -------------------------------------------------
+
     /**
      * Demo OTP mode for staging/demo builds: every phone gets the same fixed
      * code instead of a random one, so a demo can be driven without an SMS

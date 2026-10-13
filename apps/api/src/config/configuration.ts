@@ -34,6 +34,17 @@ export interface AppConfig {
     razorpayKeySecret: string | null;
     razorpayWebhookSecret: string | null;
   };
+  /** Temporary exact-test-number OTP path; development/staging only. */
+  testOtp: {
+    enabled: boolean;
+    testPhone: string | null;
+    code: string | null;
+    enabledDeadline: string | null;
+    rawFlag: string | null;
+    rawPhone: string | null;
+    rawCode: string | null;
+    rawDeadline: string | null;
+  };
   sms: {
     /**
      * MSG91 credentials; authKey + template together mean SMS delivery is
@@ -130,6 +141,16 @@ export default function configuration(): AppConfig {
       razorpayKeyId: env.RAZORPAY_KEY_ID ?? null,
       razorpayKeySecret: env.RAZORPAY_KEY_SECRET ?? null,
       razorpayWebhookSecret: env.RAZORPAY_WEBHOOK_SECRET ?? null,
+    },
+    testOtp: {
+      enabled: env.FEATURE_FLAG_TEST_OTP === 'true',
+      testPhone: env.TEST_OTP_TEST_PHONE ?? null,
+      code: env.TEST_OTP_CODE ?? null,
+      enabledDeadline: env.TEST_OTP_ENABLED_DEADLINE ?? null,
+      rawFlag: env.FEATURE_FLAG_TEST_OTP ?? null,
+      rawPhone: env.TEST_OTP_TEST_PHONE ?? null,
+      rawCode: env.TEST_OTP_CODE ?? null,
+      rawDeadline: env.TEST_OTP_ENABLED_DEADLINE ?? null,
     },
     sms: {
       authKey: env.MSG91_AUTH_KEY ?? null,

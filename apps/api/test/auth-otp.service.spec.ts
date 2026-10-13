@@ -119,6 +119,7 @@ describe('OtpService', () => {
     const result = await service.send(PHONE);
 
     expect(result.phone).toBe(PHONE);
+    expect(result.accepted).toBe(true);
     expect(result.resendAfterSeconds).toBe(60);
     expect(result.expiresInSeconds).toBe(300);
     // The stored hash can never be the plaintext code.
@@ -146,7 +147,8 @@ describe('OtpService', () => {
     prisma.otpCode.findFirst.mockResolvedValue(null);
     prisma.otpCode.create.mockImplementation(async ({ data }: { data: { tokenHash: string } }) => data);
     prisma.otpCode.updateMany.mockResolvedValue({ count: 0 });
-    await service.send(PHONE);
+    const result = await service.send(PHONE);
+    expect(result.accepted).toBe(true);
     const code = sender.send.mock.calls[0]![1] as string;
 
     prisma.otpCode.count.mockResolvedValue(0);

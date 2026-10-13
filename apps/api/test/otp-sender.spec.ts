@@ -17,12 +17,13 @@ function createSender(options: {
   isProduction: boolean;
   msg91Configured: boolean;
   msg91Send?: ReturnType<typeof vi.fn>;
+  demoMode?: boolean;
 }): OtpSenderService {
   const config = {
     getOrThrow: vi.fn((_key: string) => options.isProduction),
     // The sender reads sms.demoMode via config.get; the routing tests exercise
-    // real delivery, so demo mode stays off in this fake.
-    get: vi.fn((_key: string) => false),
+    // real delivery, so demo mode stays off unless a test opts in.
+    get: vi.fn((key: string) => key === 'sms.demoMode' && options.demoMode === true),
   } as unknown as ConfigService;
   const msg91 = {
     configured: options.msg91Configured,
@@ -70,12 +71,30 @@ describe('OtpSenderService delivery routing', () => {
     expect(sender.lastDevCode).toBeNull();
   });
 
+  it('short-circuits demo mode before the provider even when MSG91 is configured', async () => {
+    const msg91Send = vi.fn(async () => true);
+    const sender = createSender({
+      isProduction: false,
+      msg91Configured: true,
+      msg91Send,
+      demoMode: true,
+    });
+
+    const result = await sender.send('+919876543210', '123456');
+
+    // Demo mode never hands the code to a provider outside production.
+    expect(msg91Send).not.toHaveBeenCalled();
+    expect(result.accepted).toBe(true);
+    expect(sender.lastDevCode).toBe('123456');
+  });
+
   it('logs the code in development when no provider is configured', async () => {
     const sender = createSender({ isProduction: false, msg91Configured: false });
 
     const result = await sender.send('+919876543210', '654321');
 
     expect(result.accepted).toBe(true);
+    expect(result.devCode).toBe('654321');
     expect(sender.lastDevCode).toBe('654321');
   });
 });
@@ -153,5 +172,111 @@ describe('Msg91SmsService.send', () => {
     expect(createService({ authKey: null }).configured).toBe(false);
     expect(createService({ otpTemplateId: null }).configured).toBe(false);
     expect(createService().configured).toBe(true);
+  });
+});
+
+/**
+ * Temporary exact-test-number path: one explicitly-configured phone receives
+ * one fixed code through the dev delivery hook, only while the deadline is
+ * active. Every other phone keeps the generic dev fallback.
+ */
+describe('OtpSenderService — temporary exact-test-number path', () => {
+  const TEST_PHONE = '+915555000999';
+  const TEST_CODE = '424242';
+
+  function createTestSender(options: {
+    enabled?: boolean;
+    deadline?: Date;
+    isProduction?: boolean;
+    msg91Configured?: boolean;
+  }): OtpSenderService {
+    const deadlineIso = (options.deadline ?? new Date(Date.now() + 60_000)).toISOString();
+    const config = {
+      getOrThrow: vi.fn(() => options.isProduction ?? false),
+      get: vi.fn((key: string) => {
+        if (key === 'testOtp.enabled') return options.enabled ?? true;
+        if (key === 'testOtp.testPhone') return TEST_PHONE;
+        if (key === 'testOtp.code') return TEST_CODE;
+        if (key === 'testOtp.enabledDeadline') return deadlineIso;
+        return false;
+      }),
+    } as unknown as ConfigService;
+    const msg91 = {
+      configured: options.msg91Configured ?? false,
+      send: vi.fn(async () => true),
+    } as unknown as Msg91SmsService;
+    return new OtpSenderService(config, msg91);
+  }
+
+  it('serves the fixed code to the exact configured phone while the deadline is active', async () => {
+    const sender = createTestSender({});
+
+    const result = await sender.send(TEST_PHONE, '000000');
+
+    expect(result.accepted).toBe(true);
+    expect(result.devCode).toBe(TEST_CODE);
+    expect(sender.lastDevCode).toBe(TEST_CODE);
+  });
+
+  it('never serves the test code to any other phone', async () => {
+    const sender = createTestSender({});
+
+    const result = await sender.send('+915555000001', '654321');
+
+    expect(result.devCode).toBe('654321');
+    expect(sender.lastDevCode).toBe('654321');
+  });
+
+  it('ignores the test path once the deadline has passed', async () => {
+    const sender = createTestSender({ deadline: new Date(Date.now() - 1_000) });
+
+    const result = await sender.send(TEST_PHONE, '654321');
+
+    expect(result.devCode).toBe('654321');
+    expect(sender.lastDevCode).toBe('654321');
+  });
+
+  it('ignores the test path when the feature flag is off', async () => {
+    const sender = createTestSender({ enabled: false });
+
+    const result = await sender.send(TEST_PHONE, '654321');
+
+    expect(result.devCode).toBe('654321');
+    expect(sender.lastDevCode).toBe('654321');
+  });
+
+  it('never substitutes the test code in production, even fully configured', async () => {
+    const msg91Send = vi.fn(async () => true);
+    // Production + configured provider + fully configured test path.
+    const withProvider = new OtpSenderService(
+      {
+        getOrThrow: vi.fn(() => true),
+        get: vi.fn((key: string) => {
+          if (key === 'testOtp.enabled') return true;
+          if (key === 'testOtp.testPhone') return TEST_PHONE;
+          if (key === 'testOtp.code') return TEST_CODE;
+          if (key === 'testOtp.enabledDeadline') return new Date(Date.now() + 60_000).toISOString();
+          return false;
+        }),
+      } as unknown as ConfigService,
+      { configured: true, send: msg91Send } as unknown as Msg91SmsService,
+    );
+    const result = await withProvider.send(TEST_PHONE, '654321');
+
+    // The random code issued by the service goes to the real provider;
+    // the fixed test code is never issued or recorded in production.
+    expect(msg91Send).toHaveBeenCalledWith(TEST_PHONE, '654321');
+    expect(result.devCode).toBeUndefined();
+    expect(withProvider.lastDevCode).toBeNull();
+  });
+
+  it('still fails closed in production even for the configured test phone', async () => {
+    const sender = createTestSender({ isProduction: true });
+
+    const error = await sender.send(TEST_PHONE, TEST_CODE).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+    expect(sender.lastDevCode).toBeNull();
   });
 });
