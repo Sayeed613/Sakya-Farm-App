@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, type OnApplicationBootstrap } from '@nestjs/common';
 import type { CategorySummary } from '@sakya/types';
 
 import { CatalogCacheService } from '../../cache/catalog-cache.service';
@@ -34,11 +34,29 @@ function toCategorySummary(row: CategoryRow): CategorySummary {
 }
 
 @Injectable()
-export class CategoriesService {
+export class CategoriesService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(CategoriesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CatalogCacheService,
   ) {}
+
+  /**
+   * Prewarm the category list alongside the product feed — it is the second
+   * request every Home load makes, so it gets the same fire-and-forget
+   * treatment: a failure is logged and the first real request warms the cache.
+   */
+  onApplicationBootstrap(): void {
+    if (!this.cache.cachingEnabled) return;
+    void this.list().catch((error: unknown) => {
+      this.logger.warn(
+        `category list prewarm failed (first request will warm the cache): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+  }
 
   /**
    * Every active category, in display order.

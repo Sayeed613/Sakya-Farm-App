@@ -57,7 +57,7 @@ export default function GuestCartScreen() {
         <View className="flex-1 items-center justify-center pb-16">
           <EmptyState
             // eslint-disable-next-line @typescript-eslint/no-require-imports
-            image={require('../../../src/assets/empty-cart.png')}
+            image={require('../../../src/assets/empty-cart.webp')}
             title="Your cart is empty"
             message="Add something fresh and it will show up here."
             ctaLabel="Start shopping"

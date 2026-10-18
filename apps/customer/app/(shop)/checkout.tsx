@@ -19,7 +19,9 @@ import {
 import type { CartResponse, OrderResponse, PaymentDetail } from '@sakya/types';
 import { containsFreshProduce as cartHasFreshProduce, toPaise } from '@sakya/utils';
 import { ErrorState } from '../../src/components/ErrorState';
+import { AuthGate } from '../../src/components/AuthGate';
 import { SkeletonBlock } from '../../src/components/LoadingSkeleton';
+import { OrderPlacedOverlay } from '../../src/components/orders/OrderPlacedOverlay';
 import { formatMoney } from '../../src/lib/format';
 import { goBackOrHome } from '../../src/lib/navigation';
 import { addressesApi } from '../../src/api/notifications-api';
@@ -31,6 +33,7 @@ import { openRazorpayWebCheckout, reserveRazorpayPopup } from '../../src/lib/raz
 import { softShadow } from '../../src/lib/shadows';
 
 import AddressSelection from './components/AddressSelection';
+import { useScrollClearanceForBottomTabBar } from '../../src/components/navigation/BottomTabBar';
 import ApplyCouponCard from './components/ApplyCouponCard';
 import PaymentMethodSelection from './components/PaymentMethodSelection';
 import OrderReview from './components/OrderReview';
@@ -93,6 +96,12 @@ const ONLINE_PAYMENTS_ENABLED = PAYMENTS_DEMO_ENABLED || RAZORPAY_ENABLED;
 export default function CheckoutScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+
+  // The bottom tab bar is in-flow now, but the checkout's bottom place bar
+  // has a fixed bottom pad instead of content-driven height, so the scroll
+  // hook would never fire — the active tab could still be blocked when the
+  // review sits low. Apply the clearance here on every checkout load.
+  useScrollClearanceForBottomTabBar();
   const queryClient = useQueryClient();
   const session = useAuthStore((state) => state.session);
   const lastAddress = useLastAddressStore((state) => state.address);
@@ -387,10 +396,7 @@ export default function CheckoutScreen() {
                 onSuccess: () => {
                   createdOrderRef.current = null;
                   clearCartAfterOrder();
-                  router.replace({
-                    pathname: '/(shop)/orders/[id]',
-                    params: { id: placedOrder.id, justPlaced: '1' },
-                  });
+                  celebrateAndGoToOrder(placedOrder.id);
                 },
                 // The sheet closed without a result: stay on checkout. The
                 // order already exists, so "Try payment again" reuses it.
@@ -418,10 +424,7 @@ export default function CheckoutScreen() {
       createdOrderRef.current = null;
       clearCartAfterOrder();
 
-      router.replace({
-        pathname: '/(shop)/orders/[id]',
-        params: { id: order.id, justPlaced: '1' },
-      });
+      celebrateAndGoToOrder(order.id);
     } catch (cause) {
       const message =
         cause instanceof Error ? friendlyError(cause.message) : 'Please try again in a moment.';
@@ -449,11 +452,46 @@ export default function CheckoutScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  /**
+   * Confirm-order moment: the server has placed the order (and captured
+   * money, for online payments) — play the success animation, THEN land on
+   * the order detail screen. The delay IS the animation's length;
+   * navigation itself is unchanged (`replace`, so back never returns to a
+   * spent cart).
+   */
+  const [orderPlaced, setOrderPlaced] = useState(false);
+  const placedNavRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (placedNavRef.current !== null) clearTimeout(placedNavRef.current);
+    },
+    [],
+  );
+  const celebrateAndGoToOrder = useCallback(
+    (orderId: string) => {
+      setOrderPlaced(true);
+      placedNavRef.current = setTimeout(() => {
+        router.replace({
+          pathname: '/(shop)/orders/[id]',
+          params: { id: orderId, justPlaced: '1' },
+        });
+      }, 1_400);
+    },
+    [],
+  );
+
   if (session === null) {
     // Route-level guard; kept as a hard stop in case of deep-linking.
+    // AuthGate (the app's standard signed-out state) offers the button that
+    // actually continues the flow — a bare sentence was a dead end.
     return (
-      <View className="flex-1 items-center justify-center bg-canvas">
-        <RNText style={{ color: MUTED }}>Verify your phone to continue.</RNText>
+      <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
+        <AuthGate
+          icon="cart-outline"
+          title="Verify your number to check out"
+          message="Checkout is tied to your account. Verify your phone to continue."
+          redirectTo="/(shop)/checkout"
+        />
       </View>
     );
   }
@@ -802,7 +840,11 @@ export default function CheckoutScreen() {
                 setPendingPayment(null);
                 if (result === 'captured') {
                   clearCartAfterOrder();
+                  celebrateAndGoToOrder(orderId);
+                  return;
                 }
+                // Not captured: nothing to celebrate — straight to the order
+                // screen, where the real payment state explains itself.
                 router.replace({
                   pathname: '/(shop)/orders/[id]',
                   params: { id: orderId, justPlaced: '1' },
@@ -812,6 +854,11 @@ export default function CheckoutScreen() {
           ) : null}
         </>
       )}
+
+      {/* Confirm-order moment — the success animation plays here, before the
+          order detail screen mounts. Visual only; the caller schedules the
+          navigation it delays. */}
+      {orderPlaced ? <OrderPlacedOverlay /> : null}
     </View>
   );
 }
@@ -950,13 +997,12 @@ function DemoPaymentSheet({
 function CheckoutBackdrop({ topOffset }: { topOffset: number }) {
   return (
     <View
-      pointerEvents="none"
       className="absolute left-0 right-0 h-[250px]"
-      style={{ top: -topOffset }}
+      style={{ top: -topOffset, pointerEvents: 'none' }}
     >
       <ExpoImage
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        source={require('../../src/images/checkout-header.png')}
+        source={require('../../src/images/checkout-header.webp')}
         style={StyleSheet.absoluteFill}
         contentFit="cover"
         cachePolicy="memory-disk"
@@ -966,10 +1012,16 @@ function CheckoutBackdrop({ topOffset }: { topOffset: number }) {
       {/* Light frost under the fixed chrome — the photo keeps its texture
           while the step labels stay readable at the top. */}
       <BlurView
-        pointerEvents="none"
         intensity={28}
         tint="light"
-        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 72 }}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 72,
+          pointerEvents: 'none',
+        }}
       />
 
       {/* Vertical: readable top → the picture → the page. */}

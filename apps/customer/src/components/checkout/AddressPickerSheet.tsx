@@ -145,13 +145,20 @@ function sameAs(saved: AddressView, current: CheckoutAddress | null): boolean {
             the DOM <button><button> (React flags it) and the browser fires
             field keystrokes as a backdrop click. box-none keeps dim-area taps
             hitting the backdrop. */}
-        <View className="absolute inset-0 justify-end" pointerEvents="box-none">
+        <View className="absolute inset-0 justify-end" style={{ pointerEvents: 'box-none' }}>
           <Pressable onPress={() => undefined}>
             <Animated.View
               entering={SlideInDown.duration(260).easing(Easing.out(Easing.cubic))}
               exiting={SlideOutDown.duration(190).easing(Easing.in(Easing.cubic))}
-              className="rounded-t-[24px] bg-canvas pt-3"
-              style={{ paddingBottom: Math.max(insets.bottom, 12) + 8 }}
+              // Sheet chrome INLINE (not className): Animated.View has no
+              // cssInterop in this app — classes silently never reach the DOM.
+              style={{
+                backgroundColor: '#FBF7F0', // colors.canvas
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                paddingTop: 12,
+                paddingBottom: Math.max(insets.bottom, 12) + 8,
+              }}
             >
               <View className="items-center pb-2">
                 <View className="h-1 w-10 rounded-full bg-line" />
@@ -198,7 +205,7 @@ function sameAs(saved: AddressView, current: CheckoutAddress | null): boolean {
                   <View className="items-center gap-1.5 py-4">
                     <Image
                       // eslint-disable-next-line @typescript-eslint/no-require-imports
-                      source={require('../../assets/no address.png')}
+                      source={require('../../assets/no address.webp')}
                       style={{ width: 120, height: 82 }}
                       contentFit="contain"
                       cachePolicy="disk"

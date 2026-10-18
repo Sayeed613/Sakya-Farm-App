@@ -7,7 +7,6 @@ import puppeteer from 'puppeteer-core';
 
 const CHROME = process.env.QA_CHROME ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const BASE = process.env.QA_BASE ?? 'http://localhost:19006';
-const PHONE = '+915555000301';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const verdict = (step, status, evidence) => {
@@ -169,8 +168,7 @@ try {
         await sleep(600);
         const sendB = await page.$('[aria-label*="Send one-time code" i], [role="button"]');
         await sendB.click();
-        let rel = false;
-        for (let i = 0; i < 14; i++) { await sleep(2500); if (page.url().includes('verify-otp')) { rel = true; break; } }
+        for (let i = 0; i < 14; i++) { await sleep(2500); if (page.url().includes('verify-otp')) break; }
         const otpIn = await page.$('[aria-label="Verification code input"]');
   if (otpIn) {
     const box2 = await page.evaluate(() => {

@@ -38,8 +38,9 @@ import { QuantityStepper } from '../../../src/components/commerce/QuantitySteppe
 import { useDetailCartControls } from '../../../src/lib/use-detail-cart-controls';
 import { formatMoney } from '../../../src/lib/format';
 import { goBackOrHome } from '../../../src/lib/navigation';
-import { cardShadow } from '../../../src/lib/shadows';
-import { deriveBadges } from '../../../src/lib/product-badges';
+import { cardShadow, customShadow } from '../../../src/lib/shadows';
+import { ProductBadgePills } from '../../../src/components/commerce/ProductBadgePills';
+import { enterDown } from '../../../src/lib/motion';
 import {
   defaultVariantOfDetail,
 } from '../../../src/lib/use-product-add';
@@ -357,8 +358,6 @@ export default function ProductDetailScreen() {
     .map((image) => image.url)
     .filter((url): url is string => Boolean(url));
 
-  const badges = deriveBadges(detailData);
-
   const selectorLabel =
     variantSelectorLabelOf(variants);
 
@@ -472,7 +471,8 @@ export default function ProductDetailScreen() {
             gap-spaced rounded tile grid, inside one white shadowed card.
             ======================================================== */}
 
-        <View
+        <Animated.View
+          entering={enterDown}
           style={{
             paddingHorizontal: GUTTER,
             paddingTop:
@@ -481,12 +481,22 @@ export default function ProductDetailScreen() {
               8,
           }}
         >
-          <ProductMediaCard
-            urls={imageUrls}
-            accessibilityLabel={`${detailData.title} photos`}
-            onPress={() => setSheetOpen(true)}
-          />
-        </View>
+          <View>
+            <ProductMediaCard
+              urls={imageUrls}
+              accessibilityLabel={`${detailData.title} photos`}
+              onPress={() => setSheetOpen(true)}
+            />
+            {/* Badge pills — the SHARED stack the catalogue card and the
+                quick-view sheet wear (New, Bestseller, Premium, Fresh,
+                % OFF), pinned over the photo so the details screen shows
+                the same pills as everywhere else. */}
+            <ProductBadgePills
+              product={detailData}
+              style={{ position: 'absolute', left: 12, top: 12 }}
+            />
+          </View>
+        </Animated.View>
 
         {wishlistError ? (
           <RNText
@@ -502,7 +512,8 @@ export default function ProductDetailScreen() {
             MAIN PRODUCT CARD
             ======================================================== */}
 
-        <View
+        <Animated.View
+          entering={enterDown.delay(80)}
           style={[
             {
               marginHorizontal: 16,
@@ -657,29 +668,7 @@ export default function ProductDetailScreen() {
                       selected.compareAtPriceInPaise,
                     )}
                   </RNText>
-                </>
-              ) : null}
-
-              {badges.discountPercent != null ? (
-                <View
-                  style={{
-                    paddingHorizontal: 8,
-                    paddingVertical: 4,
-                    borderRadius: 999,
-                    backgroundColor: '#EAF7E8',
-                  }}
-                >
-                  <RNText
-                    style={{
-                      color: BRAND,
-                      fontSize: 11,
-                      fontWeight: '800',
-                    }}
-                  >
-                    {badges.discountPercent}% OFF
-                  </RNText>
-                </View>
-              ) : null}
+                </>                  ) : null}
             </View>
           ) : (
             <RNText
@@ -692,33 +681,6 @@ export default function ProductDetailScreen() {
               Currently unavailable
             </RNText>
           )}
-
-          {/* Availability */}
-          {detailData.isAvailable ? (
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                marginTop: 14,
-                gap: 6,
-              }}
-            >
-              <Ionicons
-                name="cube-outline"
-                size={18}
-                color={MUTED}
-              />
-
-              <RNText
-                style={{
-                  color: MUTED,
-                  fontSize: 13,
-                }}
-              >
-                Available
-              </RNText>
-            </View>
-          ) : null}
 
           {/* Select unit */}
           {variants.length > 0 ? (
@@ -769,13 +731,14 @@ export default function ProductDetailScreen() {
               ) : null}
             </View>
           ) : null}
-        </View>
+        </Animated.View>
 
         {/* ========================================================
             FEATURE CARDS
             ======================================================== */}
 
-        <View
+        <Animated.View
+          entering={enterDown.delay(140)}
           style={{
             marginTop: 10,
             paddingHorizontal: 16,
@@ -879,7 +842,7 @@ export default function ProductDetailScreen() {
               View details
             </RNText>
           </Pressable>
-        </View>
+        </Animated.View>
 
 
         {/* ========================================================
@@ -1030,66 +993,11 @@ export default function ProductDetailScreen() {
         </View>
 
         {/* ========================================================
-            VIEW DETAILS
-            ======================================================== */}
-
-        <Pressable
-          onPress={() => setSheetOpen(true)}
-          accessibilityRole="button"
-          accessibilityLabel="Open all product details"
-          style={[
-            {
-              marginHorizontal: 16,
-              marginTop: 10,
-              minHeight: 54,
-              paddingHorizontal: 16,
-              borderRadius: 18,
-              backgroundColor: '#FFFFFF',
-              borderWidth: 1,
-              borderColor: LINE,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            },
-            cardShadow,
-          ]}
-        >
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 9,
-            }}
-          >
-            <Ionicons
-              name="information-circle-outline"
-              size={19}
-              color={BRAND}
-            />
-
-            <RNText
-              style={{
-                color: INK,
-                fontSize: 14,
-                fontWeight: '700',
-              }}
-            >
-              View all details
-            </RNText>
-          </View>
-
-          <Ionicons
-            name="chevron-forward"
-            size={17}
-            color={MUTED}
-          />
-        </Pressable>
-
-        {/* ========================================================
             REVIEWS — published reviews + the eligible write form
             ======================================================== */}
 
-        <View
+        <Animated.View
+          entering={enterDown.delay(240)}
           style={[
             {
               marginHorizontal: 16,
@@ -1104,14 +1012,15 @@ export default function ProductDetailScreen() {
           ]}
         >
           <ReviewsSection productId={detailData.id} />
-        </View>
+        </Animated.View>
 
         {/* ========================================================
             RELATED PRODUCTS
             ======================================================== */}
 
         {relatedProducts.length > 0 ? (
-          <View
+          <Animated.View
+            entering={enterDown.delay(280)}
             style={{
               marginTop: 18,
             }}
@@ -1144,7 +1053,7 @@ export default function ProductDetailScreen() {
                 />
               )}
             />
-          </View>
+          </Animated.View>
         ) : null}
       </Animated.ScrollView>
 
@@ -1153,7 +1062,6 @@ export default function ProductDetailScreen() {
           ============================================================ */}
 
       <Animated.View
-        pointerEvents="none"
         style={[
           {
             position: 'absolute',
@@ -1166,6 +1074,10 @@ export default function ProductDetailScreen() {
             backgroundColor: '#FFFFFF',
             borderBottomWidth: 1,
             borderBottomColor: LINE,
+            // Decorative backdrop behind the header controls — taps fall
+            // through to whatever sits beneath (style.pointerEvents, which
+            // RNW no longer warns about, instead of the deprecated prop).
+            pointerEvents: 'none',
           },
           headerBgStyle,
         ]}
@@ -1176,10 +1088,18 @@ export default function ProductDetailScreen() {
           ============================================================ */}
 
       <Animated.View
-        pointerEvents="box-none"
-        className="absolute left-0 right-0 top-0"
+        // Positioning INLINE (not className): Animated.View has no cssInterop
+        // in this app, so `absolute left-0 right-0 top-0` never reached the
+        // DOM and these controls laid out in normal flow instead.
         style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: 0,
           paddingTop: insets.top,
+          // The row itself stays inert; the real buttons inside are the only
+          // hit targets (box-none).
+          pointerEvents: 'box-none',
         }}
       >
         <View
@@ -1200,13 +1120,14 @@ export default function ProductDetailScreen() {
 
           {/* Header title */}
           <Animated.View
-            pointerEvents="none"
             style={[
               {
                 flex: 1,
                 flexDirection: 'row',
                 alignItems: 'center',
                 marginHorizontal: 10,
+                // Text-only layer over the scrolling content — not a hit target.
+                pointerEvents: 'none',
               },
               headerTitleStyle,
             ]}
@@ -1279,14 +1200,14 @@ export default function ProductDetailScreen() {
           borderTopColor: '#E9E5DC',
           borderTopLeftRadius: 30,
           borderTopRightRadius: 30,
-          shadowColor: '#000',
-          shadowOpacity: 0.08,
-          shadowRadius: 18,
-          shadowOffset: {
-            width: 0,
+          // boxShadow on web, shadow* + elevation on native — see shadows.ts.
+          ...customShadow({
+            color: '#000000',
+            opacity: 0.08,
+            radius: 18,
             height: -5,
-          },
-          elevation: 12,
+            elevation: 12,
+          }),
         }}
       >
         {/* Price */}

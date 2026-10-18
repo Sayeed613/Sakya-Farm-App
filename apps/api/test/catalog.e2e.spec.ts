@@ -201,6 +201,10 @@ describe('Catalog endpoints (HTTP)', () => {
 
   const get = (path: string): Promise<Response> => fetch(`${baseUrl}${path}`);
 
+  /** Explicit accept-encoding so the assertion does not depend on fetch defaults. */
+  const getGzip = (path: string): Promise<Response> =>
+    fetch(`${baseUrl}${path}`, { headers: { 'accept-encoding': 'gzip' } });
+
   describe('GET /products', () => {
     it('lists published products without any credentials', async () => {
       const response = await get('/products');
@@ -336,6 +340,25 @@ describe('Catalog endpoints (HTTP)', () => {
 
     it('404s for a category that does not exist', async () => {
       expect((await get('/categories/nope/products')).status).toBe(404);
+    });
+  });
+
+  describe('response compression', () => {
+    it('gzips catalogue payloads above the 1 KB threshold', async () => {
+      const response = await getGzip('/products');
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-encoding')).toBe('gzip');
+      // The body must still parse to the exact same contract after decode.
+      const body = (await response.json()) as { items: { slug: string }[] };
+      expect(body.items.map((item) => item.slug)).toEqual(['malgova-mango', 'amla-pickle']);
+    });
+
+    it('leaves small responses below the threshold uncompressed', async () => {
+      const response = await getGzip('/categories');
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-encoding')).toBeNull();
     });
   });
 

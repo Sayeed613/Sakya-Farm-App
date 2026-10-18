@@ -14,23 +14,25 @@ import type { ImageSourcePropType } from 'react-native';
  *
  * Static `require` calls only — Metro cannot bundle dynamic image paths.
  * Filenames keep their original spaces (fine for local requires); they avoid
- * `&`, the one character that breaks web asset URLs.
+ * `&`, the one character that breaks web asset URLs. Re-encoded from PNG to
+ * WebP at 224px (≈4× the sidebar's 48pt box) in the Phase 2 asset
+ * optimization — same artwork, same filenames.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const leafyGreens = require('../sakya-fresh/leafy greens.png');
+const leafyGreens = require('../sakya-fresh/leafy greens.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const dailyVeg = require('../sakya-fresh/Daily Veg.png');
+const dailyVeg = require('../sakya-fresh/Daily Veg.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const beansPeas = require('../sakya-fresh/beans-peas.png');
+const beansPeas = require('../sakya-fresh/beans-peas.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const gourdsLocal = require('../sakya-fresh/gourds-local-veg.png');
+const gourdsLocal = require('../sakya-fresh/gourds-local-veg.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const premiumVegetables = require('../sakya-fresh/premium-vegetables.png');
+const premiumVegetables = require('../sakya-fresh/premium-vegetables.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const rootsOthers = require('../sakya-fresh/roots and others.png');
+const rootsOthers = require('../sakya-fresh/roots and others.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const freshFruits = require('../sakya-fresh/Fresh Fruits.png');
+const freshFruits = require('../sakya-fresh/Fresh Fruits.webp');
 
 export const FRESH_CATEGORY_IMAGES: Record<string, ImageSourcePropType> = {
   // Produce — names verified against the live DB (see home-sections.ts):

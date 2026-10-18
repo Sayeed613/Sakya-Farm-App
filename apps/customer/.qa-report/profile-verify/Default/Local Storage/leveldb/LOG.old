@@ -1,0 +1,21 @@
+2026/10/17-19:53:50.405 41e8 Reusing MANIFEST D:\React-native\Sakya-Farm-App\apps\customer\.qa-report\profile-verify\Default\Local Storage\leveldb/MANIFEST-000001
+2026/10/17-19:53:50.408 41e8 Recovering log #50
+2026/10/17-19:53:50.408 41e8 Level-0 table #53: started
+2026/10/17-19:53:50.470 41e8 Level-0 table #53: 19029 bytes OK
+2026/10/17-19:53:50.472 41e8 Recovering log #52
+2026/10/17-19:53:50.472 41e8 Level-0 table #54: started
+2026/10/17-19:53:50.536 41e8 Level-0 table #54: 19025 bytes OK
+2026/10/17-19:53:50.599 41e8 Delete type=0 #50
+2026/10/17-19:53:50.599 41e8 Delete type=0 #52
+2026/10/17-19:55:51.977 1034 Level-0 table #57: started
+2026/10/17-19:55:52.045 1034 Level-0 table #57: 19253 bytes OK
+2026/10/17-19:55:52.084 1034 Delete type=0 #55
+2026/10/17-19:55:52.085 1034 Compacting 4@0 + 1@1 files
+2026/10/17-19:55:52.138 1034 Generated table #58@0: 4 keys, 19113 bytes
+2026/10/17-19:55:52.138 1034 Compacted 4@0 + 1@1 files => 19113 bytes
+2026/10/17-19:55:52.173 1034 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/10/17-19:55:52.175 1034 Delete type=2 #49
+2026/10/17-19:55:52.175 1034 Delete type=2 #51
+2026/10/17-19:55:52.175 1034 Delete type=2 #53
+2026/10/17-19:55:52.175 1034 Delete type=2 #54
+2026/10/17-19:55:52.175 1034 Delete type=2 #57

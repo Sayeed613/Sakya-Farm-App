@@ -50,6 +50,7 @@ import { deckFeaturesFor } from './deck-features';
 import { useProductAdd } from '../../lib/use-product-add';
 import { useWishlist } from '../../hooks/use-wishlist';
 import { useResponsive } from '../../lib/responsive';
+import { customShadow } from '../../lib/shadows';
 import { useAuthStore } from '../../stores/auth-store';
 import { ProductImageGallery } from './ProductImageGallery';
 import { QuantityStepper } from './QuantityStepper';
@@ -547,21 +548,23 @@ function SlideChrome({
 
   return (
     <View
-      pointerEvents="box-none"
       style={{
         position: 'absolute',
         top: 0,
         left: 0,
         right: 0,
         zIndex: 20,
+        // The grab strip row is inert; only the real controls inside capture
+        // (box-none). style.pointerEvents, not the deprecated prop.
+        pointerEvents: 'box-none',
       }}
     >
       <View
-        pointerEvents="none"
         style={{
           height: QUICK_VIEW_HANDLE_HEIGHT,
           alignItems: 'center',
           justifyContent: 'center',
+          pointerEvents: 'none',
         }}
       >
         <View
@@ -1353,11 +1356,14 @@ function BottomAddToCart({
         backgroundColor: '#ffffff',
         borderTopWidth: 1,
         borderTopColor: 'rgba(228,226,220,0.70)',
-        shadowColor: '#000000',
-        shadowOpacity: 0.12,
-        shadowRadius: 14,
-        shadowOffset: { width: 0, height: -4 },
-        elevation: 12,
+        // boxShadow on web, shadow* + elevation on native — see shadows.ts.
+        ...customShadow({
+          color: '#000000',
+          opacity: 0.12,
+          radius: 14,
+          height: -4,
+          elevation: 12,
+        }),
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,

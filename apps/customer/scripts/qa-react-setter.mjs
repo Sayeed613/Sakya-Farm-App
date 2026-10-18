@@ -74,7 +74,6 @@ const save = await page.evaluate(() => {
   if (!el) return { present: false };
   const r = el.getBoundingClientRect();
   const ariaDisabled = el.getAttribute('aria-disabled');
-  const ariaState = el.getAttribute('aria-state');
   return { present: true, attrDisabled: ariaDisabled, htmlDisabled: el.disabled ?? 'n/a', visible: r.width > 0 && r.height > 0, y: Math.round(r.y) };
 });
 console.log('SAVE_STATE:', JSON.stringify(save));

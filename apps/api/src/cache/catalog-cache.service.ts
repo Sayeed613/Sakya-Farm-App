@@ -16,10 +16,18 @@ import { Injectable, Logger } from '@nestjs/common';
  *   behind the API's back, and *other instances* when this service runs with a
  *   process manager. The TTL is therefore the honesty knob: it must be short
  *   enough that those sources are invisible to users (default 30s).
- * - **Stampede protection (single flight).** When a hot key expires, the first
- *   request queries the database and every concurrent request for the same key
- *   awaits that one query instead of firing its own. A viral product page
- *   after expiry produces one database hit, not N.
+ * - **Stale-while-revalidate.** An entry past its TTL is served IMMEDIATELY to
+ *   the caller while a single background reload refreshes it — a catalogue read
+ *   never waits on the database once its key has been loaded at least once.
+ *   Consequence, stated openly: if the database is unreachable, the last good
+ *   value keeps being served until a reload succeeds or an invalidation drops
+ *   it. Admin writes still take effect at once (invalidateAll clears entries
+ *   AND blocks in-flight stores), so the stale window only covers the
+ *   out-of-band sources the TTL already governs.
+ * - **Stampede protection (single flight).** When a hot key needs loading, the
+ *   first request queries the database and every concurrent request for the
+ *   same key awaits that one query instead of firing its own. A viral product
+ *   page after expiry produces one database hit, not N.
  * - **Invalidation is generation-based.** `invalidateAll()` bumps a generation
  *   counter and drops both maps. A query that was already in flight when the
  *   invalidation happened may still return its (now stale) answer to the
@@ -32,9 +40,11 @@ import { Injectable, Logger } from '@nestjs/common';
  *   used as an LRU: a hit is re-inserted (moving it to the newest end) and an
  *   insert beyond `maxEntries` evicts the least recently used key. Memory is
  *   capped regardless of key cardinality or expiry.
- * - **Only successes are cached.** A thrown loader (e.g. `NotFoundException`
- *   for an unknown slug) is propagated to every waiter and never stored, so a
- *   miss always re-checks the database.
+ * - **Only successes are cached.** A thrown loader on a cold miss (e.g.
+ *   `NotFoundException` for an unknown slug) is propagated to every waiter and
+ *   never stored, so a miss always re-checks the database. A failed BACKGROUND
+ *   refresh (stale-while-revalidate) is swallowed: the stale value it was
+ *   refreshing stays servable and the next read retries the reload.
  *
  * Cross-cutting caveat: this cache is per process. Admin invalidation reaches
  * only the instance that served the admin request; other instances converge
@@ -67,10 +77,22 @@ export class CatalogCacheService {
   }
 
   /**
+   * False when constructed with TTL 0 (caching disabled). Callers that would
+   * otherwise warm keys at boot use this to skip a pointless query.
+   */
+  get cachingEnabled(): boolean {
+    return this.ttlMs > 0;
+  }
+
+  /**
    * Return the cached value for `key`, or run `loader` to populate it.
    *
    * Concurrent callers for the same key share a single `loader` execution.
-   * Rejections propagate to every waiter and are not cached.
+   * Rejections on a cold miss propagate to every waiter and are not cached.
+   *
+   * An EXPIRED entry is a stale-while-revalidate hit: the stale value is
+   * returned synchronously and the refresh runs in the background — the
+   * caller never waits on the database for a key that has loaded before.
    */
   async getOrLoad<T>(key: string, loader: () => Promise<T>): Promise<T> {
     if (this.ttlMs <= 0) {
@@ -85,9 +107,27 @@ export class CatalogCacheService {
         this.entries.set(key, cached);
         return cached.value as T;
       }
+
+      // Expired but present: serve the stale value NOW and refresh behind the
+      // caller. Single-flight inside `load` coalesces concurrent refreshes;
+      // a failed refresh is swallowed here (load's rejection is already
+      // observed by its settle handler, so this catch only documents the
+      // intent) — the stale entry keeps serving and the next read retries.
+      void this.load(key, loader).catch(() => undefined);
+      // LRU touch: a hot expired key must not be evicted while refreshing.
       this.entries.delete(key);
+      this.entries.set(key, cached);
+      return cached.value as T;
     }
 
+    return this.load(key, loader);
+  }
+
+  /**
+   * Single-flight load: one loader execution per key, shared by every waiter.
+   * Stores the value only if no invalidation happened while it was in flight.
+   */
+  private load<T>(key: string, loader: () => Promise<T>): Promise<T> {
     const pending = this.inflight.get(key);
     if (pending !== undefined) {
       return pending as Promise<T>;

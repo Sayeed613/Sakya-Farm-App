@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { FlatList, Pressable, Text as RNText, View } from 'react-native';
@@ -9,8 +10,9 @@ import { ordersApi } from '../../../src/api/orders-api';
 import { journeyApi } from '../../../src/api/journey';
 import { AuthGate } from '../../../src/components/AuthGate';
 import { EmptyState } from '../../../src/components/EmptyState';
-import { ErrorState } from '../../../src/components/ErrorState';
+import { InlineErrorBanner } from '../../../src/components/InlineErrorBanner';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
+import { useProductImageByTitle } from '../../../src/hooks/use-product-image-by-title';
 import { formatMoney } from '../../../src/lib/format';
 import { useAuthStore } from '../../../src/stores/auth-store';
 import type { OrderResponse } from '@sakya/types';
@@ -80,12 +82,17 @@ function OrdersList() {
   }
 
   if (orders.isError) {
+    // Inline banner in the screen's flow: the header and layout stay put and
+    // the retry sits where the list would — no centred takeover card.
     return (
-      <ErrorState
-        title="Could not load orders"
-        message="We could not reach your orders just now. Check your connection and try again."
-        onRetry={() => void orders.refetch()}
-      />
+      <View className="gap-3 px-4 pt-4">
+        <InlineErrorBanner
+          title="Could not load orders"
+          message="We could not reach your orders just now. Check your connection and try again."
+          onRetry={() => void orders.refetch()}
+          testID="orders-load-error"
+        />
+      </View>
     );
   }
 
@@ -94,7 +101,7 @@ function OrdersList() {
     return (
       <EmptyState
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        image={require('../../../src/assets/no-orders.png')}
+        image={require('../../../src/assets/no-orders.webp')}
         title="No orders yet"
         message="When you place your first farm order, it will show up here."
         ctaLabel="Start shopping"
@@ -118,6 +125,9 @@ function OrderCard({ order }: { order: OrderResponse }) {
   const queryClient = useQueryClient();
   const [reorderState, setReorderState] = useState<'idle' | 'busy'>('idle');
   const [reorderError, setReorderError] = useState<string | null>(null);
+  // Order lines snapshot titles, not photos — the catalogue lookup resolves
+  // the thumbnail from the SAME cached home query (see the hook's doc).
+  const imageByTitle = useProductImageByTitle();
   const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0);
   const placed = order.placedAt ?? order.createdAt;
   const date = new Date(placed).toLocaleDateString('en-IN', {
@@ -126,6 +136,7 @@ function OrderCard({ order }: { order: OrderResponse }) {
     year: 'numeric',
   });
   const firstItem = order.items[0];
+  const thumbUri = firstItem ? imageByTitle(firstItem.productTitle) : null;
 
   /** Quick Buy Again from the list — same server reorder as the detail page. */
   const handleReorder = async () => {
@@ -169,10 +180,27 @@ function OrderCard({ order }: { order: OrderResponse }) {
           Placed {date} · {itemCount} item{itemCount === 1 ? '' : 's'}
         </RNText>
         {firstItem ? (
-          <RNText className="mt-1.5 text-[12.5px]" style={{ color: INK }} numberOfLines={1}>
-            {firstItem.productTitle}
-            {order.items.length > 1 ? ` +${order.items.length - 1} more` : ''}
-          </RNText>
+          <View className="mt-1.5 flex-row items-center gap-2.5">
+            {thumbUri !== null ? (
+              <Image
+                source={{ uri: thumbUri }}
+                style={{ width: 42, height: 42, borderRadius: 10 }}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                accessibilityLabel={`${firstItem.productTitle} photo`}
+              />
+            ) : (
+              <View
+                className="h-[42px] w-[42px] items-center justify-center rounded-xl bg-surface-muted"
+              >
+                <Ionicons name="leaf-outline" size={17} color={MUTED} />
+              </View>
+            )}
+            <RNText className="flex-1 text-[12.5px]" style={{ color: INK }} numberOfLines={2}>
+              {firstItem.productTitle}
+              {order.items.length > 1 ? ` +${order.items.length - 1} more` : ''}
+            </RNText>
+          </View>
         ) : null}
         <View className="mt-2 flex-row items-center justify-between">
           <RNText className="text-[15px] font-bold" style={{ color: INK }}>
@@ -204,9 +232,9 @@ function OrderCard({ order }: { order: OrderResponse }) {
         </Pressable>
       </View>
       {reorderError !== null ? (
-        <RNText accessibilityLiveRegion="polite" className="mt-2 text-[11.5px] leading-4" style={{ color: '#B42318' }}>
-          {reorderError}
-        </RNText>
+        <View className="mt-2">
+          <InlineErrorBanner message={reorderError} />
+        </View>
       ) : null}
     </View>
   );

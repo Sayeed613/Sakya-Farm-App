@@ -45,8 +45,14 @@ export function InvoiceSheet({
         <Animated.View
           entering={SlideInDown.springify().damping(22)}
           exiting={SlideOutDown}
-          className="rounded-t-3xl bg-white"
-          style={{ paddingBottom: insets.bottom + 16 }}
+          // Sheet chrome INLINE (not className): Animated.View has no
+          // cssInterop in this app — classes silently never reach the DOM.
+          style={{
+            backgroundColor: '#FFFFFF', // colors.surface
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            paddingBottom: insets.bottom + 16,
+          }}
         >
           <View className="items-center pt-2.5">
             <View className="h-1 w-10 rounded-full" style={{ backgroundColor: LINE }} />

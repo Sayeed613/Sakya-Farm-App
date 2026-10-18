@@ -8,7 +8,6 @@ const SCREEN_TITLES: Record<string, string> = {
   cart: 'Your Cart',
   checkout: 'Checkout',
   'products/[slug]': 'Product',
-  'categories/[slug]': 'Category',
   'orders/[id]': 'Order Details',
   notifications: 'Notifications',
   'edit-profile': 'Edit Profile',
@@ -17,6 +16,7 @@ const SCREEN_TITLES: Record<string, string> = {
   'delete-account': 'Delete Account',
   wishlist: 'Wishlist',
   'address-book': 'Address Book',
+  'categories/[slug]': 'Category',
 };
 
 /**

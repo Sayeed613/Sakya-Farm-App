@@ -13,7 +13,7 @@ export default function CartBackdrop() {
     >
       <Image
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        source={require('../../../src/images/cart-header.png')}
+        source={require('../../../src/images/cart-header.webp')}
         style={StyleSheet.absoluteFill}
         contentFit="cover"
         cachePolicy="memory-disk"
@@ -23,10 +23,14 @@ export default function CartBackdrop() {
       {/* Light frost under the fixed chrome — keeps the photo textured while
           the header row stays readable. */}
       <BlurView
-        pointerEvents="none"
-        intensity={28}
-        tint="light"
-        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 72 }}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 72,
+          pointerEvents: 'none',
+        }}
       />
 
       {/* Vertical: light header strip → photo → parchment feather. */}

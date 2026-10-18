@@ -21,4 +21,5 @@ const state = await page.evaluate(() => {
   });
   return { divs: divs.slice(0, 24).join(' | '), url: page.url() };
 });
+console.log('STATE:', JSON.stringify(state));
 // click 6 boxes

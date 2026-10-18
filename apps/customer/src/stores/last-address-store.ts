@@ -4,14 +4,18 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import type { CheckoutAddress } from '../api/checkout';
 
-/**
- * The customer's last-used delivery address.
+/** The customer's last-used delivery address.
+
+ * Keyed by the device, not the account: there is no owner identity in this
+ * store, so it has no way to know who is signed in or out. That is also the
+ * whole reason a logout that only clears the session store still leaves a
+ * real address behind, ready to autofill the next person's checkout: the
+ * prefill survives whenever someone forgets to clear the store by hand.
  *
- * There is no full address book yet — the backend has no address endpoints —
- * so checkout persists exactly one address locally and prefills the form with
- * it next time. The address travels to the order as a snapshot at placement;
- * the server is the system of record for the placed order, this is only a
- * convenience for the form.
+ * The server is the system of record for anything that matters — checkout
+ * snapshots the delivered-to address into the order at placement, and the
+ * signed-in session owns the address book. This store is only a convenience
+ * prefiller for the form.
  *
  * Storage matches the guest cart: SecureStore on native, localStorage on web.
  */
@@ -22,6 +26,12 @@ interface LastAddressState {
   address: CheckoutAddress | null;
   remember: (address: CheckoutAddress) => void;
   forget: () => void;
+  /** Log the customer out: drop the remembered address so a new sign-in
+   * cannot prefill the form with it. The two stores are deliberately
+   * independent — the session store owns credentials; this store owns the
+   * convenience prefill — but logout is the one event that must clear both.
+   */
+  logout: () => void;
 }
 
 function secureStorage() {
@@ -58,6 +68,7 @@ export const useLastAddressStore = create<LastAddressState>()(
       address: null,
       remember: (address) => set({ address }),
       forget: () => set({ address: null }),
+      logout: () => set({ address: null }),
     }),
     {
       name: ADDRESS_KEY,

@@ -1,0 +1,12 @@
+# Include compiled workspace packages required by the customer app
+!packages/
+!packages/**/
+!packages/**/dist/
+!packages/**/dist/**
+
+# Never upload local env files — the build environment comes exclusively from
+# the "env" block in apps/customer/eas.json, never from a developer machine.
+.env
+.env.*
+apps/customer/.env
+apps/customer/.env.*

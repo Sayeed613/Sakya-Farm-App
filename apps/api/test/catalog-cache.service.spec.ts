@@ -17,6 +17,17 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
+/**
+ * Drain the microtask queue so a fire-and-forget background load started by
+ * stale-while-revalidate settles. Works under fake timers because only
+ * promise resolution is involved — no timer callbacks.
+ */
+async function flushBackgroundLoad(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe('CatalogCacheService', () => {
   it('serves the stored value without re-running the loader inside the TTL', async () => {
     const cache = new CatalogCacheService(60);
@@ -27,7 +38,7 @@ describe('CatalogCacheService', () => {
     expect(loader).toHaveBeenCalledTimes(1);
   });
 
-  it('re-runs the loader once the TTL has elapsed', async () => {
+  it('serves the stale value instantly after TTL and revalidates in the background', async () => {
     vi.useFakeTimers();
     try {
       const cache = new CatalogCacheService(30);
@@ -35,8 +46,46 @@ describe('CatalogCacheService', () => {
 
       expect(await cache.getOrLoad('k', loader)).toBe('old');
       vi.advanceTimersByTime(30_001);
+
+      // Stale-while-revalidate: the expired value is returned WITHOUT waiting
+      // for the loader — the read never blocks on the database.
+      expect(await cache.getOrLoad('k', loader)).toBe('old');
+      expect(loader).toHaveBeenCalledTimes(2);
+
+      // The background refresh lands, so the next read serves the fresh value.
+      await flushBackgroundLoad();
       expect(await cache.getOrLoad('k', loader)).toBe('new');
       expect(loader).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps serving the stale value when the background refresh fails, and retries later', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new CatalogCacheService(30);
+      const loader = vi
+        .fn<() => Promise<string>>()
+        .mockResolvedValueOnce('old')
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockResolvedValueOnce('recovered');
+
+      expect(await cache.getOrLoad('k', loader)).toBe('old');
+      vi.advanceTimersByTime(30_001);
+
+      // Expired: stale value served; the background refresh fails but must
+      // neither throw at the caller nor drop the stale entry.
+      expect(await cache.getOrLoad('k', loader)).toBe('old');
+      expect(loader).toHaveBeenCalledTimes(2);
+      await flushBackgroundLoad();
+
+      // Stale entry still servable; the failure was not cached as an error,
+      // and the next read starts ANOTHER refresh, which recovers.
+      expect(await cache.getOrLoad('k', loader)).toBe('old');
+      expect(loader).toHaveBeenCalledTimes(3);
+      await flushBackgroundLoad();
+      expect(await cache.getOrLoad('k', loader)).toBe('recovered');
     } finally {
       vi.useRealTimers();
     }

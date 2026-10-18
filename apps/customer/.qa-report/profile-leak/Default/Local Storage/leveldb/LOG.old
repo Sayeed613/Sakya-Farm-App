@@ -1,0 +1,26 @@
+2026/10/17-20:34:17.991 39d8 Reusing MANIFEST D:\React-native\Sakya-Farm-App\apps\customer\.qa-report\profile-leak\Default\Local Storage\leveldb/MANIFEST-000001
+2026/10/17-20:34:17.993 39d8 Recovering log #6
+2026/10/17-20:34:18.183 39d8 Level-0 table #9: started
+2026/10/17-20:34:18.251 39d8 Level-0 table #9: 18840 bytes OK
+2026/10/17-20:34:18.252 39d8 Recovering log #8
+2026/10/17-20:34:18.290 39d8 Level-0 table #10: started
+2026/10/17-20:34:18.392 39d8 Level-0 table #10: 17809 bytes OK
+2026/10/17-20:34:18.527 39d8 Delete type=0 #6
+2026/10/17-20:34:18.527 39d8 Delete type=0 #8
+2026/10/17-20:35:18.583 2528 Level-0 table #13: started
+2026/10/17-20:35:18.732 2528 Level-0 table #13: 17846 bytes OK
+2026/10/17-20:35:18.845 2528 Delete type=0 #11
+2026/10/17-20:36:19.638 2528 Level-0 table #15: started
+2026/10/17-20:36:19.677 2528 Level-0 table #15: 19004 bytes OK
+2026/10/17-20:36:19.750 2528 Delete type=0 #12
+2026/10/17-20:36:19.751 2528 Compacting 4@0 + 1@1 files
+2026/10/17-20:36:19.789 2528 Generated table #16@0: 5 keys, 19054 bytes
+2026/10/17-20:36:19.789 2528 Compacted 4@0 + 1@1 files => 19054 bytes
+2026/10/17-20:36:19.817 2528 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/10/17-20:36:19.818 2528 Delete type=2 #7
+2026/10/17-20:36:19.818 2528 Delete type=2 #9
+2026/10/17-20:36:19.818 2528 Delete type=2 #10
+2026/10/17-20:36:19.818 2528 Delete type=2 #13
+2026/10/17-20:36:19.818 2528 Delete type=2 #15
+2026/10/17-20:37:09.115 39d8 Level-0 table #18: started
+2026/10/17-20:37:09.426 39d8 Level-0 table #18: 18846 bytes OK

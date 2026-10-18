@@ -79,7 +79,7 @@ try {
   const confirmAdd = await clickVisible('Add to cart', { aria: true });
   if (confirmAdd) { await page.mouse.click(confirmAdd.x, confirmAdd.y); await sleep(7000); }
   const pill = await page.evaluate(() => document.body.innerText.match(/View cart.{0,24}/)?.[0] ?? '');
-  verdict('add-to-cart', Boolean(pill) ? 'PASS' : 'FAIL', `pill: ${pill || 'not found'}`);
+  verdict('add-to-cart', pill ? 'PASS' : 'FAIL', `pill: ${pill || 'not found'}`);
 
   // -- open cart, bump quantity ---
   let cartOpen = await clickVisible('View cart') ?? await clickVisible('Cart');

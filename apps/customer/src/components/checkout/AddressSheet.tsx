@@ -248,14 +248,22 @@ export function AddressSheet({
           button inside (invalid HTML), and the browser then turns Space/Enter
           typed in a field into a click on the backdrop — dismissing the sheet
           mid-entry. box-none lets taps in the dim area fall through to it. */}
-      <View className="absolute inset-0 justify-end" pointerEvents="box-none">
+      <View className="absolute inset-0 justify-end" style={{ pointerEvents: 'box-none' }}>
         <Pressable onPress={() => undefined}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <Animated.View
               entering={SlideInDown.duration(260).easing(Easing.out(Easing.cubic))}
               exiting={SlideOutDown.duration(190).easing(Easing.in(Easing.cubic))}
-              className="rounded-t-[24px] bg-canvas px-4 pt-3"
-              style={{ paddingBottom: Math.max(insets.bottom, 12) + 8 }}
+              // Sheet chrome INLINE (not className): Animated.View has no
+              // cssInterop in this app — classes silently never reach the DOM.
+              style={{
+                backgroundColor: '#FBF7F0', // colors.canvas
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                paddingHorizontal: 16,
+                paddingTop: 12,
+                paddingBottom: Math.max(insets.bottom, 12) + 8,
+              }}
             >
               <View className="items-center pb-2">
                 <View className="h-1 w-10 rounded-full bg-line" />

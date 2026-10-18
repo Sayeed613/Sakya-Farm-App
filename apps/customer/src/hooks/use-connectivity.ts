@@ -26,7 +26,8 @@ export function useConnectivity(): { isConnected: boolean | null } {
       setConnectivityForHttpGate(connected);
     };
 
-    // Subscribe first so no change event is missed, then seed the state.
+    // Subscribe first so no change event is missed, then seed the state from
+    // the live subscription (state-driven, always current).
     const unsubscribe = NetInfo.addEventListener(apply);
 
     void NetInfo.fetch()

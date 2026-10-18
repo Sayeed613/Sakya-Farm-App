@@ -1,0 +1,57 @@
+[
+  {
+    "screen": "home",
+    "severity": "FAIL",
+    "detail": "missing expected text: [\"Farm Pantry\"]; body[0..120]=\"DELIVERY TO\\n\\nIndia\\n\\n\\nSearch for\\n\\n\\n\\nAll\\nAll-Time Favorites\\nAndhra podulu\\nAndhra Style Podulu\\nBeans & Peas\\nBest Ghee\""
+  },
+  {
+    "screen": "category-listing",
+    "severity": "FAIL",
+    "detail": "console.error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  },
+  {
+    "screen": "category-listing",
+    "severity": "FAIL",
+    "detail": "console.error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+  },
+  {
+    "screen": "category-listing",
+    "severity": "FAIL",
+    "detail": "api: 404 http://192.168.31.164:3000/api/v1/categories/ghee/products?availability=all&limit=20&page=1&sort=newest"
+  },
+  {
+    "screen": "category-listing",
+    "severity": "FAIL",
+    "detail": "api: 404 http://192.168.31.164:3000/api/v1/categories/ghee/products?availability=all&limit=20&page=1&sort=newest"
+  },
+  {
+    "screen": "product-detail",
+    "severity": "FAIL",
+    "detail": "console.error: Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  },
+  {
+    "screen": "product-detail",
+    "severity": "FAIL",
+    "detail": "console.error: Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  },
+  {
+    "screen": "product-detail",
+    "severity": "WARN",
+    "detail": "api: 401 http://192.168.31.164:3000/api/v1/products/099ea4ab-af2f-482f-afa2-ce7383e9afeb/reviews"
+  },
+  {
+    "screen": "product-detail",
+    "severity": "WARN",
+    "detail": "api: 401 http://192.168.31.164:3000/api/v1/products/099ea4ab-af2f-482f-afa2-ce7383e9afeb/reviews"
+  },
+  {
+    "screen": "checkout-guest",
+    "severity": "FAIL",
+    "detail": "screen body nearly empty (30 chars)"
+  },
+  {
+    "screen": "auth-phone",
+    "severity": "FAIL",
+    "detail": "no submit button found"
+  }
+]

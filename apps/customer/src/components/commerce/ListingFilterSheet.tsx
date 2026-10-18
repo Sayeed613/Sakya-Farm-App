@@ -88,13 +88,21 @@ function ListingFilterSheetInner({
         />
         {/* Backdrop stays a SIBLING of the sheet (see VariantPickerSheet): as
             an ancestor it wraps inner buttons in a nested <button> on web. */}
-        <View className="absolute inset-0 justify-end" pointerEvents="box-none">
+        <View className="absolute inset-0 justify-end" style={{ pointerEvents: 'box-none' }}>
           <Pressable onPress={() => undefined}>
             <Animated.View
               entering={SlideInDown.duration(240).easing(Easing.out(Easing.cubic))}
               exiting={SlideOutDown.duration(180).easing(Easing.in(Easing.cubic))}
-              className="rounded-t-[24px] bg-canvas px-4 pt-3"
-              style={{ paddingBottom: Math.max(insets.bottom, 12) + 8 }}
+              // Sheet chrome INLINE (not className): Animated.View has no
+              // cssInterop in this app — classes silently never reach the DOM.
+              style={{
+                backgroundColor: '#FBF7F0', // colors.canvas
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                paddingHorizontal: 16,
+                paddingTop: 12,
+                paddingBottom: Math.max(insets.bottom, 12) + 8,
+              }}
             >
               <View className="items-center pb-2">
                 <View className="h-1 w-10 rounded-full bg-line" />

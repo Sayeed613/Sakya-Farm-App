@@ -10,20 +10,19 @@ import { productDetailKey, productDetailQueryOptions } from '../../api/product-d
 import { router } from 'expo-router';
 import { formatMoney, formatPackSize } from '../../lib/format';
 import { cdnImageUri } from '../../lib/cdn-image';
-import { deriveBadges, deriveMerchBadges } from '../../lib/product-badges';
+import { deriveBadges } from '../../lib/product-badges';
 import { AnimatedPressable, usePressScale } from '../../lib/motion';
 import { cardShadow } from '../../lib/shadows';
 import { useProductAdd } from '../../lib/use-product-add';
 import { ClickableDiv, IS_WEB } from './ClickableDiv';
 import { NotifyMeButton } from './NotifyMeButton';
+import { ProductBadgePills } from './ProductBadgePills';
 import { QuantityStepper } from './QuantityStepper';
 
 const ADD_GREEN = '#0C831F'; // Blinkit action green
 const INK = '#1D2119';
 const MUTED = '#7C7A72';
 const STRIKE = '#9C9A92';
-const RUST = '#B4612F';
-const MUSTARD = '#C99A2E';
 
 /**
  * Product image via expo-image.
@@ -131,21 +130,6 @@ function SlideUpTitle({ children, delay, ...textProps }: { children: string; del
   );
 }
 
-/** One badge pill: icon + label on the image's top-left. */
-function BadgePill({ icon, label, color }: { icon: keyof typeof Ionicons.glyphMap; label: string; color: string }) {
-  return (
-    <View
-      className="flex-row items-center gap-1 rounded-full px-1.5 py-0.5"
-      style={{ backgroundColor: 'rgba(255,255,255,0.94)' }}
-    >
-      <Ionicons name={icon} size={10} color={color} />
-      <RNText className="text-[9.5px] font-bold" style={{ color }}>
-        {label}
-      </RNText>
-    </View>
-  );
-}
-
 /**
  * The catalogue card — Blinkit anatomy.
  *
@@ -190,7 +174,6 @@ function ProductCardInner({
 
   const soldOut = badges.isOutOfStock;
   const needsPicker = !soldOut && product.availableVariantCount > 1 && onPickVariant != null;
-  const merchBadges = deriveMerchBadges(product);
   const hasMrp =
     product.compareAtMaxInPaise != null &&
     product.price?.minInPaise != null &&
@@ -286,17 +269,10 @@ function ProductCardInner({
           )}
           {soldOut ? <View className="absolute inset-0 bg-white/70" /> : null}
 
-          {!soldOut ? (
-            <View className="absolute left-1.5 top-1.5 flex-col items-start gap-1">
-              {badges.isNew ? <BadgePill icon="sparkles-outline" label="New" color={ADD_GREEN} /> : null}
-              {badges.isBestseller ? <BadgePill icon="flame" label="Bestseller" color={RUST} /> : null}
-              {merchBadges.includes('premium') ? <BadgePill icon="star" label="Premium" color={MUSTARD} /> : null}
-              {merchBadges.includes('fresh') ? <BadgePill icon="leaf" label="Fresh" color={ADD_GREEN} /> : null}
-              {badges.discountPercent != null ? (
-                <BadgePill icon="pricetag" label={`${badges.discountPercent}% OFF`} color={MUSTARD} />
-              ) : null}
-            </View>
-          ) : null}
+          {/* Badge stack — the SHARED pill component, so quick view and the
+              details screen render an identical set (see
+              ProductBadgePills). Suppressed for sold-out products inside. */}
+          <ProductBadgePills product={product} style={{ position: 'absolute', left: 6, top: 6 }} />
 
           {isGrid ? (
             <View className="absolute bottom-1.5 left-1.5 rounded-full bg-white px-2 py-0.5">

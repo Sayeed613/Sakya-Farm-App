@@ -14,6 +14,7 @@ import {
 
 import type { ProductDetail } from '@sakya/types';
 import { cdnImageUri } from '../../lib/cdn-image';
+import { ProductBadgePills } from './ProductBadgePills';
 
 const GALLERY_HEIGHT = 320;
 
@@ -199,7 +200,12 @@ function ProductImageGalleryInner({
                 width: '100%',
                 height: '100%',
               }}
-              contentFit="contain"
+              /* `contain` letterboxed the photo inside the 320px hero and the
+                 pale well showed through as unwanted gaps on the left/right.
+                 `cover` fills edge-to-edge; the 1:1 source crops top/bottom,
+                 which matches how every other product image in the app
+                 (ProductMediaCard) already renders. */
+              contentFit="cover"
               cachePolicy="disk"
 
               /*
@@ -212,9 +218,16 @@ function ProductImageGalleryInner({
         ))}
       </ScrollView>
 
+      {/* Badge pills — the SHARED stack the catalogue card wears (New,
+          Bestseller, Premium, Fresh, % OFF), pinned over the photo so the
+          quick-view sheet shows the same pills as the card it opened from. */}
+      <ProductBadgePills
+        product={product}
+        style={{ position: 'absolute', left: 10, top: 10 }}
+      />
+
       {urls.length > 1 ? (
         <View
-          pointerEvents="none"
           style={{
             position: 'absolute',
             left: 0,
@@ -226,6 +239,10 @@ function ProductImageGalleryInner({
             justifyContent: 'center',
 
             gap: 5,
+
+            // Dot row is a passive indicator — taps fall through to the
+            // gallery underneath (style.pointerEvents, not the deprecated prop).
+            pointerEvents: 'none',
           }}
         >
           {urls.map((_, imageIndex) => {

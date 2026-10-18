@@ -2,9 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 
 import { BottomTabBar } from '../../../src/components/navigation/BottomTabBar';
+import { colors } from '../../../src/theme';
 
 /**
- * The five real tabs: Home | Categories | Sakya Fresh | Orders | Account.
+ * Tab destinations: Home | Sakya Fresh | Orders | Account — four, no
+ * Categories button (the categories screen stays a route you can open from
+ * Home's "View all" / the footer, it just has no slot in the bottom bar;
+ * BottomTabBar renders only routes defined in its TAB_DEFS).
  *
  * Everything that is a *destination* (cart, checkout, product, category
  * listing, order detail, settings, wishlist, …) lives one level up in the
@@ -17,7 +21,17 @@ import { BottomTabBar } from '../../../src/components/navigation/BottomTabBar';
 export default function ShopTabsLayout() {
   return (
     <Tabs
-      screenOptions={{ headerShown: false }}
+      screenOptions={{
+        headerShown: false,
+        /*
+         * The navigator paints its own theme background behind every scene
+         * (`rgb(242, 242, 242)` in the default React Navigation theme).
+         * Without this, any strip of the viewport the screen itself does not
+         * cover shows as a grey band under the content. Pinning the scene to
+         * the brand canvas makes the app background continuous edge to edge.
+         */
+        sceneStyle: { backgroundColor: colors.canvas },
+      }}
       tabBar={(props) => <BottomTabBar {...props} />}
     >
       <Tabs.Screen
@@ -25,13 +39,6 @@ export default function ShopTabsLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color, size }) => <Ionicons name="home" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="categories"
-        options={{
-          title: 'Categories',
-          tabBarIcon: ({ color, size }) => <Ionicons name="grid-outline" color={color} size={size} />,
         }}
       />
       <Tabs.Screen

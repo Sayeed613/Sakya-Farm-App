@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -10,11 +11,12 @@ import { orderActionsApi } from '../../../src/api/order-actions';
 import { checkoutApi, newIdempotencyKey } from '../../../src/api/checkout';
 import { journeyApi } from '../../../src/api/journey';
 import { AuthGate } from '../../../src/components/AuthGate';
-import { ErrorState } from '../../../src/components/ErrorState';
+import { InlineErrorBanner } from '../../../src/components/InlineErrorBanner';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
 import { CancelReasonSheet } from '../../../src/components/orders/CancelReasonSheet';
 import { ReturnSheet, type ReturnableItem } from '../../../src/components/orders/ReturnSheet';
 import { InvoiceSheet } from '../../../src/components/orders/InvoiceSheet';
+import { useProductImageByTitle } from '../../../src/hooks/use-product-image-by-title';
 import { formatMoney } from '../../../src/lib/format';
 import { openRazorpayWebCheckout, reserveRazorpayPopup } from '../../../src/lib/razorpay-checkout';
 import {
@@ -273,11 +275,16 @@ export default function OrderDetailScreen() {
           <SkeletonBlock className="h-32 w-full rounded-2xl" />
         </View>
       ) : order.isError || !order.data ? (
-        <ErrorState
-          title="Could not load this order"
-          message="We could not reach the order just now. Check your connection and try again."
-          onRetry={() => void order.refetch()}
-        />
+        // Inline banner rather than a centred takeover: the page header stays
+        // and the retry appears in the content flow where the order body will.
+        <View className="gap-3 px-4 pt-2">
+          <InlineErrorBanner
+            title="Could not load this order"
+            message="We could not reach the order just now. Check your connection and try again."
+            onRetry={() => void order.refetch()}
+            testID="order-detail-load-error"
+          />
+        </View>
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
@@ -390,6 +397,9 @@ function OrderBody({
   const stages = deliveryStages(order.status as OrderStatus);
   const updates = deliveryUpdates(order);
   const codNote = codPendingNote(order);
+  // Order lines snapshot titles, not photos — the catalogue lookup resolves
+  // each thumbnail from the SAME cached home query (see the hook's doc).
+  const imageByTitle = useProductImageByTitle();
 
   return (
     <View className="gap-3 px-4 pt-1">
@@ -415,9 +425,7 @@ function OrderBody({
         order.payments.some((payment) => payment.provider === 'RAZORPAY' && payment.status !== 'CAPTURED') ? (
           <View className="gap-2">
             {payError !== null ? (
-              <RNText className="px-1 text-[12px]" style={{ color: '#B3453E' }}>
-                {payError}
-              </RNText>
+              <InlineErrorBanner message={payError} />
             ) : null}
             <Pressable
               onPress={onPayPress}
@@ -556,21 +564,37 @@ function OrderBody({
           Items
         </RNText>
         <View className="gap-2.5">
-          {order.items.map((item) => (
-            <View key={item.id} className="flex-row items-start justify-between gap-3">
-              <View className="flex-1">
-                <RNText className="text-[13px] font-semibold" style={{ color: INK }}>
-                  {item.productTitle}
-                </RNText>
-                <RNText className="text-[11.5px]" style={{ color: MUTED }}>
-                  {item.variantTitle} · Qty {item.quantity}
+          {order.items.map((item) => {
+            const imageUri = imageByTitle(item.productTitle);
+            return (
+              <View key={item.id} className="flex-row items-start justify-between gap-3">
+                {imageUri !== null ? (
+                  <Image
+                    source={{ uri: imageUri }}
+                    style={{ width: 48, height: 48, borderRadius: 10 }}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    accessibilityLabel={`${item.productTitle} photo`}
+                  />
+                ) : (
+                  <View className="h-12 w-12 items-center justify-center rounded-xl bg-surface-muted">
+                    <Ionicons name="leaf-outline" size={18} color={MUTED} />
+                  </View>
+                )}
+                <View className="flex-1">
+                  <RNText className="text-[13px] font-semibold" style={{ color: INK }}>
+                    {item.productTitle}
+                  </RNText>
+                  <RNText className="text-[11.5px]" style={{ color: MUTED }}>
+                    {item.variantTitle} · Qty {item.quantity}
+                  </RNText>
+                </View>
+                <RNText className="text-[13px] font-bold" style={{ color: INK }}>
+                  {formatMoney(item.totalInPaise)}
                 </RNText>
               </View>
-              <RNText className="text-[13px] font-bold" style={{ color: INK }}>
-                {formatMoney(item.totalInPaise)}
-              </RNText>
-            </View>
-          ))}
+            );
+          })}
         </View>
       </View>
 

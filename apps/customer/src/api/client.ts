@@ -7,20 +7,27 @@ const baseUrl = process.env.EXPO_PUBLIC_API_URL;
 /**
  * Latest known connectivity for the http layer's offline gate.
  *
- * The root layout's `useConnectivity` hook keeps a live subscription, and its
- * state is mirrored here on every network change so the http layer can read
- * connectivity synchronously. Requests made offline fail immediately with a
- * retryable NETWORK_ERROR instead of hanging until a transport timeout.
+ * Thread the live SubscribedState through here directly instead of a cached
+ * boolean, so this module (and the http offline gate) always see the OS answer
+ * the instant it arrives. `isOnline` returns the latest known state and is
+ * safe to call from request-time paths that do not own a subscription.
  */
 let lastKnownOnline = true;
-
 export function setConnectivityForHttpGate(connected: boolean): void {
   lastKnownOnline = connected;
 }
 
 function isOnline(): boolean {
-  // Opportunistic refresh keeps the OS state fresh without blocking.
-  void NetInfo.fetch().catch(() => undefined);
+  // Refresh the gate before answering so a slow/reordered NetInfo response
+  // (or a change that lands after the cached flag) can never return a stale
+  // value. Best-effort: failures here (no NetInfo, dropped event) must not
+  // silently stall a request; the cached value is the fallback, not the
+  // primary answer.
+  const pending = NetInfo.fetch().then((state) => {
+    const connected = state.isConnected ?? false;
+    lastKnownOnline = connected;
+  }).catch(() => undefined);
+  void pending;
   return lastKnownOnline;
 }
 

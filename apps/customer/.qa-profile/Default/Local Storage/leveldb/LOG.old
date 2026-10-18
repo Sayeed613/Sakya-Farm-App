@@ -1,3 +1,23 @@
-2026/10/03-18:24:29.441 55c0 Reusing MANIFEST D:\React-native\Sakya-Farm-App\apps\customer\.qa-profile\Default\Local Storage\leveldb/MANIFEST-000001
-2026/10/03-18:24:29.443 55c0 Recovering log #3
-2026/10/03-18:24:29.447 55c0 Reusing old log D:\React-native\Sakya-Farm-App\apps\customer\.qa-profile\Default\Local Storage\leveldb/000003.log 
+2026/10/16-22:07:31.352 4844 Reusing MANIFEST D:\React-native\Sakya-Farm-App\apps\customer\.qa-profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/10/16-22:07:31.372 4844 Recovering log #8
+2026/10/16-22:07:31.372 4844 Level-0 table #10: started
+2026/10/16-22:07:31.466 4844 Level-0 table #10: 17862 bytes OK
+2026/10/16-22:07:31.466 4844 Recovering log #9
+2026/10/16-22:07:31.467 4844 Level-0 table #11: started
+2026/10/16-22:07:31.543 4844 Level-0 table #11: 30166 bytes OK
+2026/10/16-22:07:31.724 4844 Delete type=0 #8
+2026/10/16-22:07:31.724 4844 Delete type=0 #9
+2026/10/16-22:07:31.726 3cc4 Compacting 5@0 + 0@1 files
+2026/10/16-22:07:31.787 3cc4 Generated table #13@0: 7 keys, 30971 bytes
+2026/10/16-22:07:31.787 3cc4 Compacted 5@0 + 0@1 files => 30971 bytes
+2026/10/16-22:07:31.840 3cc4 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/10/16-22:07:31.841 3cc4 Delete type=2 #3
+2026/10/16-22:07:31.841 3cc4 Delete type=2 #4
+2026/10/16-22:07:31.841 3cc4 Delete type=2 #7
+2026/10/16-22:07:31.841 3cc4 Delete type=2 #10
+2026/10/16-22:07:31.841 3cc4 Delete type=2 #11
+2026/10/16-22:08:31.739 3cc4 Level-0 table #15: started
+2026/10/16-22:08:32.084 3cc4 Level-0 table #15: 30016 bytes OK
+2026/10/16-22:08:32.141 3cc4 Delete type=0 #12
+2026/10/16-22:08:40.665 4844 Level-0 table #17: started
+2026/10/16-22:08:41.237 4844 Level-0 table #17: 30039 bytes OK

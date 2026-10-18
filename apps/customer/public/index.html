@@ -66,11 +66,28 @@
         height: 100%;
         flex: 1;
       }
-    </style>
-
-    <!-- Critical CSS: brand canvas + font stack paint BEFORE the JS bundle
-        boots, so first paint is the warm cream surface instead of white. -->
+    </style>    <!-- Critical CSS: brand canvas + font stack paint BEFORE the JS bundle
+         boots, so first paint is the warm cream surface instead of white. -->
     <style>
+      /*
+        Ionicons (the app's only icon font) starts downloading HERE, with the
+        HTML — in parallel with the JS bundle — instead of only after the
+        bundle has downloaded, parsed and mounted the root layout. Requesting
+        it that late is what made the old JS-side font loader blow its 12s
+        deadline on a cold server. Same bytes as
+        @expo/vector-icons/.../Fonts/Ionicons.ttf (verified by hash); web
+        only — native loads the bundled TTF through expo-font.
+
+        `font-display: block` keeps the short pre-load moment blank instead of
+        flashing empty tofu boxes, which is what the splash gate used to buy.
+      */
+      @font-face {
+        font-family: 'ionicons';
+        src: url('/fonts/ionicons.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: block;
+      }
       body {
         margin: 0;
         background-color: #fbf7f0;

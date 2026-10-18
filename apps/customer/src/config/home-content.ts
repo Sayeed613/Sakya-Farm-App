@@ -36,7 +36,7 @@ export interface HeroSlide {
  */
 export const HERO_EDITORIAL = {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  image: require('../banner/fresh-veg.png'),
+  image: require('../banner/fresh-veg.webp'),
   accessibilityLabel: 'Morning light over the Sakya farm rows',
   /** Category the SHOP NOW CTA shops into. */
   ctaHandle: 'daily-vegetables-copy',
@@ -52,42 +52,42 @@ export const HERO_SLIDES: HeroSlide[] = [
     key: 'farm',
     handle: 'daily-vegetables-copy',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/fresh-veg.png'),
+    image: require('../banner/fresh-veg.webp'),
     accessibilityLabel: 'Fresh vegetables banner — shop daily vegetables',
   },
   {
     key: 'oils',
     handle: 'oils',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/cold-pressed-oil.png'),
+    image: require('../banner/cold-pressed-oil.webp'),
     accessibilityLabel: 'Cold-pressed oils banner — shop oils',
   },
   {
     key: 'ghee',
     handle: 'best-ghee',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/ghee.png'),
+    image: require('../banner/ghee.webp'),
     accessibilityLabel: 'Ghee banner — shop best ghee',
   },
   {
     key: 'honey',
     handle: 'honey',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/honey.png'),
+    image: require('../banner/honey.webp'),
     accessibilityLabel: 'Honey banner — shop honey',
   },
   {
     key: 'heritage',
     handle: 'pickles',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/traditional-andhra-products.png'),
+    image: require('../banner/traditional-andhra-products.webp'),
     accessibilityLabel: 'Traditional Andhra products banner — shop heritage picks',
   },
   {
     key: 'farm-to-home',
     handle: 'all-time-favorites',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/farm-to-home.png'),
+    image: require('../banner/farm-to-home.webp'),
     accessibilityLabel: 'Farm to home banner — shop all-time favorites',
   },
 ];
@@ -130,7 +130,7 @@ export const PROMO_BANNERS: PromoBannerDef[] = [
     cta: 'Shop Fresh',
     handle: 'leafy-greens',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/fresh-veg.png'),
+    image: require('../banner/fresh-veg.webp'),
   },
   {
     key: 'andhra',
@@ -140,7 +140,7 @@ export const PROMO_BANNERS: PromoBannerDef[] = [
     cta: 'Shop Andhra Podulu',
     handle: 'andhra-podulu',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/traditional-andhra-products.png'),
+    image: require('../banner/traditional-andhra-products.webp'),
   },
   {
     key: 'ghee-honey',
@@ -150,6 +150,6 @@ export const PROMO_BANNERS: PromoBannerDef[] = [
     cta: 'Shop Ghee & Honey',
     handle: 'best-ghee',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    image: require('../banner/ghee.png'),
+    image: require('../banner/ghee.webp'),
   },
 ];

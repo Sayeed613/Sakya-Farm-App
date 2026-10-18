@@ -121,7 +121,7 @@ export default function PhoneLoginScreen() {
             <View className="items-center">
               <Image
                 // eslint-disable-next-line @typescript-eslint/no-require-imports
-                source={require('../../src/images/sakya-logo-white.png')}
+                source={require('../../src/images/sakya logo.avif')}
                 style={{ width: 132, height: 66 }}
                 tintColor={BRAND}
                 resizeMode="contain"

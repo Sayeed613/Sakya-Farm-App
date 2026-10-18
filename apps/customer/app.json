@@ -24,20 +24,26 @@
       "expo-notifications"
     ],
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
+        "projectId": "07634647-e419-4e63-bb95-dcaff4b0c2a4"
       }
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sakyafarms.customer",
       "infoPlist": {
-        "LSApplicationQueriesSchemes": ["tez", "phonepe", "paytmmp"]
+        "LSApplicationQueriesSchemes": [
+          "tez",
+          "phonepe",
+          "paytmmp"
+        ]
       }
     },
     "android": {
       "package": "com.sakyafarms.customer",
       "softwareKeyboardLayoutMode": "resize"
-    }
+    },
+    "owner": "bobby02"
   }
 }

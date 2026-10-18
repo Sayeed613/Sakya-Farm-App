@@ -6,6 +6,7 @@ import { FlatList, Pressable, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { catalogApi } from '../../../src/api/catalog';
+import { categoryProductsQueryOptions } from '../../../src/api/catalog-query-options';
 import { ProductCard } from '../../../src/components/commerce/ProductCard';
 import { ProductQuickView } from '../../../src/components/commerce/ProductQuickView';
 import {
@@ -15,6 +16,7 @@ import {
 import { StickyCartBar, useCartSummary } from '../../../src/components/commerce/StickyCartBar';
 import { ErrorState } from '../../../src/components/ErrorState';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
+import { useOpenCategory } from '../../../src/hooks/use-open-category';
 import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { goBackOrHome } from '../../../src/lib/navigation';
 import { useResponsive } from '../../../src/lib/responsive';
@@ -37,11 +39,9 @@ export default function CategoryProducts() {
   const [quickViewSlug, setQuickViewSlug] = useState<string | null>(null);
   const [variantPick, setVariantPick] = useState<VariantPickerState | null>(null);
 
-  const products = useQuery({
-    queryKey: ['catalog', 'category', slug],
-    queryFn: () => catalogApi.listCategoryProducts(slug),
-    enabled: Boolean(slug),
-  });
+  // Shared options: `useOpenCategory` prefetches THIS exact entry on tap, so
+  // the screen joins the in-flight request instead of issuing a second one.
+  const products = useQuery(categoryProductsQueryOptions(slug));
 
   // Reuse the home categories cache when it exists (no extra request); fall
   // back to a direct fetch so a cold entry here still shows the real name.
@@ -60,10 +60,9 @@ export default function CategoryProducts() {
 
   const openProduct = useOpenProduct();
 
-  const openCategory = useCallback(
-    (categorySlug: string) => router.push(`/(shop)/categories/${categorySlug}`),
-    [],
-  );
+  // Prefetch-on-tap: hopping to a sibling category warms its shared key
+  // before the push, exactly like the Home strip does.
+  const openCategory = useOpenCategory();
 
   const openCart = useCallback(() => router.push('/(shop)/cart'), []);
 

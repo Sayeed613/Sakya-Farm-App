@@ -34,6 +34,7 @@ const box = await page.evaluate(() => {
   const cands = [...document.querySelectorAll('div')].filter((d) => String(d.className || '').includes('rounded-[12px]'));
   if (cands.length === 0) return null;
   const r = cands[0].getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
 });
 if (box) { await page.mouse.click(box.x, box.y); await sleep(700); }
 await page.keyboard.type('123456', { delay: 130 });
@@ -98,7 +99,7 @@ if (place2) {
   for (let i = 0; i < 44; i++) { await sleep(2500); if (/\/orders\//.test(page.url())) { landed = true; break; } }
   const txt = await page.evaluate(() => document.body.innerText);
   const confirmed = /confirmed|Order placed|Thank you|ordered/i.test(txt);
-  verdict('order-confirmation', landed ? 'PASS' : 'FAIL', `landed=${page.url().slice(0, 80)}, snippet=${txt.slice(0, 140).replace(/\n+/g, ' | ')}`);
+  verdict('order-confirmation', landed ? 'PASS' : 'FAIL', `landed=${page.url().slice(0, 80)}, confirmed=${confirmed}, snippet=${txt.slice(0, 140).replace(/\n+/g, ' | ')}`);
   // History
   await page.goto('http://localhost:19006/orders', { waitUntil: 'domcontentloaded' });
   await sleep(15000);

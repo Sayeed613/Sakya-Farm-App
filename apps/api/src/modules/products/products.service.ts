@@ -1,7 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, type OnApplicationBootstrap } from '@nestjs/common';
 import type { CatalogVariant, Paginated, ProductDetail, ProductListItem } from '@sakya/types';
 import { buildPaginationMeta, toSkipTake, type PageRequest } from '@sakya/utils';
-import type { ProductListQuery, ProductSortOption } from '@sakya/validation';
+import { productListQuerySchema, type ProductListQuery, type ProductSortOption } from '@sakya/validation';
 
 import { PrismaService } from '../../database/prisma.service';
 import { CatalogCacheService } from '../../cache/catalog-cache.service';
@@ -38,6 +38,15 @@ import {
 
 /** Products earlier in the catalogue than this are not publicly listed. */
 const PUBLIC_STATUS = 'ACTIVE';
+
+/**
+ * The exact query the customer app's Home screen issues (`listProducts({ limit: 100 })`),
+ * built through the SAME Zod schema the controller parses with so the JSON cache
+ * key is byte-identical to the key the first real request will look up — a
+ * hand-written literal could drift from the schema's defaults or key order and
+ * prewarm a key nobody ever reads.
+ */
+const HOME_FEED_QUERY: ProductListQuery = productListQuerySchema.parse({ limit: 100 });
 
 /**
  * Sort keys are a closed set, mapped to hard-coded fragments.
@@ -142,13 +151,35 @@ function toLikePattern(term: string): string {
 }
 
 @Injectable()
-export class ProductsService {
+export class ProductsService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ProductsService.name);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CatalogCacheService,
   ) {}
+
+  /**
+   * Prewarm the home feed's cache entry at boot. The customer app's first
+   * screen always requests this exact key, so without a prewarm the first user
+   * after every deploy pays the full cold-cache database cost (~seconds against
+   * a remote pooler).
+   *
+   * Fire-and-forget by contract: this hook must never delay or fail startup —
+   * a slow or unreachable database only means the first real request warms the
+   * cache itself, which is exactly today's behaviour. Errors are logged, never
+   * rethrown (a rethrow here would abort Nest's bootstrap sequence).
+   */
+  onApplicationBootstrap(): void {
+    if (!this.cache.cachingEnabled) return;
+    void this.list(HOME_FEED_QUERY).catch((error: unknown) => {
+      this.logger.warn(
+        `catalogue prewarm failed (first request will warm the cache): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+  }
 
   /**
    * Filter predicates, shared by the page query and the count query.

@@ -22,6 +22,7 @@ import { ErrorState } from '../../../src/components/ErrorState';
 import { SkeletonBlock } from '../../../src/components/LoadingSkeleton';
 import { filterByCategory, useFreshCatalog } from '../../../src/hooks/use-fresh-catalog';
 import { useDeliveryLocation } from '../../../src/hooks/use-delivery-location';
+import { useOpenCategory } from '../../../src/hooks/use-open-category';
 import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { useResponsive } from '../../../src/lib/responsive';
 import { useAuthStore } from '../../../src/stores/auth-store';
@@ -124,7 +125,8 @@ export default function SakyaFreshScreen() {
   }, [fresh.products, fresh.produceProducts, handle, filter, sort, packFilter]);
 
   const openProduct = useOpenProduct();
-  const openCategory = useCallback((slug: string) => router.push(`/(shop)/categories/${slug}`), []);
+  // Prefetch-on-tap: warms the category listing's shared key before the push.
+  const openCategory = useOpenCategory();
   const openCart = useCallback(() => router.push('/(shop)/cart'), []);
 
   const selectCategory = useCallback((slug: string | null) => {

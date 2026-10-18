@@ -101,13 +101,20 @@ export function ProductDetailsSheet({
           <button><button> in the DOM (React flags the hydration error) and
           browser keystrokes inside the sheet fire a backdrop click. box-none
           keeps taps in the dim area falling through to the backdrop. */}
-      <View className="absolute inset-0 justify-end" pointerEvents="box-none">
+      <View className="absolute inset-0 justify-end" style={{ pointerEvents: 'box-none' }}>
         <Pressable onPress={() => undefined}>
           <Animated.View
             entering={SlideInDown.springify().damping(26).stiffness(220)}
             exiting={SlideOutDown.duration(180)}
-            className="max-h-[85%] rounded-t-[24px] bg-canvas"
-            style={{ paddingBottom: Math.max(insets.bottom, 12) }}
+            // Sheet chrome INLINE (not className): Animated.View has no
+            // cssInterop in this app — classes silently never reach the DOM.
+            style={{
+              backgroundColor: '#FBF7F0', // colors.canvas
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              maxHeight: '85%',
+              paddingBottom: Math.max(insets.bottom, 12),
+            }}
             {...panResponder.panHandlers}
           >
             {/* Header: small product image + title */}

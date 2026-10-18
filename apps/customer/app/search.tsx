@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text as RNText, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import { ProductQuickView } from '../src/components/commerce/ProductQuickView';
 import { VariantPickerSheet, type VariantPickerState } from '../src/components/commerce/VariantPickerSheet';
 import { ErrorState } from '../src/components/ErrorState';
 import { SkeletonBlock } from '../src/components/LoadingSkeleton';
+import { useOpenCategory } from '../src/hooks/use-open-category';
 import { useOpenProduct } from '../src/hooks/use-open-product';
 import { goBackOrHome } from '../src/lib/navigation';
 import { colors } from '../src/theme';
@@ -54,7 +55,8 @@ export default function SearchScreen() {
   });
 
   const openProduct = useOpenProduct();
-  const openCategory = (slug: string) => router.push(`/(shop)/categories/${slug}`);
+  // Prefetch-on-tap: warms the category listing's shared key before the push.
+  const openCategory = useOpenCategory();
 
   return (
     <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
@@ -122,7 +124,7 @@ export default function SearchScreen() {
       ) : (results.data?.items.length ?? 0) === 0 ? (
         <EmptyState
           // eslint-disable-next-line @typescript-eslint/no-require-imports
-          image={require('../src/assets/no-result-found.png')}
+          image={require('../src/assets/no-result-found.webp')}
           title="Nothing found"
           message={`No products match “${query}”. Try a different word.`}
         />

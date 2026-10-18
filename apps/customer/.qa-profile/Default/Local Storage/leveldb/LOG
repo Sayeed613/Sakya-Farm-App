@@ -1,3 +1,9 @@
-2026/10/03-18:25:20.032 4704 Reusing MANIFEST D:\React-native\Sakya-Farm-App\apps\customer\.qa-profile\Default\Local Storage\leveldb/MANIFEST-000001
-2026/10/03-18:25:20.036 4704 Recovering log #3
-2026/10/03-18:25:20.040 4704 Reusing old log D:\React-native\Sakya-Farm-App\apps\customer\.qa-profile\Default\Local Storage\leveldb/000003.log 
+2026/10/16-22:12:49.232 1ed8 Reusing MANIFEST D:\React-native\Sakya-Farm-App\apps\customer\.qa-profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/10/16-22:12:49.237 1ed8 Recovering log #14
+2026/10/16-22:12:49.237 1ed8 Level-0 table #17: started
+2026/10/16-22:12:49.356 1ed8 Level-0 table #17: 30039 bytes OK
+2026/10/16-22:12:49.357 1ed8 Recovering log #16
+2026/10/16-22:12:49.358 1ed8 Level-0 table #18: started
+2026/10/16-22:12:49.458 1ed8 Level-0 table #18: 30866 bytes OK
+2026/10/16-22:12:49.563 1ed8 Delete type=0 #14
+2026/10/16-22:12:49.563 1ed8 Delete type=0 #16

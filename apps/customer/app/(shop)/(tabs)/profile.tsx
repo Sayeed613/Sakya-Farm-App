@@ -89,10 +89,13 @@ export default function ProfileScreen() {
   return (
     <View className="flex-1 bg-canvas" style={{ paddingTop: insets.top }}>
       {/* Single leafy hero backdrop */}
-      <View pointerEvents="none" className="absolute left-0 right-0 top-0 h-[280px]">
+      <View
+        className="absolute left-0 right-0 top-0 h-[280px]"
+        style={{ pointerEvents: 'none' }}
+      >
         <Image
           // eslint-disable-next-line @typescript-eslint/no-require-imports
-          source={require('../../../src/images/profile-header.png')}
+          source={require('../../../src/images/profile-header.webp')}
           style={StyleSheet.absoluteFill}
           contentFit="cover"
           cachePolicy="memory-disk"
@@ -100,10 +103,16 @@ export default function ProfileScreen() {
         />
         {/* Light frost under the Account title bar — texture without noise. */}
         <BlurView
-          pointerEvents="none"
           intensity={26}
           tint="light"
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 64 }}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 64,
+            pointerEvents: 'none',
+          }}
         />
         <LinearGradient
           start={{ x: 0.5, y: 0 }}

@@ -1,0 +1,9 @@
+2026/10/17-20:39:31.607 29ec Reusing MANIFEST D:\React-native\Sakya-Farm-App\apps\customer\.qa-report\profile-leak\Default\Local Storage\leveldb/MANIFEST-000001
+2026/10/17-20:39:31.609 29ec Recovering log #14
+2026/10/17-20:39:31.610 29ec Level-0 table #18: started
+2026/10/17-20:39:31.725 29ec Level-0 table #18: 18846 bytes OK
+2026/10/17-20:39:31.725 29ec Recovering log #17
+2026/10/17-20:39:31.726 29ec Level-0 table #19: started
+2026/10/17-20:39:31.800 29ec Level-0 table #19: 17811 bytes OK
+2026/10/17-20:39:31.905 29ec Delete type=0 #14
+2026/10/17-20:39:31.905 29ec Delete type=0 #17

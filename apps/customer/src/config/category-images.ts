@@ -18,38 +18,40 @@ import type { ImageSourcePropType } from 'react-native';
  * filename breaks the web dev-server URL (the query string splits at the
  * ampersand, 404ing the image); a trailing/space-containing name breaks web
  * asset URLs the same way. Renamed so far: `Gourds & Local Veg.png` →
- * gourds-local-veg.png, `gut-health .png` → gut-health.png,
- * `leafy green.png` → leafy-green.png.
+ * gourds-local-veg, `gut-health .png` → gut-health, `leafy green.png` →
+ * leafy-green. All artwork was then re-encoded from PNG to WebP at 224px
+ * (≈4× the 56pt display box) in the Phase 2 asset optimization — same
+ * artwork, same filenames, ~95% smaller bundle.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const leafyGreens = require('../icons/leafy-green.png');
+const leafyGreens = require('../icons/leafy-green.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const dailyVeg = require('../icons/daily-veg.png');
+const dailyVeg = require('../icons/daily-veg.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const beansPeas = require('../icons/beans-peas.png');
+const beansPeas = require('../icons/beans-peas.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const gourdsLocal = require('../icons/gourds-local-veg.png');
+const gourdsLocal = require('../icons/gourds-local-veg.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const freshFruits = require('../icons/fresh-fruits.png');
+const freshFruits = require('../icons/fresh-fruits.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const allTimeFav = require('../icons/fav.png');
+const allTimeFav = require('../icons/fav.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const diabetesCare = require('../icons/diabetes.png');
+const diabetesCare = require('../icons/diabetes.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const gutHealth = require('../icons/gut-health.png');
+const gutHealth = require('../icons/gut-health.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const immunitySupport = require('../icons/immunity.png');
+const immunitySupport = require('../icons/immunity.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const combos = require('../icons/combo.png');
+const combos = require('../icons/combo.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const bestGhee = require('../icons/ghee.png');
+const bestGhee = require('../icons/ghee.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const honey = require('../icons/honey.png');
+const honey = require('../icons/honey.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const andhraPodulu = require('../icons/andhara-podulu.png');
+const andhraPodulu = require('../icons/andhara-podulu.webp');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const andhraStylePodulu = require('../icons/andhara-style-podulu.png');
+const andhraStylePodulu = require('../icons/andhara-style-podulu.webp');
 
 export const CATEGORY_IMAGES: Record<string, ImageSourcePropType> = {
   // Produce — names verified against the live DB (see home-sections.ts):

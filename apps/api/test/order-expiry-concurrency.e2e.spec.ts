@@ -80,13 +80,20 @@ describe.skipIf(!runDatabaseE2e)('Order expiry concurrency (seeded PostgreSQL)',
       where: { order: { orderNumber: { startsWith: 'EXP-TEST-' } } },
     });
     await dbA.order.deleteMany({ where: { orderNumber: { startsWith: 'EXP-TEST-' } } });
-    await dbA.inventoryMovement.deleteMany({ where: { referenceId: { in: [ORDER_A_ID, ORDER_B_ID, ORDER_C_ID] } } });
-    // updateMany (not upsert): this runs BEFORE the product/variant are
-    // seeded, so an insert would violate the variant FK on a fresh database.
-    await dbA.inventory.updateMany({
-      where: { variantId: VARIANT_ID, storeId: STORE_ID },
-      data: { quantityOnHand: 10, quantityReserved: 0 },
-    });
+    // The ledger RESTRICTs both its inventory and its variant row, so it must
+    // go first. Matching on the variant (not only the three order ids) also
+    // sweeps whatever an interrupted earlier run left behind.
+    await dbA.inventoryMovement.deleteMany({ where: { variantId: VARIANT_ID } });
+    // deleteMany (not upsert): this runs BEFORE the fixtures are seeded, so an
+    // insert would violate the variant FK on a fresh database.
+    await dbA.inventory.deleteMany({ where: { variantId: VARIANT_ID } });
+    await dbA.productVariant.deleteMany({ where: { id: VARIANT_ID } });
+    // The fixture product itself. This suite used to skip it, leaking the
+    // ACTIVE "Order Expiry Test Honey" row into the shared catalogue on every
+    // run — visible to real customers. Images, category links, wishlist items
+    // and stock alerts hang off this row with ON DELETE CASCADE.
+    await dbA.product.deleteMany({ where: { id: PRODUCT_ID } });
+    await dbA.store.deleteMany({ where: { id: STORE_ID } });
     await dbA.user.deleteMany({ where: { email: USER_EMAIL } });
   }
 

@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import type { ProductListQuery } from '@sakya/validation';
+import { productListQuerySchema, type ProductListQuery } from '@sakya/validation';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PrismaService } from '../src/database/prisma.service';
@@ -173,6 +173,40 @@ describe('ProductsService.list', () => {
     const query = stub.$queryRaw.mock.calls[0]?.[0] as SqlQuery;
     expect(query.sql).toContain('p.status =');
     expect(query.values).toContain('ACTIVE');
+  });
+});
+
+describe('ProductsService boot prewarm', () => {
+  it('warms the home-feed key at bootstrap so the first user request is a cache hit', async () => {
+    const stub = createPrismaStub();
+    stubResultPage(stub, ['p1'], 1, [listRow({ id: 'p1' })]);
+    const service = createService(stub);
+
+    service.onApplicationBootstrap();
+    // The hook is fire-and-forget; let the in-flight load settle.
+    await vi.waitFor(() => expect(stub.product.findMany).toHaveBeenCalledTimes(1));
+
+    // The customer app's Home query (limit=100) must now be served from cache
+    // WITHOUT touching the database again.
+    const result = await service.list(productListQuerySchema.parse({ limit: 100 }));
+    expect(result.items).toHaveLength(1);
+    expect(stub.product.findMany).toHaveBeenCalledTimes(1);
+    expect(stub.$queryRaw).toHaveBeenCalledTimes(2); // one page + one count, both at prewarm
+  });
+
+  it('swallows a prewarm failure so bootstrap (and the first request) still work', async () => {
+    const stub = createPrismaStub();
+    stub.$queryRaw.mockRejectedValue(new Error('db unreachable'));
+    const service = createService(stub);
+
+    // Must not throw: a rethrown prewarm error would abort Nest's bootstrap.
+    expect(() => service.onApplicationBootstrap()).not.toThrow();
+    await vi.waitFor(() => expect(stub.$queryRaw).toHaveBeenCalled());
+
+    // The failure was not cached; once the database answers, reads work again.
+    stubResultPage(stub, ['p1'], 1, [listRow({ id: 'p1' })]);
+    const result = await service.list(baseQuery);
+    expect(result.items).toHaveLength(1);
   });
 });
 

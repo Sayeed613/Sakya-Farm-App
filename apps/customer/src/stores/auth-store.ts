@@ -43,14 +43,13 @@ const sessionStorage = {
   },
 };
 
-/**
- * Fold the guest cart into the server cart.
- *
- * The client sends variantId + quantity only — never prices, never a store.
- * The server revalidates price, availability, stock and the fulfillment store,
- * and folds duplicates. The local guest cart is cleared only after the server
- * confirms, so a failed merge loses nothing.
- */
+/** Fold the guest cart into the server cart.
+
+The client sends variantId + quantity only — never prices, never a store.
+The server revalidates price, availability, stock and the fulfillment store,
+and folds duplicates. The local guest cart is cleared only after the server
+confirms, so a failed merge loses nothing.
+*/
 async function mergeGuestCartIntoServer(lines: { variantId: string; quantity: number }[]): Promise<void> {
   // Imported lazily: the api layer builds on this store's access token, so a
   // top-level import would be a cycle.
@@ -62,16 +61,14 @@ async function mergeGuestCartIntoServer(lines: { variantId: string; quantity: nu
 interface AuthState {
   session: AuthSessionResponse | null;
   restoring: boolean;
-  /**
-   * The route to return to after a successful authentication, captured when an
+  /** The route to return to after a successful authentication, captured when an
    * auth gate intercepted the user (checkout, orders, account). Null means
    * "no specific destination" and the app returns to the shop.
    */
   pendingRedirect: string | null;
   /** True between OTP verification and the guest-cart merge finishing. */
   merging: boolean;
-  /**
-   * Monotonically increasing counter incremented on each logout. The refresh
+  /** Monotonically increasing counter incremented on each logout. The refresh
    * recovery path captures this at the start of the refresh round and passes
    * it to updateSession, so an in-flight refresh cannot resurrect a session
    * that was already logged out.
@@ -79,8 +76,7 @@ interface AuthState {
   logoutGeneration: number;
   restore: () => Promise<void>;
   setPendingRedirect: (route: string | null) => void;
-  /**
-   * Persist and apply a renewed session (token refresh). Unlike setSession
+  /** Persist and apply a renewed session (token refresh). Unlike setSession
    * this has NO guest-cart side effects — a mid-session refresh must never
    * trigger a merge. Fire-and-forget from the 401 recovery path, which
    * cannot await a zustand action.
@@ -90,16 +86,15 @@ interface AuthState {
    * resurrecting a session that was logged out during the refresh.
    */
   updateSession: (session: AuthSessionResponse, expectedGeneration?: number) => void;
-  /**
-   * Persist a session AND merge the guest cart into the server cart.
-   *
-   * Every authentication path (OTP screen, auth gates) goes through here, so
-   * merging behaviour is identical everywhere: guest lines are sent to the
-   * server, revalidated, and only then cleared locally.
-   *
-   * This ALSO resets logoutGeneration to 0, so a fresh login can refresh
-   * normally. A previous logout must not permanently disable future refreshes.
-   */
+  /** Persist a session AND merge the guest cart into the server cart.
+
+Every authentication path (OTP screen, auth gates) goes through here, so
+merging behaviour is identical everywhere: guest lines are sent to the
+server, revalidated, and only then cleared locally.
+
+This ALSO resets logoutGeneration to 0, so a fresh login can refresh
+normally. A previous logout must not permanently disable future refreshes.
+*/
   setSession: (session: AuthSessionResponse) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -212,10 +207,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         } catch (error) {
           // Diagnostic-only logging — never throws, never blocks.
           // Token values are NOT logged (security).
-          // Diagnostic-only logging — never throws, never blocks. Token values are NOT logged (security).
-        // eslint-disable-next-line no-console
-        console.warn('[auth] background logout failed:', error);
-      }
+          // eslint-disable-next-line no-console
+          console.warn('[auth] background logout failed:', error);
+        }
       })();
     }
 
@@ -228,7 +222,6 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         const { unregisterPushToken } = await import('../push/push-notifications');
         await unregisterPushToken();
       } catch (error) {
-        // Diagnostic-only logging — never throws, never blocks.
         // Diagnostic-only logging — never throws, never blocks.
         // eslint-disable-next-line no-console
         console.warn('[auth] background push unregister failed:', error);

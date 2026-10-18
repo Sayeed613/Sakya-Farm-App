@@ -14,6 +14,7 @@ import Animated, {
 
 import { productDetailQueryOptions } from '../../api/product-detail-query';
 import { useGuestCartStore } from '../../stores/guest-cart-store';
+import { useProductAdd } from '../../lib/use-product-add';
 import type { ProductDetail, ProductListItem } from '@sakya/types';
 import { formatMoney } from '../../lib/format';
 import { ProductVariantSelector } from './ProductVariantSelector';
@@ -87,13 +88,21 @@ export function VariantPickerSheet({
           inner button in a native <button> (invalid HTML that React flags),
           and the browser turns keystrokes inside it into a backdrop click.
           box-none lets taps in the dim area fall through to the backdrop. */}
-      <View className="absolute inset-0 justify-end" pointerEvents="box-none">
+      <View className="absolute inset-0 justify-end" style={{ pointerEvents: 'box-none' }}>
         <Pressable onPress={() => undefined}>
           <Animated.View
             entering={SlideInDown.duration(260).easing(Easing.out(Easing.cubic))}
             exiting={SlideOutDown.duration(190).easing(Easing.in(Easing.cubic))}
-            className="rounded-t-[24px] bg-canvas px-4 pt-3"
-            style={{ paddingBottom: Math.max(insets.bottom, 12) + 8 }}
+            // Sheet chrome INLINE (not className): Animated.View has no
+            // cssInterop in this app — classes silently never reach the DOM.
+            style={{
+              backgroundColor: '#FBF7F0', // colors.canvas
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              paddingHorizontal: 16,
+              paddingTop: 12,
+              paddingBottom: Math.max(insets.bottom, 12) + 8,
+            }}
           >
             <View className="items-center pb-2">
               <View className="h-1 w-10 rounded-full bg-line" />
@@ -120,19 +129,7 @@ export function VariantPickerSheet({
                 available={available}
                 selected={selected}
                 onSelect={(variant) => setSelectedId(variant.id)}
-                onAdd={(variant) => {
-                  const store = useGuestCartStore.getState();
-                  store.rememberPrice(variant.id, variant.priceInPaise);
-                  store.rememberLastAdded(pick.product.slug, pick.product.primaryImageUrl);
-                  store.addLine(variant.id, 1, {
-                    productTitle: pick.product.title,
-                    variantTitle: variant.title,
-                    imageUrl: pick.product.primaryImageUrl,
-                    slug: pick.product.slug,
-                  });
-                  onAdded?.(variant);
-                  close();
-                }}
+                onAdded={onAdded}
                 onClose={close}
               />
             )}
@@ -150,7 +147,7 @@ function PickerBody({
   available,
   selected,
   onSelect,
-  onAdd,
+  onAdded,
   onClose,
 }: {
   product: ProductListItem;
@@ -158,9 +155,31 @@ function PickerBody({
   available: ProductDetail['variants'];
   selected: ProductDetail['variants'][number] | null;
   onSelect: (variant: ProductDetail['variants'][number]) => void;
-  onAdd: (variant: ProductDetail['variants'][number]) => void;
+  onAdded?: (variant: ProductDetail['variants'][number]) => void;
   onClose: () => void;
 }) {
+  // ONE auth-aware add path (useProductAdd.addVariant): logged in → the
+  // server cart, whose response lands in the ['cart'] cache the card's
+  // stepper reads, so the pill morphs from ADD to − 1 + and the cart bar
+  // follows; guest → the guest store, same as before.
+  //
+  // Writing the guest store directly from this sheet was the bug: for a
+  // signed-in customer the add never reached the server cart, so the card
+  // behind the sheet stayed on ADD and the cart bar never moved.
+  const { addVariant, mutating } = useProductAdd(product);
+
+  const handleAdd = async (variant: ProductDetail['variants'][number]) => {
+    const added = await addVariant(variant);
+    // false = the request failed or was dropped by the product's mutation
+    // lock — keep the sheet open (with the selection) so the customer can
+    // retry instead of silently closing on an add that never happened.
+    if (!added) return;
+    // Display-only memory for the guest "recently added" slot.
+    useGuestCartStore.getState().rememberLastAdded(product.slug, product.primaryImageUrl);
+    onAdded?.(variant);
+    onClose();
+  };
+
   return (
     <View className="gap-3">
       <View className="flex-row items-center gap-3">
@@ -226,20 +245,20 @@ function PickerBody({
         </View>
         <Pressable
           onPress={() => {
-            if (selected) onAdd(selected);
+            if (selected && !mutating) void handleAdd(selected);
           }}
-          disabled={selected == null}
+          disabled={selected == null || mutating}
           accessibilityRole="button"
           accessibilityLabel="Add selected variant to cart"
-          accessibilityState={{ disabled: selected == null }}
+          accessibilityState={{ disabled: selected == null || mutating, busy: mutating }}
           className={
             'rounded-full border px-6 py-3 ' +
-            (selected == null ? ' border-line opacity-40' : ' active:opacity-85')
+            (selected == null || mutating ? ' border-line opacity-40' : ' active:opacity-85')
           }
           style={{ borderColor: BRAND }}
         >
           <RNText className="text-[13.5px] font-bold" style={{ color: BRAND }}>
-            Add to Cart
+            {mutating ? 'Adding…' : 'Add to Cart'}
           </RNText>
         </Pressable>
       </View>

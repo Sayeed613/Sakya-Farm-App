@@ -634,27 +634,6 @@ const COLLECTION_TITLES: Record<string, string> = {
   wellness: 'Health & Wellness',
 };
 
-/**
- * Home footer — the closing statement. Brand sign-off, real navigation links
- * (every route exists), and the delivery promise pulled from the SAME data
- * the checkout uses (support settings), never invented claims. A quiet
- * trademark line ends the scroll.
- */
-
-/* This function has been moved to ./components/HomeFooter.tsx */
-
-/**
- * Brand philosophy: quiet, premium, factual. No testimonials, no review-style
- * marketing, no claims the backend cannot back — just the farm-to-home idea.
- */
-
-/* This function has been moved to ./components/BrandPhilosophy.tsx */
-
-/**
- * Welcome hero: the 6-slide promo carousel directly under the green band —
- * the quick-commerce hero (Blinkit/Zepto). Auto-advances with pause-on-touch;
- * every supplied creative renders with pill/expand dot pagination; each
- * slide taps through to its category.
- */
-
-/* This function has been moved to ./components/WelcomeBanner.tsx */
+/* The closing sections of the scroll — footer, brand philosophy and the
+   welcome hero carousel — live in ./components (HomeFooter,
+   BrandPhilosophy, WelcomeBanner); this file only composes them into rows. */

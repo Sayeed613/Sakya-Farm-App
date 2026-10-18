@@ -256,6 +256,7 @@ export class CustomerJourneyController {
   // --- Reviews -------------------------------------------------------------
 
   /** Published reviews for a product — public read. */
+  @Public()
   @Get('products/:productId/reviews')
   async productReviews(
     @Param('productId') productId: string,
