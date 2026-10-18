@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { QueryClient } from '@tanstack/react-query';
+import { Image } from 'expo-image';
 import { Stack, useRouter } from 'expo-router';
 import { useFonts } from 'expo-font';
 import { useEffect, useState } from 'react';
@@ -24,7 +25,7 @@ import { useConnectivity } from '../src/hooks/use-connectivity';
 import { OfflineBanner } from '../src/components/OfflineBanner';
 import { RazorpaySheetHost } from '../src/components/RazorpaySheetHost';
 import { SeoRobots } from '../src/components/Seo';
-import { SplashScreen } from '../src/components/navigation/SplashScreen';
+
 
 /**
  * Push support loads lazily and natively only. Merely importing
@@ -265,11 +266,21 @@ export default function RootLayout() {
               <Stack.Screen name="(shop)" />
             </Stack>
           ) : (
-            // Boot gate: the branded splash (bg + logo + Farm to Home +
-            // vertical loader) covers the screen while the icon font loads,
-            // replacing the bare spinner. Data loading runs ABOVE this gate,
-            // so the splash never delays the catalog warm-up.
-            <SplashScreen />
+            // Cold start: the native splash (warm cream #FBF7F0 with the
+            // real Sakya Farms logo centred, configured in app.json via the
+            // expo-splash-screen plugin) covers the screen instantly while
+            // the icon font loads — no blank screen, no spinner gate. Data
+            // loading runs ABOVE this gate, so the splash never delays the
+            // catalog warm-up, and it is replaced the moment the first
+            // screen renders.
+            <View style={styles.fill}>
+              <Image
+                source={require('./src/images/splash-logo.png')}
+                style={styles.logo}
+                contentFit="contain"
+                accessibilityLabel="Sakya Farms logo"
+              />
+            </View>
           )}
           {/* In-app Razorpay sheet for builds without the native SDK (Expo
               Go). Renders null on web and whenever no checkout is pending. */}
@@ -282,6 +293,11 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
+  logo: {
+    width: 140,
+    height: 56,
+    alignSelf: 'center',
+  },
   webShell: {
     flex: 1,
     alignItems: 'center',

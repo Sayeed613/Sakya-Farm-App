@@ -370,8 +370,14 @@ function BottomTabBarInner(props: BottomTabBarProps) {
                     // The sliding capsule is decoration behind the real tab
                     // buttons — it must never swallow a tap.
                     pointerEvents: 'none',
+                    // The capsule is part of the tab row; give it the same
+                    // bottom safe-area padding the bar uses so the active
+                    // pill's bottom edge never clips the last content row
+                    // on short screens or when the keyboard opens.
+                    paddingBottom: Math.max(insets.bottom, 10),
                   },
 
+                  
                   activePillStyle,
                 ]}
               />
@@ -510,16 +516,18 @@ function BottomTabButton({
       }}
       accessibilityLabel={label}
       style={{
+        // One touch target per tab: flex: 1 divides the measured row
+        // equally (Home | Fresh | Orders | Account), flexBasis 0 keeps the
+        // widescreen case from stealing width. Shared vertical padding plus
+        // the 64pt row keep icon and label on the same baseline for every
+        // tab, including the wider Account tab.
         flex: 1,
-
+        flexBasis: 0,
         minHeight: 62,
-
         alignItems: 'center',
-
         justifyContent: 'center',
-
         paddingVertical: 7,
-
+        paddingHorizontal: 2,
         zIndex: 2,
       }}
     >
@@ -544,13 +552,12 @@ function BottomTabButton({
           {
             marginTop: 3,
 
-            height: 13,
+            minHeight: 13,
 
             alignItems: 'center',
 
             justifyContent: 'center',
           },
-
           labelStyle,
         ]}
       >

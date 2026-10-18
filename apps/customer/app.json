@@ -1,14 +1,19 @@
-{
-  "expo": {
-    "name": "Sakya Farms",
-    "slug": "sakya-farms-customer",
-    "version": "0.1.0",
-    "scheme": "sakyafarms",
-    "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "backgroundColor": "#FBF7F0",
-    "web": {
+{    "expo": {
+      "name": "Sakya Farms",
+      "slug": "sakya-farms-customer",
+      "version": "0.1.0",
+      "scheme": "sakyafarms",
+      "orientation": "portrait",
+      "userInterfaceStyle": "light",
+      "newArchEnabled": true,
+      "backgroundColor": "#FBF7F0",
+      "splash": {
+        "image": "./src/images/splash-logo.png",
+        "imageWidth": 1440,
+        "backgroundColor": "#FBF7F0",
+        "resizeMode": "contain"
+      },
+      "web": {
       "output": "single",
       "favicon": "./public/favicon-48.png",
       "name": "Sakya Farms — Farm-Fresh Delivered",
@@ -21,7 +26,8 @@
       "expo-secure-store",
       "expo-asset",
       "expo-image",
-      "expo-notifications"
+      "expo-notifications",
+      "expo-splash-screen"
     ],
     "extra": {
       "router": {},

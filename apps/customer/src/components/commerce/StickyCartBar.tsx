@@ -3,10 +3,9 @@ import { Image } from 'expo-image';
 import { memo, useMemo } from 'react';
 import { Pressable, Text as RNText, View } from 'react-native';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cartQueryOptions } from '../../api/cart-query';
-import { stickyCartBarBottomOffset } from '../../lib/layout-metrics';
+import { stickyCartPillOffset } from '../../lib/cart-layout-metrics';
 import { useAuthStore } from '../../stores/auth-store';
 import { useGuestCartStore } from '../../stores/guest-cart-store';
 import { useQuery } from '@tanstack/react-query';
@@ -49,7 +48,6 @@ interface PillProduct {
  * should also skip rendering `<StickyCartBar />` (the product screen does).
  */
 function StickyCartBarInner({ itemCount, onPress, bottomOffset = 0 }: StickyCartBarProps) {
-  const insets = useSafeAreaInsets();
   const isAuthenticated = useAuthStore((state) => state.session !== null);
   const guestLines = useGuestCartStore((state) => state.lines);
 
@@ -97,13 +95,14 @@ function StickyCartBarInner({ itemCount, onPress, bottomOffset = 0 }: StickyCart
     <Animated.View
       entering={FadeInDown.duration(180)}
       exiting={FadeOutDown.duration(140)}
-      // Explicit positioning, NOT className: Animated.View has no cssInterop
-      // registration in this app (NativeWind classes are ignored on it — the
-      // same reason images needed explicit styles), so `self-center` silently
-      // did nothing and the pill stretched to full width on Pixel 9 Pro.
+      // One consistent lift above the in-flow tab bar (the bar's safe-area
+      // padding is consumed by the bar itself, so no inset arithmetic here
+      // — adding it double-counts the bar and hovers the pill 96pt into
+      // product content, which is how names, prices and ADD buttons got
+      // covered. Full-width wrapper + alignItems centre = always centered.
       style={{
         position: 'absolute',
-        bottom: stickyCartBarBottomOffset(insets.bottom, bottomOffset),
+        bottom: stickyCartPillOffset(bottomOffset),
         left: 0,
         right: 0,
         alignItems: 'center',

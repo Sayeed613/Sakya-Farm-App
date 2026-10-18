@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "customConditions": []
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/lib/cart-layout-metrics.ts",
+    "*.ts",
+    "*.js",
+    "*.json",
+    "nativewind-env.d.ts"
+  ]
+}

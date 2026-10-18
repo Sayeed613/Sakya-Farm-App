@@ -1,5 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+
+import { stickyCartContentClearance } from '../../lib/cart-layout-metrics';
 import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, Text as RNText, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,8 +30,6 @@ import { useResponsive } from '../../../src/lib/responsive';
 import { useAuthStore } from '../../../src/stores/auth-store';
 import { useLastAddressStore } from '../../../src/stores/last-address-store';
 import type { ProductListItem } from '@sakya/types';
-
-const BOTTOM_NAV_CLEARANCE = 116;
 
 /**
  * Sakya Fresh — the Blinkit-style category listing.
@@ -298,7 +298,7 @@ export default function SakyaFreshScreen() {
                 numColumns={2}
                 columnWrapperStyle={{ justifyContent: 'space-between', paddingHorizontal: screenPadding }}
                 contentContainerStyle={{
-                  paddingBottom: BOTTOM_NAV_CLEARANCE + 52,
+                  paddingBottom: stickyCartContentClearance(),
                   paddingTop: 6,
                   gap: 12,
                   paddingHorizontal: 2,

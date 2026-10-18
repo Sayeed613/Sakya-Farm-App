@@ -1,4 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
+
+import { stickyCartContentClearance } from '../../lib/cart-layout-metrics';
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
@@ -41,7 +43,6 @@ import HomeFooter from './components/HomeFooter';
 import BrandPhilosophy from './components/BrandPhilosophy';
 import WelcomeBanner from './components/WelcomeBanner';
 
-const BOTTOM_NAV_CLEARANCE = 120;
 
 type HomeRailRow = {
   railId: string;
@@ -394,8 +395,8 @@ function HomeListInner({ home, discovery, isLoading, onQuickView, onPickVariant 
     }
   }, [home, discovery]);
   const contentContainerStyle = useMemo(
-    () => ({ paddingTop: headerHeight, paddingBottom: BOTTOM_NAV_CLEARANCE }),
-    [headerHeight],
+    () => ({ paddingTop: headerHeight, paddingBottom: stickyCartContentClearance() }),
+    [],
   );
   const emptyListComponent = useMemo(
     () => (

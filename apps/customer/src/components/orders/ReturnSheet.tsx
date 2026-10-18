@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import {
+import { Platform,
   KeyboardAvoidingView,
   Modal,
   Pressable,
@@ -82,7 +82,7 @@ export function ReturnSheet({
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior="height" className="flex-1">
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'height' : undefined} className="flex-1">
         <Pressable
           accessibilityLabel="Close return dialog"
           className="flex-1 bg-black/40"

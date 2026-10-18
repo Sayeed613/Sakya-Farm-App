@@ -1,5 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
+
+import { stickyCartContentClearance } from '../../lib/cart-layout-metrics';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, Text as RNText, View } from 'react-native';
@@ -21,8 +23,6 @@ import { useOpenProduct } from '../../../src/hooks/use-open-product';
 import { goBackOrHome } from '../../../src/lib/navigation';
 import { useResponsive } from '../../../src/lib/responsive';
 import type { CategorySummary, ProductListItem } from '@sakya/types';
-
-const BOTTOM_NAV_CLEARANCE = 116;
 
 /**
  * Category listing — same product experience as Sakya Fresh, scoped to one
@@ -141,7 +141,7 @@ export default function CategoryProducts() {
           numColumns={2}
           columnWrapperStyle={{ justifyContent: 'space-between', paddingHorizontal: screenPadding }}
           contentContainerStyle={{
-            paddingBottom: BOTTOM_NAV_CLEARANCE + 52,
+            paddingBottom: stickyCartContentClearance(),
             paddingTop: 6,
             gap: 12,
             paddingHorizontal: 2,

@@ -2,10 +2,12 @@
  * Pure layout-sizing rules, isolated from React Native so they are unit
  * testable in a plain Node process (the vitest setup deliberately loads no RN).
  *
- * Two rules live here because both were previously hard-coded numbers that
- * misbehaved on particular screens: the invoice sheet's content cap (a flat
- * 480 clipped on short phones) and the sticky cart pill's lift above the
- * floating tab bar.
+ * Three rules live here because they were previously hard-coded numbers or
+ * unguarded browser-global reads that misbehaved on particular screens: the
+ * invoice sheet's content cap (a flat 480 clipped on short phones), the
+ * sticky cart pill's lift above the floating tab bar, and the phone-viewport
+ * gate for the tab-bar clearance spacer (which used to read
+ * `window.innerWidth` in the render path — see `isPhoneSizedViewport`).
  */
 
 /**
@@ -34,4 +36,23 @@ export function sheetMaxContentHeight(screenHeight: number): number {
  */
 export function stickyCartBarBottomOffset(insetsBottom: number, extraLift = 0): number {
   return Math.max(insetsBottom, 10) + 64 + 22 + extraLift;
+}
+
+/**
+ * Viewport gate for the bottom-tab scroll-clearance spacer: the spacer only
+ * makes sense on a phone-sized window.
+ *
+ * Thresholds are byte-for-byte the original inline check
+ * (`window.innerWidth <= 480 && window.innerHeight <= 720`), but expressed as
+ * a pure function of the values `useWindowDimensions()` already provides —
+ * react-native-web derives those from `window.innerWidth/innerHeight`, so web
+ * behaviour is unchanged, and the render path no longer touches a browser
+ * global (Hermes defines no `window.innerWidth`, and evaluating a bare
+ * `document` there crashed the checkout screen outright).
+ *
+ * Non-numeric sizes (an RNW resize race, an unset dimension) compare false,
+ * so the spacer stays hidden rather than rendering on a mis-measured window.
+ */
+export function isPhoneSizedViewport(width: number, height: number): boolean {
+  return width <= 480 && height <= 720;
 }
