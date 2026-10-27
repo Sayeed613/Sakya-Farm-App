@@ -35,7 +35,7 @@ These numbers are **network-dominated, not query-dominated** — the same querie
 Deploy the API service into the same region as the Supabase project. This is a hosting-dashboard change:
 
 1. Create the service in the same region as the Supabase project.
-2. Move all environment variables (copy them from the existing deployment — never commit them). The API needs at least: `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `APP_ENV`, `PORT`, and any `*_TTL_SECONDS`/throttle values already set. See `.env.example` for the full list of supported keys.
+2. Move all environment variables (copy them from the existing deployment — never commit them). The API needs at least: `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `APP_ENV`, `PORT`, and any `*_TTL_SECONDS`/throttle values already set. See `apps/api/src/config/env.validation.ts` for the full list of supported keys.
 3. Deploy, verify `/api/v1/health` reports `database.latencyMs` under 5 ms.
 4. Repoint DNS / the mobile app's `EXPO_PUBLIC_API_URL` at the new deployment.
 5. Tear down the old-region deployment after a soak period.

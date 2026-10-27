@@ -62,3 +62,12 @@ migration/images/**
 migration/reports/*.json
 !migration/reports/.gitkeep
 !migration/reports/README.md
+
+.env
+.env.*
+
+# .env backups and local secrets
+*.env.bak
+*.env*.bak
+.env.bak-before-local-api
+.env.bak
