@@ -65,4 +65,9 @@ migration/reports/*.json
 
 .env
 .env.*
-!.env.example
+
+# .env backups and local secrets
+*.env.bak
+*.env*.bak
+.env.bak-before-local-api
+.env.bak
